@@ -12,6 +12,11 @@
   anomaly/forecast/decision/Chronos/Groq). The browser must not call it directly;
   expose what the UI needs through the unified backend.
 - `backend/` (Java Spring Boot) and `ai-service/` are **legacy**. Do not extend them.
+- **Firebase is disabled** (P0-6). It had public read/write rules and duplicated
+  persistence. It only initialises with `VITE_ENABLE_FIREBASE=true` + config, and
+  `database.rules.json` denies everything. Don't re-enable without adding auth + scoped rules.
+- Services read `ALLOWED_ORIGINS` (never `*`) and `HOST` (default `127.0.0.1`) from env;
+  Python services use `simulator/service_config.py`.
 
 ## Honesty / provenance
 - Never present fabricated or mock data as real.

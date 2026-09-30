@@ -13,16 +13,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import math
+import os
 import time
 from collections import defaultdict, deque
 
 app = FastAPI(title="Aurora AI Service", version="0.1.0")
 
+# LEGACY service (see CLAUDE.md). Network settings come from env vars:
+#   ALLOWED_ORIGINS  comma-separated CORS origins (default http://localhost:5173; "*" ignored)
+#   HOST             bind address (default 127.0.0.1)
+ALLOWED_ORIGINS = [
+    o.strip().rstrip("/")
+    for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    if o.strip() and o.strip() != "*"
+] or ["http://localhost:5173"]
+HOST = os.environ.get("HOST", "127.0.0.1")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -466,4 +478,4 @@ if __name__ == "__main__":
     print("  Aurora — AI Anomaly Detection Service")
     print("  Port: 8000")
     print("=" * 60)
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host=HOST, port=8000, log_level="info")

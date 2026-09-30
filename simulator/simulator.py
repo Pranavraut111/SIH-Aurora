@@ -25,6 +25,7 @@ from flask_cors import CORS
 # Import new Phase 1/2 modules
 from weather_data import WeatherDataLayer
 from physics_model import StationPhysicsModel
+from service_config import ALLOWED_ORIGINS, HOST
 
 # Phase 3: Anomaly detection
 try:
@@ -664,7 +665,7 @@ stations = {
 
 # ── Flask Control API ────────────────────────────────────────
 control_app = Flask(__name__)
-CORS(control_app)
+CORS(control_app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 
 @control_app.route("/scenarios", methods=["GET"])
@@ -936,9 +937,37 @@ def health():
 # Architecture:
 #   /api/decision → validated JSON → Groq → operator explanation
 #
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# Key ONLY from the environment (never hardcoded, never sent to the browser).
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+# Honest client identification (no spoofed User-Agent).
+GROQ_USER_AGENT = "Aurora-DigitalTwin/1.0 (+https://github.com/Saeesh-Vele/SIH2026A)"
+# Operator free text is untrusted: cap its length and only ever place it in
+# the *user* message, never in the system prompt.
+MAX_USER_TEXT_CHARS = 500
+LLM_UNAVAILABLE_MSG = (
+    "LLM explanation unavailable: GROQ_API_KEY is not configured on the server. "
+    "The structured decision data (/api/decision) is still available."
+)
+
+
+def _llm_available() -> bool:
+    return bool(GROQ_API_KEY)
+
+
+def _clean_user_text(value, limit: int = MAX_USER_TEXT_CHARS) -> str:
+    """Coerce untrusted operator input to a bounded plain string."""
+    if value is None:
+        return ""
+    text = str(value).replace("\x00", "").strip()
+    return text[:limit]
+
+
+def _json_body() -> dict:
+    """Parse the request body without raising on bad/missing JSON."""
+    data = flask_request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
 
 AURORA_SYSTEM_PROMPT = """You are Aurora, the AI operations assistant for Indian Antarctic Research Stations (Maitri and Bharati), operated by NCPOR under the Ministry of Earth Sciences.
 
@@ -966,8 +995,8 @@ QUESTION_PROMPTS = {
 
 def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> str:
     """Call Groq API with the given prompts. Returns explanation text."""
-    if not GROQ_API_KEY:
-        return "Groq API key not configured on the server."
+    if not _llm_available():
+        return LLM_UNAVAILABLE_MSG
     try:
         import urllib.request
         req = urllib.request.Request(
@@ -983,7 +1012,7 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> s
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {GROQ_API_KEY}",
-                "User-Agent": "curl/7.68.0",
+                "User-Agent": GROQ_USER_AGENT,
             },
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -997,7 +1026,7 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> s
             except Exception:
                 pass
         print(f"  [Groq] Error: {err_msg}")
-        return f"AI explanation temporarily unavailable: {err_msg}"
+        return "LLM explanation temporarily unavailable (upstream error; see server log)."
 
 
 @control_app.route("/api/aurora-explain", methods=["POST"])
@@ -1011,10 +1040,10 @@ def aurora_explain():
         question: "status" | "why" | "action" | "detail" | free-text
         station: "maitri" | "bharati" (default: maitri)
     """
-    data = flask_request.json or {}
-    question_type = data.get("question", "status")
-    station_id = data.get("station", "maitri")
-    free_text = data.get("freeText", "")
+    data = _json_body()
+    question_type = _clean_user_text(data.get("question", "status"), 32) or "status"
+    station_id = _clean_user_text(data.get("station", "maitri"), 32) or "maitri"
+    free_text = _clean_user_text(data.get("freeText", ""))
 
     # Get the latest decision for this station
     sim = stations.get(station_id, stations.get("maitri"))
@@ -1024,6 +1053,7 @@ def aurora_explain():
         return jsonify({
             "explanation": "Decision engine has not yet computed a result for this station.",
             "sources": [],
+            "llmAvailable": _llm_available(),
         })
 
     # Build the decision context (exclude audit trail for token efficiency)
@@ -1061,6 +1091,7 @@ def aurora_explain():
 
     return jsonify({
         "explanation": explanation,
+        "llmAvailable": _llm_available(),
         "sources": sources,
         "questionType": question_type,
         "riskLevel": decision.get("risk", {}).get("level", "unknown"),
@@ -1073,15 +1104,17 @@ def aurora_explain():
 @control_app.route("/api/explain", methods=["POST"])
 def explain():
     """Legacy explain endpoint — now delegates to aurora-explain."""
-    data = flask_request.json or {}
-    query = data.get("query", "")
-    station = data.get("station", "maitri")
+    data = _json_body()
+    query = _clean_user_text(data.get("query", ""))
+    station = _clean_user_text(data.get("station", "maitri"), 32) or "maitri"
 
     # Map to new endpoint
     sim = stations.get(station, stations.get("maitri"))
     decision = getattr(sim, '_last_decision', None)
 
-    if decision and GROQ_API_KEY:
+    if not _llm_available():
+        return jsonify({"explanation": LLM_UNAVAILABLE_MSG, "llmAvailable": False}), 200
+    if decision:
         decision_compact = {k: v for k, v in decision.items() if k != "auditTrail"}
         decision_str = json.dumps(decision_compact, indent=2, default=str)[:3000]
         context = data.get("context", {})
@@ -1089,24 +1122,23 @@ def explain():
         user_prompt = f"DECISION_DATA:\n{decision_str}\n\nADDITIONAL CONTEXT:\n{context_str}\n\nQUESTION: {query}"
         explanation = _call_groq(AURORA_SYSTEM_PROMPT, user_prompt)
         return jsonify({"explanation": explanation})
-    elif GROQ_API_KEY:
-        context = data.get("context", {})
-        context_str = json.dumps(context, indent=2, default=str)[:3000]
-        user_prompt = f"STATION DATA:\n{context_str}\n\nQUESTION: {query}"
-        explanation = _call_groq(AURORA_SYSTEM_PROMPT, user_prompt)
-        return jsonify({"explanation": explanation})
-    else:
-        return jsonify({"explanation": "Groq API key not configured on the server."}), 200
+    context = data.get("context", {})
+    context_str = json.dumps(context, indent=2, default=str)[:3000]
+    user_prompt = f"STATION DATA:\n{context_str}\n\nQUESTION: {query}"
+    explanation = _call_groq(AURORA_SYSTEM_PROMPT, user_prompt)
+    return jsonify({"explanation": explanation})
 
 
 @control_app.route("/api/explain/incident", methods=["POST"])
 def explain_incident():
     """Legacy incident explanation — now decision-aware."""
-    if not GROQ_API_KEY:
-        return jsonify({"explanation": "Groq API key not configured."}), 200
-    data = flask_request.json or {}
+    if not _llm_available():
+        return jsonify({"explanation": LLM_UNAVAILABLE_MSG, "llmAvailable": False}), 200
+    data = _json_body()
     incident = data.get("incident", {})
-    station = data.get("station", "maitri")
+    if not isinstance(incident, dict):
+        incident = {}
+    station = _clean_user_text(data.get("station", "maitri"), 32) or "maitri"
 
     # Include decision context if available
     sim = stations.get(station, stations.get("maitri"))
@@ -1116,20 +1148,31 @@ def explain_incident():
         decision_compact = {k: v for k, v in decision.items() if k != "auditTrail"}
         decision_str = f"\n\nDECISION ENGINE CONTEXT:\n{json.dumps(decision_compact, indent=2, default=str)[:2000]}"
 
+    # Incident fields come from the browser: treat as untrusted, bounded text
+    # (user message only — never the system prompt).
+    def field(key, default):
+        return _clean_user_text(incident.get(key, default), 200) or default
+    affected_raw = incident.get("affectedSystems", [])
+    affected = [
+        _clean_user_text(a.get("name", ""), 60)
+        for a in (affected_raw if isinstance(affected_raw, list) else [])
+        if isinstance(a, dict)
+    ][:20]
+
     prompt = f"""Explain this incident briefly (3-4 sentences):
-INCIDENT: {incident.get('title', 'Unknown')}
-RISK: {incident.get('riskLevel', 'Unknown')}
-CAUSE: {incident.get('cause', 'Unknown')}
-BUILDING: {incident.get('rootBuildingName', 'Unknown')}
-AFFECTED: {', '.join(s.get('name', '') for s in incident.get('affectedSystems', []))}
-RECOMMENDED ACTION: {incident.get('recommendedAction', 'None')}{decision_str}"""
+INCIDENT: {field('title', 'Unknown')}
+RISK: {field('riskLevel', 'Unknown')}
+CAUSE: {field('cause', 'Unknown')}
+BUILDING: {field('rootBuildingName', 'Unknown')}
+AFFECTED: {', '.join(affected)}
+RECOMMENDED ACTION: {field('recommendedAction', 'None')}{decision_str}"""
 
     explanation = _call_groq(AURORA_SYSTEM_PROMPT, prompt, max_tokens=200)
     return jsonify({"explanation": explanation})
 
 
 def run_control_server():
-    control_app.run(host="0.0.0.0", port=CONTROL_PORT, debug=False, use_reloader=False)
+    control_app.run(host=HOST, port=CONTROL_PORT, debug=False, use_reloader=False)
 
 
 # ── Main loop — ticks BOTH stations independently ────────────
@@ -1142,7 +1185,7 @@ def main():
     print(f"  Speed: {DEFAULT_SPEED}x ({DEFAULT_SPEED*2/3600:.1f} simulated hours per real minute)")
     print(f"  Stations: {', '.join(STATION_PROFILES.keys())}")
     print(f"  Backend: {BACKEND_URL}")
-    print(f"  Control API: http://localhost:{CONTROL_PORT}")
+    print(f"  Control API: http://{HOST}:{CONTROL_PORT}  (CORS: {', '.join(ALLOWED_ORIGINS)})")
     groq_status = "configured" if GROQ_API_KEY else "NOT SET"
     print(f"  Groq API: {groq_status}")
     print("=" * 64)

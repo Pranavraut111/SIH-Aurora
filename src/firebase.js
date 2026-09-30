@@ -1,9 +1,10 @@
 /* ═══════════════════════════════════════════════════════════════
    Aurora — Firebase Configuration
-   Config is read from VITE_FIREBASE_* env vars (see .env.example).
-   If the required vars are missing, Firebase is NOT initialised and
-   `app`, `analytics` and `db` are exported as null — callers must
-   treat Firebase as optional.
+   OFF BY DEFAULT (security: PROJECT_CONTEXT.md §15 / P0-6).
+   Firebase (RTDB + Analytics) is initialised ONLY when
+     VITE_ENABLE_FIREBASE === "true"  AND  the VITE_FIREBASE_* config is present.
+   Otherwise `app`/`db`/analytics are null and every Firebase call in
+   databaseService / analyticsService is a silent no-op (one console.info).
    ═══════════════════════════════════════════════════════════════ */
 import { initializeApp } from 'firebase/app';
 import { getAnalytics, isSupported } from 'firebase/analytics';
@@ -24,16 +25,16 @@ const firebaseConfig = {
 
 const REQUIRED_KEYS = ['apiKey', 'projectId', 'appId', 'databaseURL'];
 const missing = REQUIRED_KEYS.filter((k) => !firebaseConfig[k]);
+const enabledFlag = env.VITE_ENABLE_FIREBASE === 'true';
 
 let app = null;
 let analytics = null;
 let db = null;
 
-if (missing.length > 0) {
-  console.warn(
-    `[Firebase] Disabled — missing env vars for: ${missing.join(', ')}. ` +
-    'Copy .env.example to .env and fill in VITE_FIREBASE_* to enable persistence.'
-  );
+if (!enabledFlag) {
+  console.info('[Firebase] Disabled (set VITE_ENABLE_FIREBASE=true to enable).');
+} else if (missing.length > 0) {
+  console.info(`[Firebase] Disabled: VITE_ENABLE_FIREBASE=true but config missing (${missing.join(', ')}).`);
 } else {
   try {
     app = initializeApp(firebaseConfig);

@@ -1,6 +1,7 @@
 """
 Aurora & NCPOR Antarctic Digital Twin — Unified Mission Control Backend
-Runs FastAPI + Uvicorn + WebSockets on port 8080 (with CORS enabled).
+Runs FastAPI + Uvicorn + WebSockets on port 8080. CORS origins and bind
+host come from ALLOWED_ORIGINS / HOST (see service_config.py).
 Serves:
 - Real-time station telemetry WebSocket (/ws/station)
 - Official NCPOR/NPDC live & historical data APIs
@@ -40,15 +41,16 @@ from analytics_ai_engine import (
     query_observations
 )
 from physics_model import StationPhysicsModel
+from service_config import ALLOWED_ORIGINS, HOST
 
 app = FastAPI(title="Aurora Antarctic Digital Twin Platform", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 # Initialize database on startup
@@ -293,6 +295,13 @@ async def startup_event():
 
 @app.websocket("/ws/station")
 async def websocket_endpoint(websocket: WebSocket):
+    # CORSMiddleware does not cover WebSockets: enforce the origin allow-list here.
+    # Non-browser clients (no Origin header) are allowed.
+    origin = websocket.headers.get("origin")
+    if origin is not None and origin.rstrip("/") not in ALLOWED_ORIGINS:
+        print(f"[ws] Rejected connection from disallowed origin: {origin}")
+        await websocket.close(code=1008)
+        return
     await manager.connect(websocket)
     try:
         # Send initial snapshot immediately
@@ -959,4 +968,4 @@ def get_ai_explanation(req: ExplainRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host=HOST, port=8080)
