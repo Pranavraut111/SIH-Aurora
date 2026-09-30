@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from physics_model import StationPhysicsModel
 from config import WEATHER_CACHE_DIR, BASELINE_DATA_PATH
+from units import cache_wind_unit, wind_factor_to_kmh
 
 TICK_DT = 120  # 2-minute simulated steps
 
@@ -28,7 +29,9 @@ def load_cached_weather(station_id: str) -> list:
             records = []
             times = data["hourly"]["time"]
             temps = data["hourly"]["temperature_2m"]
-            winds = data["hourly"]["wind_speed_10m"]
+            # Physics model expects km/h; convert from the cache's recorded unit.
+            k = wind_factor_to_kmh(cache_wind_unit(data))
+            winds = [None if w is None else w * k for w in data["hourly"]["wind_speed_10m"]]
             pressures = data["hourly"].get("surface_pressure", [None]*len(times))
             humidities = data["hourly"].get("relative_humidity_2m", [None]*len(times))
             for i in range(len(times)):

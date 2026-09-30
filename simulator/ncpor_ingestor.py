@@ -9,6 +9,7 @@ Connects to official National Centre for Polar and Ocean Research (NCPOR) portal
 
 import requests
 import json
+import logging
 import re
 import time
 import sqlite3
@@ -16,6 +17,23 @@ import os
 from datetime import datetime, timezone, timedelta
 
 from config import DB_PATH, WEATHER_CACHE_DIR
+from units import cache_wind_unit, wind_factor_to_ms
+
+log = logging.getLogger("aurora.ingest")
+
+# Honest provenance for ERA5 rows imported from the Open-Meteo cache.
+# (Earlier imports were mislabelled "NCPOR / ECMWF …", "IMD/ERA5 …" and stored
+#  km/h wind as m/s — fixed for existing rows by migrations/001_fix_era5_wind_units.py.)
+ERA5_SOURCE = "Open-Meteo ERA5 reanalysis"
+ERA5_DATASET = "Antarctic-ERA5-Reanalysis"
+ERA5_QUALITY = "reanalysis"
+ERA5_SENSORS = {
+    "temperature": "ERA5 2 m air temperature",
+    "wind_speed": "ERA5 10 m wind speed",
+    "air_pressure": "ERA5 surface pressure",
+    "relative_humidity": "ERA5 2 m relative humidity",
+    "wind_direction": "ERA5 10 m wind direction",
+}
 
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -161,6 +179,10 @@ def init_db():
         """, seed_items)
 
     conn.commit()
+
+    # Apply pending schema/data migrations (idempotent; each records itself).
+    from migrations import run_migrations
+    run_migrations(conn)
     conn.close()
 
 def parse_canvasjs_series(html_text):
@@ -201,6 +223,7 @@ def ingest_live_station(station_id: str):
         c = conn.cursor()
         now_ts = int(time.time() * 1000)
         ingested_count = 0
+        skipped = 0
 
         name_map = {
             "temperature": ("temperature", "°C", "IMD AWS Temp Sensor"),
@@ -247,9 +270,13 @@ def ingest_live_station(station_id: str):
                         now_ts
                     ))
                     ingested_count += 1
-                except Exception as e:
-                    pass
+                except sqlite3.Error as e:
+                    skipped += 1
+                    if skipped == 1:
+                        log.warning("[%s] NCPOR row insert failed (%s); further failures counted", station_id, e)
 
+        if skipped:
+            log.warning("[%s] NCPOR ingest skipped %d rows", station_id, skipped)
         c.execute("""
             INSERT INTO ingestion_logs (station_id, source_url, status, records_ingested, message, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -302,6 +329,8 @@ def ingest_cached_historical_data():
             info = STATION_INFO[st_id]
 
             hourly = data.get("hourly", {})
+            # Units live in `hourly_units` (not in `hourly`). Missing → Open-Meteo default km/h.
+            wind_to_ms = wind_factor_to_ms(cache_wind_unit(data))
             times = hourly.get("time", [])
             temps = hourly.get("temperature_2m", [])
             winds = hourly.get("wind_speed_10m", [])
@@ -316,19 +345,19 @@ def ingest_cached_historical_data():
                 iso = dt.isoformat()
 
                 records = [
-                    (temps, "temperature", "°C", "IMD/ERA5 Temperature"),
-                    (winds, "wind_speed", "m/s", "10m Anemometer"),
-                    (pressures, "air_pressure", "hPa", "Surface Pressure Sensor"),
-                    (humidities, "relative_humidity", "%", "Hygrometer"),
-                    (wind_dirs, "wind_direction", "°", "Wind Vane"),
+                    (temps, "temperature", "°C"),
+                    (winds, "wind_speed", "m/s"),        # stored in m/s (converted below)
+                    (pressures, "air_pressure", "hPa"),
+                    (humidities, "relative_humidity", "%"),
+                    (wind_dirs, "wind_direction", "°"),
                 ]
 
-                for arr, param, unit, sensor in records:
+                for arr, param, unit in records:
+                    sensor = ERA5_SENSORS[param]
                     if i < len(arr) and arr[i] is not None:
                         val = float(arr[i])
-                        # convert wind speed from km/h to m/s if > 60 or from open-meteo km/h
-                        if param == "wind_speed" and val > 15 and "km" in str(hourly.get("wind_speed_10m_unit", "")):
-                            val = round(val / 3.6, 2)
+                        if param == "wind_speed":
+                            val = round(val * wind_to_ms, 2)
                         c.execute("""
                             INSERT OR IGNORE INTO observations 
                             (station_id, station_name, timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude, created_at)
@@ -341,10 +370,10 @@ def ingest_cached_historical_data():
                             param,
                             val,
                             unit,
-                            "NCPOR / ECMWF Polar Climate Reanalysis",
-                            "Antarctic-ERA5-Reanalysis",
+                            ERA5_SOURCE,
+                            ERA5_DATASET,
                             sensor,
-                            "quality_controlled",
+                            ERA5_QUALITY,
                             info["latitude"],
                             info["longitude"],
                             now_ts
@@ -352,7 +381,7 @@ def ingest_cached_historical_data():
                         total_ingested += 1
 
         except Exception as e:
-            print(f"Error reading {json_file.name}: {e}")
+            log.warning("Error reading %s: %s", json_file.name, e)
 
     conn.commit()
     conn.close()

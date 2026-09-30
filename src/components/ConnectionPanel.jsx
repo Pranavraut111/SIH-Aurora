@@ -89,7 +89,7 @@ export default function ConnectionPanel({
               </div>
               <div className="conn-status-detail">
                 {isConnected
-                  ? 'Real-time delta-encoded observation sync over 2.4 kbps polar satellite link.'
+                  ? 'Real-time delta-encoded observation sync over the polar satellite link (≈2.4 Mbps VSAT, estimated).'
                   : `Station in autonomous isolation. ${offlineQueueSize} observation deltas queued in local SQLite storage.`}
               </div>
             </div>

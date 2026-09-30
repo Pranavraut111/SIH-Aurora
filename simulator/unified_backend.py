@@ -46,6 +46,7 @@ from analytics_ai_engine import (
 )
 from physics_model import StationPhysicsModel
 from cascade import analyze_dependency_cascade, BUILDING_NAMES
+from units import ms_to_kmh, kmh_to_ms
 from station_store import StationStore
 
 log = logging.getLogger("aurora.backend")
@@ -177,7 +178,7 @@ def advance_fallback(sid: str) -> dict:
     weather = get_latest_weather_for_station(sid)
     weather_input = {
         "env_temp": weather["temp"],
-        "env_wind": weather["wind"] * 3.6,  # km/h for physics model
+        "env_wind": ms_to_kmh(weather["wind"]),  # DB stores m/s; physics model takes km/h
         "env_pressure": weather["pressure"],
         "env_humidity": weather["humidity"],
     }
@@ -215,15 +216,16 @@ def advance_fallback(sid: str) -> dict:
             "lq_humidity": round(_val(readings, "livingQuarters", "lq_humidity", 42.0), 1),
             "lq_co2": round(_val(readings, "livingQuarters", "lq_co2", 520.0), 1),
         },
-        # HARDCODED-DEMO constants (see provenance.storage)
+        # Storage from the physics model's running state. Unit convention
+        # (CLAUDE.md): store_fuel kL, store_food days, store_spares items.
         "storage": {
-            "store_fuel": 68400 if sid == "maitri" else 112000,
-            "store_food": 14200 if sid == "maitri" else 24500,
-            "store_spares": 92 if sid == "maitri" else 160,
+            "store_fuel": round(_val(readings, "storage", "store_fuel", 0.0), 2),
+            "store_food": round(_val(readings, "storage", "store_food", 0.0), 1),
+            "store_spares": round(_val(readings, "storage", "store_spares", 0.0), 0),
         },
         "lab": {
             "env_temp": weather["temp"],
-            "env_wind": round(weather["wind"] * 3.6, 1),
+            "env_wind": round(ms_to_kmh(weather["wind"]), 1),   # km/h
             "env_pressure": weather["pressure"],
             "env_humidity": weather["humidity"],
         },
@@ -270,7 +272,7 @@ def compute_alerts(sid: str, sensors: dict, ts_ms: int):
 
     wind_kmh = sensors.get("lab", {}).get("env_wind")
     if wind_kmh is not None:
-        wind_ms = wind_kmh / 3.6
+        wind_ms = kmh_to_ms(wind_kmh)
         if wind_ms > 25:
             alerts["commsMast"] = "critical"
             active_alerts.append({
@@ -323,7 +325,7 @@ def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
     provenance = {
         "equipment": "MODEL-DERIVED",
         "environment": _weather_provenance(weather),
-        "storage": "HARDCODED-DEMO",
+        "storage": "MODEL-DERIVED",
         "injectedSensors": [],
         "activeScenario": None,
         "weatherSource": weather.get("source"),
@@ -691,7 +693,7 @@ def get_ncpor_live(sid: str = Depends(station_param)):
         "weather": {
             "temperature_c": weather["temp"],
             "wind_speed_ms": weather["wind"],
-            "wind_speed_kmh": round(weather["wind"] * 3.6, 1),
+            "wind_speed_kmh": round(ms_to_kmh(weather["wind"]), 1),
             "air_pressure_hpa": weather["pressure"],
             "relative_humidity_pct": weather["humidity"],
             "source": weather["source"],
@@ -725,6 +727,7 @@ def get_ncpor_observations(
         "stationId": sid,
         "parameter": parameter,
         "count": len(df),
+        "window": df.attrs.get("window"),
         "records": df.to_dict(orient="records")
     }
 
@@ -788,7 +791,7 @@ def get_twin_inspector(sid: str = Depends(station_param)):
         },
         "environment": {
             "temperature_C": weather["temp"],
-            "wind_speed_kmh": round(weather["wind"] * 3.6, 1),
+            "wind_speed_kmh": round(ms_to_kmh(weather["wind"]), 1),
             "surface_pressure_hPa": weather["pressure"],
             "relative_humidity_pct": weather["humidity"]
         },
@@ -816,7 +819,8 @@ def get_twin_inspector(sid: str = Depends(station_param)):
             "logistics": {
                 "label": "4. Fuel Autonomy & Supply Longevity",
                 "daily_fuel_burn_L": round(float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28.5)) * 24, 0),
-                "days_of_supply_remaining": round((68400 if sid == "maitri" else 112000) / max(10, float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28.5)) * 24), 1),
+                # store_fuel is kL (model-derived) → litres / daily burn in litres
+                "days_of_supply_remaining": round(_val(readings, "storage", "store_fuel", 0.0) * 1000 / max(10, float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28.5)) * 24), 1),
                 "resupply_urgency": "NOMINAL (100+ Days)",
                 "basis": "calculated"
             }
@@ -881,7 +885,7 @@ def run_what_if_simulation(req: WhatIfRequest):
         sim_comms["comms_signal"] = -92.0
         sim_comms["comms_bandwidth"] = 0.4
         
-        impacts.append(f"Sustained wind accelerates to {sim_weather['env_wind']:.0f} km/h ({sim_weather['env_wind']/3.6:.1f} m/s gale force).")
+        impacts.append(f"Sustained wind accelerates to {sim_weather['env_wind']:.0f} km/h ({kmh_to_ms(sim_weather['env_wind']):.1f} m/s gale force).")
         impacts.append("Building aerodynamic buffeting doubles thermal convection loss across unshielded facades.")
         impacts.append("Satellite dish azimuth drives automatically locked in stow position to prevent gimbal shear.")
         impacts.append("Life-line secured transit corridors mandated between living module and generator block.")
@@ -1205,7 +1209,7 @@ def get_ai_explanation(req: ExplainRequest):
     text = (
         f"**Aurora Antarctic Diagnostic Briefing ({station.upper()})**\n\n"
         f"• **Current Environmental Regime**: Outside temperature is {weather['temp']}°C with wind speed of {weather['wind']} m/s "
-        f"({weather['wind']*3.6:.0f} km/h) and air pressure {weather['pressure']} hPa, sourced directly from the official NCPOR AWS live observation stream.\n\n"
+        f"({ms_to_kmh(weather['wind']):.0f} km/h) and air pressure {weather['pressure']} hPa (source: {weather['source']}, dataset: {weather.get('dataset')}).\n\n"
         f"• **Physical Causal Assessment**: Overall station health is **{risk['overall_health'].upper()}** (Risk Score: {risk['risk_score']}/100). "
         f"Wind chill is currently evaluated at {risk['wind_chill_c']}°C. "
     )

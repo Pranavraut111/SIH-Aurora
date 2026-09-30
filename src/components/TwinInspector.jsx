@@ -370,7 +370,7 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
                   ))}
                 </div>
                 <div className="ti-speed-note">
-                  {replaySpeed}× = {(replaySpeed * 2 / 3600).toFixed(1)} simulated hours per real minute
+                  {replaySpeed}× = {(replaySpeed / 60).toFixed(1)} simulated hours per real minute
                 </div>
               </div>
 

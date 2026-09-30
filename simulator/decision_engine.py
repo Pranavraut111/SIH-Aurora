@@ -275,8 +275,13 @@ class DecisionEngine:
                 last_pred = preds[-1]
                 first_pred = preds[0]
 
-                future_temp = last_pred.get("weather", {}).get("env_temp", current_temp)
-                forecast_temp_delta = future_temp - current_temp
+                # Compare against the forecast's own baseline when provided: in replay
+                # mode the live forecast is not time-aligned with replayed weather.
+                base_temp = forecast_result.get("comparisonBaseTemp")
+                if base_temp is None:
+                    base_temp = current_temp
+                future_temp = last_pred.get("weather", {}).get("env_temp", base_temp)
+                forecast_temp_delta = future_temp - base_temp
 
                 forecast_load_delta = (
                     last_pred["predicted"]["gen_load_pct"] -

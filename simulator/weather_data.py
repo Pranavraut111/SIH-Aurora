@@ -17,10 +17,21 @@ Station coordinates:
 
 import os
 import json
+import logging
 import time
 import math
 import requests
 from datetime import datetime, timedelta
+
+from units import cache_wind_unit, wind_factor_to_kmh
+
+log = logging.getLogger("aurora.weather")
+
+
+def sim_hours_per_real_minute(speed_factor: float) -> float:
+    """Replay speed: `speed_factor` simulated seconds per real second,
+    i.e. speed_factor / 60 simulated hours per real minute (120x -> 2.0 h)."""
+    return speed_factor / 60.0
 
 # ── Station Coordinates (documented, real) ────────────────────
 STATION_COORDS = {
@@ -57,8 +68,11 @@ class WeatherDataLayer:
         self.mode = mode
         self.speed_factor = speed_factor
         self.data = None       # Cached hourly data
+        self.units = {}        # Open-Meteo hourly_units of the cached data
+        self._wind_to_kmh = 1.0  # set from hourly_units when data loads
         self.start_time = None # Real wall-clock time when replay started
         self.data_start = None # The datetime of the first data point
+        self._last_loop = 0    # How many times the replay window has wrapped
 
         if date:
             self.target_date = date
@@ -80,6 +94,8 @@ class WeatherDataLayer:
             with open(cache_file) as f:
                 cached = json.load(f)
             self.data = cached["hourly"]
+            self.units = cached.get("hourly_units") or {}
+            self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
             self.data_start = datetime.strptime(
                 self.data["time"][0], "%Y-%m-%dT%H:%M"
             )
@@ -99,6 +115,8 @@ class WeatherDataLayer:
                 "relative_humidity_2m",
                 "shortwave_radiation",
             ]),
+            # Explicit units: wind in m/s (converted to km/h for the physics model on read)
+            "wind_speed_unit": "ms",
             "timezone": "auto",
         }
 
@@ -128,6 +146,8 @@ class WeatherDataLayer:
                 json.dump(cached, f, indent=2)
 
             self.data = cached["hourly"]
+            self.units = cached.get("hourly_units") or {}
+            self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
             self.data_start = datetime.strptime(
                 self.data["time"][0], "%Y-%m-%dT%H:%M"
             )
@@ -140,6 +160,11 @@ class WeatherDataLayer:
         except Exception as e:
             print(f"  [{self.station_id}] ✗ Weather fetch failed: {e}")
             return False
+
+    @property
+    def wind_to_kmh(self) -> float:
+        """Multiplier converting the cached wind values to km/h (physics input unit)."""
+        return self._wind_to_kmh
 
     def get_current_weather(self) -> dict:
         """
@@ -154,13 +179,19 @@ class WeatherDataLayer:
         if self.data is None or self.start_time is None:
             return None
 
-        # How many simulated seconds have elapsed
+        # How many simulated hours have elapsed
         wall_elapsed = time.time() - self.start_time
         sim_elapsed_hours = (wall_elapsed * self.speed_factor) / 3600.0
 
-        # Clamp to available data range
+        # Loop the cached window instead of freezing on the last hour (B19)
         max_index = len(self.data["time"]) - 1
-        index_f = min(sim_elapsed_hours, max_index)
+        span = max(max_index, 1)
+        loop = int(sim_elapsed_hours // span)
+        if loop > self._last_loop:
+            self._last_loop = loop
+            log.info("[%s] Replay window %s → %s finished; looping to start (loop %d)",
+                     self.station_id, self.data["time"][0], self.data["time"][-1], loop)
+        index_f = sim_elapsed_hours - loop * span
         idx_lo = int(index_f)
         idx_hi = min(idx_lo + 1, max_index)
         frac = index_f - idx_lo
@@ -172,11 +203,13 @@ class WeatherDataLayer:
             lo = vals[idx_lo]
             hi = vals[idx_hi] if idx_hi < len(vals) else lo
             if lo is None or hi is None:
-                return lo or hi
+                return lo if lo is not None else hi
             return lo + (hi - lo) * frac
 
         temp = interp("temperature_2m")
         wind = interp("wind_speed_10m")
+        if wind is not None:
+            wind *= self._wind_to_kmh  # physics model expects km/h
         pressure = interp("surface_pressure")
         humidity = interp("relative_humidity_2m")
         wind_dir = interp("wind_direction_10m")
@@ -184,7 +217,7 @@ class WeatherDataLayer:
 
         # Current simulated time
         if self.data_start:
-            sim_time = self.data_start + timedelta(hours=sim_elapsed_hours)
+            sim_time = self.data_start + timedelta(hours=index_f)
         else:
             sim_time = datetime.utcnow()
 
@@ -198,6 +231,7 @@ class WeatherDataLayer:
             "simulated_time": sim_time.strftime("%Y-%m-%dT%H:%M:%S"),
             "data_index": idx_lo,
             "data_total": len(self.data["time"]),
+            "replay_loop": loop,
             "provenance": {
                 "sourceType": "reanalysis",
                 "source": "Open-Meteo",
@@ -214,13 +248,17 @@ class WeatherDataLayer:
         wall_elapsed = time.time() - self.start_time
         sim_elapsed_hours = (wall_elapsed * self.speed_factor) / 3600.0
         total_hours = len(self.data["time"])
-        progress = min(1.0, sim_elapsed_hours / total_hours)
+        span = max(total_hours - 1, 1)
+        loop = int(sim_elapsed_hours // span)
+        within = sim_elapsed_hours - loop * span
+        progress = within / span
 
         return {
             "mode": self.mode,
             "progress": round(progress, 3),
-            "simulated_hours": round(sim_elapsed_hours, 1),
+            "simulated_hours": round(within, 1),
             "total_hours": total_hours,
+            "replay_loop": loop,
             "speed_factor": self.speed_factor,
             "date_range": f"{self.data['time'][0]} to {self.data['time'][-1]}",
         }

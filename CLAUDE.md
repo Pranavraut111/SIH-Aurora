@@ -19,6 +19,17 @@
   `StationPhysicsModel.compute()` from a request handler.
 - Station ids are validated by one dependency (`station_param` / `require_station`): unknown → 404.
 
+## Units (one convention everywhere — simulator.py, physics_model.py, unified_backend.py, UI)
+- `storage.store_fuel` = **kL**, `store_food` = **days** of food, `store_spares` = **items**.
+  All three are model-derived (physics model running state). The logistics inventory table
+  (`/api/logistics`) is a separate operator-entered ledger in its own units (L, rations, kits…).
+- `commsMast.comms_bandwidth` = **Mbps**.
+- Wind: SQLite `observations.wind_speed` and `/api/ncpor/*` are **m/s**; telemetry `lab.env_wind`
+  and the physics model input are **km/h**. Convert only via `simulator/units.py`
+  (`ms_to_kmh`, `kmh_to_ms`, `wind_factor_to_kmh(unit)`); read Open-Meteo units from `hourly_units`.
+- Replay speed: `AURORA_SPEED` = simulated seconds per real second → `speed/60` simulated hours per real minute.
+- DB changes go through `simulator/migrations/NNN_*.py` (run by `init_db()`, idempotent, recorded in `schema_migrations`).
+
 ## Running locally
 - Python venv lives at the repo root: `python3 -m venv .venv && .venv/bin/pip install -r simulator/requirements.txt`
   (`.venv/` is gitignored). Then `npm install` and `./start.sh` (Windows: `start.ps1`), which starts

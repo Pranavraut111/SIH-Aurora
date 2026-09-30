@@ -40,7 +40,9 @@ def fetch_eval_data(station_id: str) -> dict:
     if not success:
         print(f"  [{station_id}] ✗ Failed to fetch ERA5 for {EVAL_DATE}")
         return None
-    return wl.data
+    # Physics model expects km/h; convert from the cache's recorded unit.
+    k = wl.wind_to_kmh
+    return {**wl.data, "wind_speed_10m": [None if v is None else v * k for v in wl.data.get("wind_speed_10m", [])]}
 
 
 def interpolate_weather(data: dict, hour_index: float) -> dict:
@@ -56,7 +58,7 @@ def interpolate_weather(data: dict, hour_index: float) -> dict:
         lo = vals[idx_lo]
         hi = vals[idx_hi] if idx_hi < len(vals) else lo
         if lo is None or hi is None:
-            return lo or hi
+            return lo if lo is not None else hi
         return lo + (hi - lo) * frac
 
     return {

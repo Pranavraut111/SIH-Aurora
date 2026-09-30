@@ -26,6 +26,10 @@ from flask_cors import CORS
 from weather_data import WeatherDataLayer
 from physics_model import StationPhysicsModel
 import config as app_config  # aliased: 'config' is a loop variable in this module
+import logging
+from weather_data import sim_hours_per_real_minute
+
+log = logging.getLogger("aurora.simulator")
 from config import ALLOWED_ORIGINS, HOST
 
 # Phase 3: Anomaly detection
@@ -49,12 +53,17 @@ try:
 except ImportError:
     DECISION_AVAILABLE = False
 
-# Phase 6: Genuine Chronos forecaster (optional — requires torch + chronos-forecasting)
+# Phase 6: Genuine Chronos forecaster (optional — requires torch + chronos-forecasting).
+# Only "available" if torch AND chronos actually import (B11).
 try:
-    from chronos_forecaster import GenuineChronosForecaster
-    CHRONOS_AVAILABLE = True
+    from chronos_forecaster import GenuineChronosForecaster, chronos_available
+    CHRONOS_AVAILABLE = chronos_available()
 except ImportError:
     CHRONOS_AVAILABLE = False
+if CHRONOS_AVAILABLE:
+    log.info("Chronos available (torch + chronos-forecasting installed)")
+else:
+    log.info("Chronos unavailable (optional ML extras not installed: pip install -r simulator/requirements-ml.txt)")
 
 # ── Backend endpoint & ports (from config.py / root .env) ─────
 BACKEND_URL = f"{app_config.BACKEND_URL}/api/sensors/batch"
@@ -99,7 +108,7 @@ STATION_PROFILES = {
             },
             "commsMast": {
                 "comms_signal":    {"nominal": -42, "step": 1.0,  "min": -120, "max": 0,   "unit": "dBm"},
-                "comms_bandwidth": {"nominal": 2.4, "step": 0.1,  "min": 0,    "max": 10,  "unit": "kbps"},
+                "comms_bandwidth": {"nominal": 2.4, "step": 0.1,  "min": 0,    "max": 10,  "unit": "Mbps"},
                 "comms_uptime":    {"nominal": 99.2,"step": 0.05, "min": 0,    "max": 100, "unit": "%"},
             },
             "livingQuarters": {
@@ -145,7 +154,7 @@ STATION_PROFILES = {
             },
             "commsMast": {
                 "comms_signal":    {"nominal": -38, "step": 1.0,  "min": -120, "max": 0,   "unit": "dBm"},
-                "comms_bandwidth": {"nominal": 3.1, "step": 0.1,  "min": 0,    "max": 10,  "unit": "kbps"},
+                "comms_bandwidth": {"nominal": 3.1, "step": 0.1,  "min": 0,    "max": 10,  "unit": "Mbps"},
                 "comms_uptime":    {"nominal": 99.5,"step": 0.05, "min": 0,    "max": 100, "unit": "%"},
             },
             "livingQuarters": {
@@ -349,7 +358,8 @@ class StationSimulator:
         self._forecast_tick = 0  # only update forecast every N ticks
         if FORECAST_AVAILABLE:
             try:
-                self.forecast_engine = ForecastEngine(station_id)
+                # Reanalysis mode replays a PAST date → live forecast is not time-aligned
+                self.forecast_engine = ForecastEngine(station_id, replay_mode=(self.mode == "reanalysis"))
                 if self.forecast_engine.initialize():
                     print(f"  [{station_id}] ✅ Forecast engine initialized")
                 else:
@@ -371,13 +381,13 @@ class StationSimulator:
         self._chronos_forecaster = None
         if CHRONOS_AVAILABLE:
             try:
-                # Use a shared singleton so both stations feed one forecaster
+                # Shared singleton: one model in memory, per-station buffers + locks
                 if not hasattr(StationSimulator, '_shared_chronos'):
                     StationSimulator._shared_chronos = GenuineChronosForecaster()
                 self._chronos_forecaster = StationSimulator._shared_chronos
                 print(f"  [{station_id}] ✅ Genuine Chronos forecaster attached")
             except Exception as e:
-                print(f"  [{station_id}] ⚠ Chronos init failed: {e}")
+                log.warning("[%s] Chronos init failed: %s", station_id, e)
 
         # Initialize values for simulation mode
         for building_id, sensors in self.sensors.items():
@@ -387,6 +397,14 @@ class StationSimulator:
                 initial = max(config["min"], min(config["max"],
                               config["nominal"] + jitter))
                 self.values[building_id][sensor_id] = initial
+
+    def _log_stage_error(self, stage: str):
+        """Log a tick-stage failure with traceback, once per stage per station
+        (subsequent repeats are counted, not re-logged, to avoid log floods)."""
+        counts = self.__dict__.setdefault("_stage_errors", {})
+        counts[stage] = counts.get(stage, 0) + 1
+        if counts[stage] == 1:
+            log.exception("[%s] %s stage failed (further repeats suppressed)", self.station_id, stage)
 
     def log_event(self, event_type: str, message: str):
         self.event_log.append({
@@ -465,7 +483,7 @@ class StationSimulator:
                 features = extract_features(weather, self.values, meta, station_id=self.station_id)
                 self._last_anomaly = self.anomaly_detector.score(features)
             except Exception:
-                pass  # Don't let anomaly scoring break the main loop
+                self._log_stage_error("anomaly")  # never break the main loop
 
         # 7. Phase 4: Update forecast every 30 ticks (~1 minute)
         if (self.forecast_engine and self.physics_model
@@ -475,7 +493,7 @@ class StationSimulator:
                     self.physics_model, weather, self._last_anomaly
                 )
             except Exception:
-                pass
+                self._log_stage_error("forecast")
 
         # 8. Phase 5: Decision engine (after forecast + anomaly)
         if (self.decision_engine and self.tick_count % 30 == 0):
@@ -489,11 +507,11 @@ class StationSimulator:
                     current_state, self._last_anomaly, self._last_forecast
                 )
             except Exception:
-                pass
+                self._log_stage_error("decision")
 
         # 9. Phase 6: Genuine Chronos — append telemetry every tick,
         #    run forecast async every 150 ticks (~5 minutes)
-        if CHRONOS_AVAILABLE and hasattr(self, '_chronos_forecaster'):
+        if self._chronos_forecaster is not None:
             try:
                 self._chronos_forecaster.append_telemetry(
                     self.station_id, self.values, meta
@@ -501,7 +519,7 @@ class StationSimulator:
                 if self.tick_count % 150 == 0:
                     self._chronos_forecaster.run_forecast_async(self.station_id)
             except Exception:
-                pass  # Never let Chronos break the main loop
+                self._log_stage_error("chronos")  # never break the main loop
 
         return readings
 
@@ -657,6 +675,11 @@ class StationSimulator:
 
 
 # ── Global station simulators ────────────────────────────────
+# `stations_lock` is shared by the tick loop and every endpoint that mutates or
+# replaces simulators (/inject, /inject-single, /reset, /mode). The tick holds it
+# while ticking (not while POSTing), so a /mode rebuild or an injection can never
+# interleave with a tick (item 10: /mode race).
+stations_lock = threading.RLock()
 stations = {
     "maitri": StationSimulator("maitri", mode=DEFAULT_MODE,
                                 date=DEFAULT_DATE, speed_factor=DEFAULT_SPEED),
@@ -695,26 +718,32 @@ def list_scenarios():
 @control_app.route("/inject/<scenario_id>", methods=["POST"])
 def inject_scenario(scenario_id):
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
-    return jsonify(sim.inject_scenario(scenario_id))
+    with stations_lock:
+        sim = stations.get(station_id, stations["maitri"])
+        result = sim.inject_scenario(scenario_id)
+    return jsonify(result)
 
 
 @control_app.route("/inject-single", methods=["POST"])
 def inject_single():
     data = flask_request.json
     station_id = data.get("stationId", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
-    return jsonify(sim.inject_single(
-        data.get("buildingId", ""), data.get("sensorId", ""),
-        data.get("target", 0), data.get("duration", 20),
-    ))
+    with stations_lock:
+        sim = stations.get(station_id, stations["maitri"])
+        result = sim.inject_single(
+            data.get("buildingId", ""), data.get("sensorId", ""),
+            data.get("target", 0), data.get("duration", 20),
+        )
+    return jsonify(result)
 
 
 @control_app.route("/reset", methods=["POST"])
 def reset():
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
-    return jsonify(sim.reset())
+    with stations_lock:
+        sim = stations.get(station_id, stations["maitri"])
+        result = sim.reset()
+    return jsonify(result)
 
 
 @control_app.route("/api/twin-inspector", methods=["GET"])
@@ -861,7 +890,7 @@ def chronos_forecast():
     if not CHRONOS_AVAILABLE:
         return jsonify({
             "available": False,
-            "reason": "chronos-forecasting not installed",
+            "reason": "Chronos unavailable (optional ML extras not installed)",
         })
 
     forecaster = getattr(sim, '_chronos_forecaster', None)
@@ -878,7 +907,11 @@ def chronos_forecast():
 def chronos_status():
     """Phase 6: Chronos forecaster status and buffer info."""
     if not CHRONOS_AVAILABLE:
-        return jsonify({"chronos_available": False})
+        return jsonify({
+            "chronos_available": False,
+            "model_loaded": False,
+            "reason": "Chronos unavailable (optional ML extras not installed)",
+        })
 
     # Get the shared forecaster from any station
     for sid, sim in stations.items():
@@ -897,10 +930,14 @@ def set_mode():
     date = data.get("date", None)
     speed = float(data.get("speed", 120))
 
-    for sid in stations:
-        stations[sid] = StationSimulator(
-            sid, mode=new_mode, date=date, speed_factor=speed
-        )
+    # Build replacements OUTSIDE the lock (may download weather), then swap
+    # atomically under the lock shared with the tick loop.
+    rebuilt = {
+        sid: StationSimulator(sid, mode=new_mode, date=date, speed_factor=speed)
+        for sid in list(stations.keys())
+    }
+    with stations_lock:
+        stations.update(rebuilt)
 
     return jsonify({
         "status": "ok",
@@ -1184,7 +1221,7 @@ def main():
     print(f"  Mode: {DEFAULT_MODE.upper()}")
     if DEFAULT_DATE:
         print(f"  Replay date: {DEFAULT_DATE} (source: {app_config.AURORA_DATE_SOURCE})")
-    print(f"  Speed: {DEFAULT_SPEED}x ({DEFAULT_SPEED*2/3600:.1f} simulated hours per real minute)")
+    print(f"  Speed: {DEFAULT_SPEED}x ({sim_hours_per_real_minute(DEFAULT_SPEED):.1f} simulated hours per real minute)")
     print(f"  Stations: {', '.join(STATION_PROFILES.keys())}")
     print(f"  Backend: {BACKEND_URL}")
     print(f"  Control API: http://{HOST}:{CONTROL_PORT}  (CORS: {', '.join(ALLOWED_ORIGINS)})")
@@ -1204,23 +1241,27 @@ def main():
 
     while True:
         try:
-            for station_id, sim in stations.items():
-                readings = sim.tick()
+            # Tick + build payloads under the lock; POST outside it.
+            payloads = []
+            with stations_lock:
+                current = dict(stations)
+                for station_id, sim in current.items():
+                    readings = sim.tick()
+                    source_info = sim.get_data_source_info()
+                    payloads.append({
+                        "stationId": station_id,
+                        "timestamp": int(time.time() * 1000),
+                        "readings": readings,
+                        "eventTimeline": sim.event_log[-50:],
+                        "activePatterns": [p["name"] for p in sim.active_patterns],
+                        # Provenance hints for the unified backend (additive, optional fields)
+                        "mode": source_info.get("mode"),
+                        "activeScenario": sim.active_scenario,
+                        "injectedSensors": sorted(sim.active_injections.keys()),
+                        "weatherSource": source_info.get("dataset") or source_info.get("label"),
+                    })
 
-                source_info = sim.get_data_source_info()
-                payload = {
-                    "stationId": station_id,
-                    "timestamp": int(time.time() * 1000),
-                    "readings": readings,
-                    "eventTimeline": sim.event_log[-50:],
-                    "activePatterns": [p["name"] for p in sim.active_patterns],
-                    # Provenance hints for the unified backend (additive, optional fields)
-                    "mode": source_info.get("mode"),
-                    "activeScenario": sim.active_scenario,
-                    "injectedSensors": sorted(sim.active_injections.keys()),
-                    "weatherSource": source_info.get("dataset") or source_info.get("label"),
-                }
-
+            for payload in payloads:
                 try:
                     response = requests.post(
                         BACKEND_URL, json=payload, timeout=5,
@@ -1236,8 +1277,8 @@ def main():
                         print(f"  Waiting for backend at {BACKEND_URL}...")
 
             # Print status (alternate stations)
-            active_sid = "maitri" if stations["maitri"].tick_count % 2 == 0 else "bharati"
-            sim = stations[active_sid]
+            active_sid = "maitri" if current["maitri"].tick_count % 2 == 0 else "bharati"
+            sim = current[active_sid]
             ts = datetime.now().strftime("%H:%M:%S")
             temp = sim.values.get("lab", {}).get("env_temp", 0)
             power = sim.values.get("generator", {}).get("gen_power", 0)

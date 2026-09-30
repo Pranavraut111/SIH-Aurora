@@ -21,9 +21,9 @@ Weather provenance:
     - Labeled as: 🟠 FORECAST
 """
 
-import os, json, time, copy, math, random
+import os, json, time, copy, math, random, logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Local imports
 import sys
@@ -37,6 +37,12 @@ STATION_COORDS = {
 }
 
 from config import WEATHER_CACHE_DIR as CACHE_DIR, forecast_cache_path
+from units import cache_wind_unit, wind_factor_to_kmh
+
+log = logging.getLogger("aurora.forecast")
+
+FORECAST_REFRESH_S = 3 * 3600   # re-download the Open-Meteo forecast every 3 h
+RETRY_BACKOFF_S = 10 * 60       # after a failed download, wait before retrying
 
 CACHE_DIR.mkdir(exist_ok=True)
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -58,28 +64,42 @@ class WeatherForecast:
 
     Provenance: 🟠 FORECAST (GFS/ICON model predictions)
     NOT reanalysis — these are model predictions with uncertainty.
+
+    Refresh policy: re-download when the cached forecast is older than
+    FORECAST_REFRESH_S (3 h). If the download fails (offline), keep using the
+    last cached forecast, log ONCE per outage, and wait RETRY_BACKOFF_S before
+    trying again so an offline station never blocks the tick on timeouts.
     """
 
     def __init__(self, station_id: str):
         self.station_id = station_id
         self.coords = STATION_COORDS[station_id]
         self.data = None
+        self.units = {}
         self.fetch_time = None
+        self._wind_to_kmh = wind_factor_to_kmh(None)
+        self._next_retry = 0.0
+        self._offline_logged = False
 
-    def fetch(self) -> bool:
-        """Fetch forecast, cache for 1 hour."""
+    # ── cache helpers ─────────────────────────────────────────
+    def _load_cache(self) -> bool:
         cache_file = forecast_cache_path(self.station_id)
-
-        # Cache valid for 1 hour
-        if cache_file.exists():
+        if not cache_file.exists():
+            return False
+        try:
             with open(cache_file) as f:
                 cached = json.load(f)
-            age = time.time() - cached.get("fetch_time", 0)
-            if age < 3600:
-                self.data = cached.get("hourly", {})
-                self.fetch_time = cached.get("fetch_time")
-                return True
+        except (OSError, ValueError) as e:
+            log.warning("[%s] Forecast cache unreadable (%s)", self.station_id, e)
+            return False
+        self.data = cached.get("hourly", {})
+        self.units = cached.get("hourly_units") or {}
+        # Old caches have no hourly_units → Open-Meteo default (km/h)
+        self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
+        self.fetch_time = cached.get("fetch_time", 0)
+        return True
 
+    def _download(self) -> bool:
         params = {
             "latitude": self.coords["lat"],
             "longitude": self.coords["lon"],
@@ -90,36 +110,70 @@ class WeatherForecast:
                 "relative_humidity_2m",
             ]),
             "forecast_days": 3,
-            "timezone": "auto",
+            "wind_speed_unit": "ms",   # explicit units (converted to km/h on read)
+            "timezone": "GMT",         # compared against UTC in get_at_hour()
         }
-
         try:
             resp = requests.get(FORECAST_URL, params=params, timeout=15)
             resp.raise_for_status()
             raw = resp.json()
-
-            cached = {
-                "fetch_time": time.time(),
-                "provenance": {
-                    "sourceType": "forecast",
-                    "source": "Open-Meteo Forecast API",
-                    "model": "GFS/ICON",
-                    "note": "Model predictions, NOT reanalysis. Uncertainty increases with horizon.",
-                },
-                "hourly": raw.get("hourly", {}),
-            }
-
-            with open(cache_file, "w") as f:
-                json.dump(cached, f, indent=2)
-
-            self.data = cached["hourly"]
-            self.fetch_time = time.time()
-            print(f"  [{self.station_id}] ✓ Forecast fetched: {len(self.data.get('time', []))} hours")
-            return True
-
         except Exception as e:
-            print(f"  [{self.station_id}] ⚠ Forecast fetch failed: {e}")
+            self._next_retry = time.time() + RETRY_BACKOFF_S
+            if not self._offline_logged:
+                self._offline_logged = True
+                if self.data:
+                    age_h = (time.time() - (self.fetch_time or 0)) / 3600
+                    log.warning("[%s] Forecast refresh failed (%s); using cached forecast (%.1f h old) until the network returns",
+                                self.station_id, e, age_h)
+                else:
+                    log.warning("[%s] Forecast unavailable (%s) and no cache; forecasts disabled until the network returns",
+                                self.station_id, e)
             return False
+
+        cached = {
+            "fetch_time": time.time(),
+            "provenance": {
+                "sourceType": "forecast",
+                "source": "Open-Meteo Forecast API",
+                "model": "GFS/ICON",
+                "note": "Model predictions, NOT reanalysis. Uncertainty increases with horizon.",
+            },
+            "hourly": raw.get("hourly", {}),
+            "hourly_units": raw.get("hourly_units", {}),
+        }
+        try:
+            with open(forecast_cache_path(self.station_id), "w") as f:
+                json.dump(cached, f, indent=2)
+        except OSError as e:
+            log.warning("[%s] Could not write forecast cache: %s", self.station_id, e)
+
+        self.data = cached["hourly"]
+        self.units = cached["hourly_units"]
+        self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
+        self.fetch_time = cached["fetch_time"]
+        if self._offline_logged:
+            log.info("[%s] Forecast refresh succeeded again", self.station_id)
+        self._offline_logged = False
+        log.info("[%s] Forecast fetched: %d hours", self.station_id, len(self.data.get("time", [])))
+        return True
+
+    def age_s(self) -> float:
+        return float("inf") if not self.fetch_time else time.time() - self.fetch_time
+
+    def fetch(self) -> bool:
+        """Initial load: cache if fresh, else download, else stale cache."""
+        if self.data is None:
+            self._load_cache()
+        return self.refresh_if_stale()
+
+    def refresh_if_stale(self) -> bool:
+        """Re-download when older than FORECAST_REFRESH_S (with offline backoff).
+        Returns True if any forecast (fresh or cached) is available."""
+        if self.data and self.age_s() < FORECAST_REFRESH_S:
+            return True
+        if time.time() >= self._next_retry:
+            self._download()
+        return bool(self.data)
 
     def get_at_hour(self, hours_from_now: float) -> dict:
         """Get forecast weather at a specific time offset."""
@@ -148,7 +202,8 @@ class WeatherForecast:
 
         return {
             "env_temp": val("temperature_2m", best_idx),
-            "env_wind": val("wind_speed_10m", best_idx),
+            "env_wind": (None if val("wind_speed_10m", best_idx) is None
+                         else val("wind_speed_10m", best_idx) * self._wind_to_kmh),  # km/h
             "env_pressure": val("surface_pressure", best_idx),
             "env_humidity": val("relative_humidity_2m", best_idx),
             "forecast_time": times[best_idx] if best_idx < len(times) else None,
@@ -175,8 +230,13 @@ class ForecastEngine:
         → structured recommendation
     """
 
-    def __init__(self, station_id: str):
+    def __init__(self, station_id: str, replay_mode: bool = False):
+        """replay_mode=True when the current weather is a *replayed past date*
+        (ERA5 reanalysis). The Open-Meteo forecast is always *live* (now → +72 h),
+        so in replay mode the two time bases are NOT aligned: we label that in
+        provenance and never compute deltas between replayed and live weather."""
         self.station_id = station_id
+        self.replay_mode = replay_mode
         self.weather_forecast = WeatherForecast(station_id)
         self._forecast_available = False
 
@@ -199,6 +259,8 @@ class ForecastEngine:
             Structured forecast with predicted states, weather,
             risk assessment, and recommendation.
         """
+        # Refresh every FORECAST_REFRESH_S; offline → keep the cached forecast
+        self._forecast_available = self.weather_forecast.refresh_if_stale()
         if not self._forecast_available:
             return {"available": False, "reason": "forecast weather not available"}
 
@@ -262,8 +324,16 @@ class ForecastEngine:
             }
             predictions.append(pred)
 
+        # Temperature baseline for trend factors. In replay mode, compare the live
+        # forecast with itself (first vs last horizon), never with replayed weather.
+        if self.replay_mode and predictions:
+            comparison_base_temp = predictions[0]["weather"].get("env_temp")
+        else:
+            comparison_base_temp = current_weather.get("env_temp")
+
         # Build risk assessment
-        risk = self._assess_risk(predictions, current_weather, current_anomaly)
+        risk = self._assess_risk(predictions, current_weather, current_anomaly,
+                                 comparison_base_temp)
 
         return {
             "available": True,
@@ -276,9 +346,15 @@ class ForecastEngine:
             },
             "predictions": predictions,
             "risk": risk,
+            "timeAligned": not self.replay_mode,
+            "comparisonBaseTemp": comparison_base_temp,
             "provenance": {
                 "weatherSource": "Open-Meteo Forecast API (GFS/ICON)",
                 "weatherType": "forecast",
+                "alignment": ("live forecast, not aligned with replay date"
+                              if self.replay_mode else "live forecast, aligned with current time"),
+                "forecastFetchedAt": (datetime.fromtimestamp(self.weather_forecast.fetch_time, tz=timezone.utc).isoformat()
+                                      if self.weather_forecast.fetch_time else None),
                 "physicsModel": "Aurora digital twin forward run",
                 "note": "Predictions assume current equipment condition continues. "
                         "Uncertainty increases with forecast horizon.",
@@ -286,7 +362,7 @@ class ForecastEngine:
         }
 
     def _assess_risk(self, predictions: list, current_weather: dict,
-                     current_anomaly: dict = None) -> dict:
+                     current_anomaly: dict = None, comparison_base_temp=None) -> dict:
         """Build risk assessment from forecast + current anomaly state."""
         if not predictions:
             return {"level": "unknown", "factors": []}
@@ -294,7 +370,8 @@ class ForecastEngine:
         factors = []
 
         # Temperature change
-        current_temp = current_weather.get("env_temp", -20)
+        current_temp = (comparison_base_temp if comparison_base_temp is not None
+                        else current_weather.get("env_temp", -20))
         last_pred = predictions[-1]
         future_temp = last_pred["weather"].get("env_temp", current_temp)
         temp_delta = future_temp - current_temp

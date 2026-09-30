@@ -30,9 +30,11 @@ Provenance:
 """
 
 import collections
+import logging
 import time
 import threading
-import traceback
+
+log = logging.getLogger("aurora.chronos")
 
 # ── Lazy imports (heavy deps) ─────────────────────────────────
 # These are imported lazily so the simulator can start without
@@ -40,6 +42,8 @@ import traceback
 _pipeline = None
 _torch = None
 _CHRONOS_AVAILABLE = None
+_pipeline_lock = threading.Lock()    # model is loaded once, even if two stations race
+_inference_lock = threading.Lock()   # serialise torch inference (stations queue, never skip)
 
 # Model to use — verified from official repo (Nov 2024 release)
 # Chronos-Bolt is 250x faster and 20x more memory efficient than T5
@@ -71,13 +75,26 @@ def _check_chronos_available():
     return _CHRONOS_AVAILABLE
 
 
+def chronos_available() -> bool:
+    """True only if torch AND chronos-forecasting actually import (B11)."""
+    return bool(_check_chronos_available())
+
+
 def _load_pipeline():
-    """Load the Chronos-Bolt pipeline (downloads model on first run)."""
+    """Load the Chronos-Bolt pipeline (downloads model on first run). Thread-safe."""
     global _pipeline
     if _pipeline is not None:
         return _pipeline
     if not _check_chronos_available():
         return None
+    with _pipeline_lock:
+        if _pipeline is not None:
+            return _pipeline
+        return _load_pipeline_locked()
+
+
+def _load_pipeline_locked():
+    global _pipeline
     from chronos import ChronosBoltPipeline
     print(f"  [Chronos] Loading {MODEL_NAME} ...")
     start = time.time()
@@ -175,7 +192,11 @@ class GenuineChronosForecaster:
         self._forecasts = {}     # station_id → {signal → forecast_result}
         self._forecast_time = {} # station_id → last forecast timestamp
         self._lock = threading.Lock()
-        self._inference_running = False
+        # Per-station inference guards (B10): acquired BEFORE the worker thread
+        # starts, released in its `finally`. One station can never block or
+        # skip another; a station never stacks a second inference on itself.
+        self._station_locks = collections.defaultdict(threading.Lock)
+        self._station_locks_guard = threading.Lock()
 
     def get_buffer(self, station_id: str) -> HistoryBuffer:
         """Get or create the history buffer for a station."""
@@ -204,15 +225,21 @@ class GenuineChronosForecaster:
         if gen_temp is not None:
             buf.append("gen_temp_C", float(gen_temp), now)
 
-        # Extract gen_load_pct and fuel_rate_Lhr from meta
+        # Fuel rate from the actual generator readings (B9: the physics `_meta`
+        # never contains fuel_rate_Lhr, so the fuel buffer used to stay empty).
+        fuel = gen.get("gen_fuel_rate")
+        if isinstance(fuel, dict):
+            fuel = fuel.get("value")
+        if fuel is None and meta:
+            fuel = meta.get("fuel_rate_Lhr")
+        if fuel is not None:
+            buf.append("fuel_rate_Lhr", float(fuel), now)
+
+        # Generator load (percent) is only available from the physics meta
         if meta:
             load = meta.get("gen_load_pct")
             if load is not None:
                 buf.append("gen_load_pct", float(load), now)
-
-            fuel = meta.get("fuel_rate_Lhr")
-            if fuel is not None:
-                buf.append("fuel_rate_Lhr", float(fuel), now)
 
     def run_forecast(self, station_id: str) -> dict:
         """Run Chronos inference for all signals. Returns forecast dict.
@@ -241,11 +268,12 @@ class GenuineChronosForecaster:
 
             try:
                 # ChronosBoltPipeline.predict_quantiles uses `inputs` (not `context`)
-                quantiles, mean = pipeline.predict_quantiles(
-                    inputs=context.unsqueeze(0),
-                    prediction_length=PREDICTION_LENGTH,
-                    quantile_levels=DEFAULT_QUANTILES,
-                )
+                with _inference_lock:
+                    quantiles, mean = pipeline.predict_quantiles(
+                        inputs=context.unsqueeze(0),
+                        prediction_length=PREDICTION_LENGTH,
+                        quantile_levels=DEFAULT_QUANTILES,
+                    )
                 # quantiles shape: (1, prediction_length, num_quantiles)
                 q = quantiles[0]  # Remove batch dim
                 pred_len = q.shape[0]
@@ -261,10 +289,11 @@ class GenuineChronosForecaster:
             except Exception as e:
                 # Fallback: try predict() which returns point forecasts
                 try:
-                    point_forecast = pipeline.predict(
-                        inputs=context.unsqueeze(0),
-                        prediction_length=PREDICTION_LENGTH,
-                    )
+                    with _inference_lock:
+                        point_forecast = pipeline.predict(
+                            inputs=context.unsqueeze(0),
+                            prediction_length=PREDICTION_LENGTH,
+                        )
                     # point_forecast shape: (1, prediction_length)
                     pf = point_forecast[0]
                     pred_len = pf.shape[0]
@@ -309,22 +338,37 @@ class GenuineChronosForecaster:
 
         return result
 
-    def run_forecast_async(self, station_id: str):
-        """Run forecast in background thread. Non-blocking."""
-        if self._inference_running:
-            return  # Don't stack inferences
+    def _station_lock(self, station_id: str) -> threading.Lock:
+        with self._station_locks_guard:
+            return self._station_locks[station_id]
+
+    def run_forecast_async(self, station_id: str) -> bool:
+        """Run forecast for one station in a background thread. Non-blocking.
+
+        The station's lock is acquired HERE, before the thread starts, so two
+        calls can never both pass the check (no race, no stacking). Returns
+        True if a run was started, False if this station is already running."""
+        lock = self._station_lock(station_id)
+        if not lock.acquire(blocking=False):
+            return False
 
         def _run():
-            self._inference_running = True
             try:
                 self.run_forecast(station_id)
             except Exception:
-                traceback.print_exc()
+                log.exception("[%s] Chronos inference failed", station_id)
             finally:
-                self._inference_running = False
+                lock.release()
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+        try:
+            threading.Thread(target=_run, daemon=True, name=f"chronos-{station_id}").start()
+        except Exception:
+            lock.release()
+            raise
+        return True
+
+    def inference_running(self, station_id: str) -> bool:
+        return self._station_lock(station_id).locked()
 
     def get_cached_forecast(self, station_id: str) -> dict:
         """Return the most recent cached forecast (non-blocking)."""
@@ -358,7 +402,7 @@ class GenuineChronosForecaster:
             "chronos_available": _check_chronos_available(),
             "model": MODEL_NAME,
             "model_loaded": _pipeline is not None,
-            "inference_running": self._inference_running,
+            "inference_running": {sid: self.inference_running(sid) for sid in self._buffers},
             "stations": {
                 sid: {
                     sig: {

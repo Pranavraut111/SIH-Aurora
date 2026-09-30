@@ -460,7 +460,7 @@ class StationPhysicsModel:
             },
             "commsMast": {
                 "comms_signal":    m(signal, "dBm"),
-                "comms_bandwidth": m(bandwidth, "kbps"),
+                "comms_bandwidth": m(bandwidth, "Mbps"),
                 "comms_uptime":    m(uptime, "%"),
             },
             "livingQuarters": {

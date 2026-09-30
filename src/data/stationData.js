@@ -171,7 +171,7 @@ function makeSensorDefs(profile) {
     ],
     commsMast: [
       { id: 'comms_signal', name: 'Signal Strength', unit: 'dBm', min: -120, max: 0, nominal: profile.comms_signal, step: 1, warningLow: -80, criticalLow: -100 },
-      { id: 'comms_bandwidth', name: 'Bandwidth', unit: 'kbps', min: 0, max: 10, nominal: profile.comms_bandwidth, step: 0.1 },
+      { id: 'comms_bandwidth', name: 'Bandwidth', unit: 'Mbps', min: 0, max: 10, nominal: profile.comms_bandwidth, step: 0.1 },
       { id: 'comms_uptime', name: 'Uptime', unit: '%', min: 0, max: 100, nominal: profile.comms_uptime, step: 0.05 },
     ],
     livingQuarters: [
