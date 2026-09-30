@@ -1,37 +1,41 @@
 """
 Aurora & NCPOR Antarctic Digital Twin — Unified Mission Control Backend
-Runs FastAPI + Uvicorn + WebSockets on port 8080. CORS origins and bind
-host come from ALLOWED_ORIGINS / HOST (see config.py).
-Serves:
-- Real-time station telemetry WebSocket (/ws/station)
-- Official NCPOR/NPDC live & historical data APIs
-- Anomaly Detection (Isolation Forest, One-Class SVM)
-- Time-series Forecasting (ARIMA, Prophet-style trend with 95% CI)
-- Explainable Antarctic Risk Engine
-- Causal Digital Twin Inspector (Thermal -> Power -> Fuel -> Logistics)
-- What-If Simulation Engine
-- Logistics & Inventory Management with operator write support
-- Remote Command & Control Architecture
-- Admin Panel & Data Ingestion Trigger APIs
+THE single public backend (see CLAUDE.md). Runs FastAPI + Uvicorn + WebSockets
+on API_PORT (default 8080). All settings come from config.py (root .env).
+
+Telemetry pipeline (PROJECT_CONTEXT.md B1/B2 fix):
+- simulator.py (:8001, internal) POSTs /api/sensors/batch every tick.
+- A background tick (the ONLY code that advances physics state) runs every
+  TICK_INTERVAL_S: it advances the physics-fallback model per station, then
+  publishes either the fresh simulator batch (dataSource="simulator") or the
+  physics fallback (dataSource="physics-fallback") and broadcasts it on the WS.
+- Every GET / WS read returns the last *published* snapshot — reads never
+  mutate twin state.
+
+Also serves NCPOR data APIs, analytics (ISF/SVM, ARIMA), risk engine, twin
+inspector, what-if, logistics, remote commands and admin config.
 """
 
-import os
+import asyncio
+import logging
+import math
+import sqlite3
 import sys
+import threading
 import time
 import json
-import asyncio
-import sqlite3
-import math
-from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Body, HTTPException
+import requests
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # Import digital twin engines
 sys.path.insert(0, str(Path(__file__).parent))
+import config as app_config
 from ncpor_ingestor import init_db, ingest_live_station, ingest_cached_historical_data, DB_PATH, STATION_INFO
 from analytics_ai_engine import (
     run_anomaly_detection,
@@ -41,90 +45,103 @@ from analytics_ai_engine import (
     query_observations
 )
 from physics_model import StationPhysicsModel
-from config import ALLOWED_ORIGINS, HOST, API_PORT
+from cascade import analyze_dependency_cascade, BUILDING_NAMES
+from station_store import StationStore
 
-app = FastAPI(title="Aurora Antarctic Digital Twin Platform", version="3.0.0")
+log = logging.getLogger("aurora.backend")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
-)
+STATIONS = tuple(STATION_INFO.keys())          # ("maitri", "bharati")
 
-# Initialize database on startup
-init_db()
+# Physics-fallback models. ONLY advance_fallback() (called by the tick) may
+# call .compute() on these — compute() mutates fuel/temps/water state.
+PHYSICS = {sid: StationPhysicsModel(sid) for sid in STATIONS}
+
+store = StationStore(STATIONS, history_max_points=app_config.HISTORY_MAX_POINTS)
+
 
 # ═══════════════════════════════════════════════════════════════
-#  WebSocket Connection Manager
+#  Station validation (shared by every route)
+# ═══════════════════════════════════════════════════════════════
+
+def require_station(raw) -> str:
+    """Normalise a station id; unknown → 404 with a clear message."""
+    sid = str(raw).strip().lower() if raw is not None else ""
+    if sid not in STATION_INFO:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown station '{raw}'. Valid stations: {', '.join(STATIONS)}",
+        )
+    return sid
+
+
+def station_param(stationId: Optional[str] = Query(None), station: Optional[str] = Query(None)) -> str:
+    """Query-string station dependency. Missing → 'maitri' (backward compatible)."""
+    raw = stationId if stationId is not None else station
+    return require_station("maitri" if raw is None else raw)
+
+
+def optional_station_param(stationId: Optional[str] = Query(None), station: Optional[str] = Query(None)) -> Optional[str]:
+    """Like station_param, but missing means 'all stations' (None)."""
+    raw = stationId if stationId is not None else station
+    return None if raw is None else require_station(raw)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  WebSocket Connection Manager (per-station subscriptions)
 # ═══════════════════════════════════════════════════════════════
 
 class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
+    """All methods run on the event loop, so the dict needs no lock."""
 
-    async def connect(self, websocket: WebSocket):
+    def __init__(self):
+        self._conns: Dict[WebSocket, Optional[str]] = {}
+
+    async def connect(self, websocket: WebSocket, station_filter: Optional[str]):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self._conns[websocket] = station_filter
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        self._conns.pop(websocket, None)
 
-    async def broadcast(self, message: dict):
-        for connection in list(self.active_connections):
+    async def broadcast(self, sid: str, message: dict):
+        for ws, station_filter in list(self._conns.items()):
+            if station_filter is not None and station_filter != sid:
+                continue
             try:
-                await connection.send_json(message)
-            except Exception:
-                self.disconnect(connection)
+                await ws.send_json(message)
+            except Exception as exc:
+                log.info("WS send failed (%s); dropping client", exc)
+                self.disconnect(ws)
 
 manager = ConnectionManager()
 
-# Active station state cache
-STATION_STATE = {
-    "maitri": {
-        "physics": StationPhysicsModel("maitri"),
-        "sensors": {},
-        "alerts": {},
-        "activeAlerts": [],
-        "incidents": [],
-        "eventTimeline": [],
-        "last_weather": {"temp": -12.7, "wind": 15.2, "pressure": 984.0, "humidity": 68.0}
-    },
-    "bharati": {
-        "physics": StationPhysicsModel("bharati"),
-        "sensors": {},
-        "alerts": {},
-        "activeAlerts": [],
-        "incidents": [],
-        "eventTimeline": [],
-        "last_weather": {"temp": -16.0, "wind": 11.5, "pressure": 988.0, "humidity": 72.0}
-    }
-}
 
 # ═══════════════════════════════════════════════════════════════
-#  Telemetry Generation & Tick Loop
+#  Weather input (read-only DB access)
 # ═══════════════════════════════════════════════════════════════
 
 def get_latest_weather_for_station(station_id: str):
     conn = sqlite3.connect(str(DB_PATH))
-    c = conn.cursor()
-    c.execute("""
-        SELECT parameter, value, timestamp, source, dataset 
-        FROM observations 
-        WHERE station_id = ? 
-        ORDER BY timestamp DESC LIMIT 30
-    """, (station_id,))
-    rows = c.fetchall()
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            SELECT parameter, value, timestamp, source, dataset
+            FROM observations
+            WHERE station_id = ?
+            ORDER BY timestamp DESC LIMIT 30
+        """, (station_id,))
+        rows = c.fetchall()
+    finally:
+        conn.close()
 
-    res = {"temp": -15.0, "wind": 12.0, "pressure": 985.0, "humidity": 65.0, "source": "NCPOR AWS Official Telemetry"}
+    res = {"temp": -15.0, "wind": 12.0, "pressure": 985.0, "humidity": 65.0,
+           "source": "built-in default (no observations in DB)", "dataset": None}
     for param, val, ts, src, ds in rows:
         if param == "temperature" and "temp_read" not in res:
             res["temp"] = val
             res["temp_read"] = True
             res["source"] = src
+            res["dataset"] = ds
         elif param == "wind_speed" and "wind_read" not in res:
             res["wind"] = val
             res["wind_read"] = True
@@ -136,59 +153,69 @@ def get_latest_weather_for_station(station_id: str):
             res["hum_read"] = True
     return res
 
-def compute_digital_twin_telemetry(station_id: str):
-    sid = (station_id or "maitri").lower()
-    if sid not in STATION_STATE:
-        sid = "maitri"
-    state = STATION_STATE[sid]
-    weather = get_latest_weather_for_station(sid)
-    state["last_weather"] = weather
-    pm = state["physics"]
 
-    # Convert weather to physics format
+def _weather_provenance(weather: dict) -> str:
+    ds = weather.get("dataset")
+    if ds == "NCPOR-AWS-Live":
+        return "REAL"
+    if ds is None:
+        return "HARDCODED-DEMO"
+    return "REANALYSIS"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ADVANCE STATE (mutating) — called only by the background tick
+# ═══════════════════════════════════════════════════════════════
+
+def _val(readings: dict, bld: str, sensor: str, default: float) -> float:
+    return float(readings.get(bld, {}).get(sensor, {}).get("value", default))
+
+
+def advance_fallback(sid: str) -> dict:
+    """Advance the physics-fallback model by one tick from the latest DB weather.
+    This is the ONLY place pm.compute() is called. Returns raw physics output."""
+    weather = get_latest_weather_for_station(sid)
     weather_input = {
         "env_temp": weather["temp"],
-        "env_wind": weather["wind"] * 3.6, # km/h for physics model
+        "env_wind": weather["wind"] * 3.6,  # km/h for physics model
         "env_pressure": weather["pressure"],
-        "env_humidity": weather["humidity"]
+        "env_humidity": weather["humidity"],
     }
-
-    # Compute physics state
-    readings = pm.compute(weather_input, dt_seconds=2.0)
+    readings = PHYSICS[sid].compute(weather_input, dt_seconds=app_config.TICK_INTERVAL_S)
     meta = readings.pop("_meta", {})
-    
-    # Structure into station subsystems
+
     sensors = {
         "generator": {
-            "gen_power": round(float(meta.get("power_breakdown", {}).get("total_demand_kW", readings.get("generator", {}).get("gen_power", {}).get("value", 160))), 1),
-            "gen_fuel_rate": round(float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28)), 1),
-            "gen_rpm": round(float(readings.get("generator", {}).get("gen_rpm", {}).get("value", 1500)), 0),
-            "gen_temp": round(float(readings.get("generator", {}).get("gen_temp", {}).get("value", 82)), 1),
+            "gen_power": round(float(meta.get("power_breakdown", {}).get("total_demand_kW", _val(readings, "generator", "gen_power", 160))), 1),
+            "gen_fuel_rate": round(_val(readings, "generator", "gen_fuel_rate", 28), 1),
+            "gen_rpm": round(_val(readings, "generator", "gen_rpm", 1500), 0),
+            "gen_temp": round(_val(readings, "generator", "gen_temp", 82), 1),
         },
         "heating": {
-            "heat_a_flow": round(float(readings.get("heating", {}).get("heat_a_flow", {}).get("value", 35)), 1),
-            "heat_a_temp": round(float(readings.get("heating", {}).get("heat_a_temp", {}).get("value", 72)), 1),
-            "heat_a_pressure": round(float(readings.get("heating", {}).get("heat_a_pressure", {}).get("value", 3.2)), 2),
+            "heat_a_flow": round(_val(readings, "heating", "heat_a_flow", 35), 1),
+            "heat_a_temp": round(_val(readings, "heating", "heat_a_temp", 72), 1),
+            "heat_a_pressure": round(_val(readings, "heating", "heat_a_pressure", 3.2), 2),
         },
         "heatingB": {
-            "heat_b_flow": round(float(readings.get("heatingB", {}).get("heat_b_flow", {}).get("value", 28)), 1),
-            "heat_b_temp": round(float(readings.get("heatingB", {}).get("heat_b_temp", {}).get("value", 68)), 1),
+            "heat_b_flow": round(_val(readings, "heatingB", "heat_b_flow", 28), 1),
+            "heat_b_temp": round(_val(readings, "heatingB", "heat_b_temp", 68), 1),
         },
         "waterTank": {
-            "water_level": round(float(readings.get("waterTank", {}).get("water_level", {}).get("value", 82.5)), 1),
-            "water_temp": round(float(readings.get("waterTank", {}).get("water_temp", {}).get("value", 14.2)), 1),
-            "water_ph": round(float(readings.get("waterTank", {}).get("water_ph", {}).get("value", 7.2)), 2),
+            "water_level": round(_val(readings, "waterTank", "water_level", 82.5), 1),
+            "water_temp": round(_val(readings, "waterTank", "water_temp", 14.2), 1),
+            "water_ph": round(_val(readings, "waterTank", "water_ph", 7.2), 2),
         },
         "commsMast": {
-            "comms_signal": round(float(readings.get("commsMast", {}).get("comms_signal", {}).get("value", -45.0)), 1),
-            "comms_bandwidth": round(float(readings.get("commsMast", {}).get("comms_bandwidth", {}).get("value", 2.4)), 1),
-            "comms_uptime": round(float(readings.get("commsMast", {}).get("comms_uptime", {}).get("value", 99.8)), 1),
+            "comms_signal": round(_val(readings, "commsMast", "comms_signal", -45.0), 1),
+            "comms_bandwidth": round(_val(readings, "commsMast", "comms_bandwidth", 2.4), 1),
+            "comms_uptime": round(_val(readings, "commsMast", "comms_uptime", 99.8), 1),
         },
         "livingQuarters": {
-            "lq_temp": round(float(readings.get("livingQuarters", {}).get("lq_temp", {}).get("value", 20.8)), 1),
-            "lq_humidity": round(float(readings.get("livingQuarters", {}).get("lq_humidity", {}).get("value", 42.0)), 1),
-            "lq_co2": round(float(readings.get("livingQuarters", {}).get("lq_co2", {}).get("value", 520.0)), 1),
+            "lq_temp": round(_val(readings, "livingQuarters", "lq_temp", 20.8), 1),
+            "lq_humidity": round(_val(readings, "livingQuarters", "lq_humidity", 42.0), 1),
+            "lq_co2": round(_val(readings, "livingQuarters", "lq_co2", 520.0), 1),
         },
+        # HARDCODED-DEMO constants (see provenance.storage)
         "storage": {
             "store_fuel": 68400 if sid == "maitri" else 112000,
             "store_food": 14200 if sid == "maitri" else 24500,
@@ -199,95 +226,211 @@ def compute_digital_twin_telemetry(station_id: str):
             "env_wind": round(weather["wind"] * 3.6, 1),
             "env_pressure": weather["pressure"],
             "env_humidity": weather["humidity"],
-        }
+        },
+    }
+    return {
+        "sensors": sensors,
+        "meta": meta,
+        "readings": readings,
+        "weather": weather,
+        "computedAt": int(time.time() * 1000),
     }
 
-    # Evaluate dynamic alerts
-    alerts = {}
-    active_alerts = []
-    
-    if sensors["generator"]["gen_temp"] > 95:
-        alerts["generator"] = "critical"
-        active_alerts.append({
-            "id": f"ALT-{station_id}-GEN-01",
-            "buildingId": "generator",
-            "buildingName": "Generator Shed",
-            "level": "critical",
-            "sensor": "gen_temp",
-            "value": sensors["generator"]["gen_temp"],
-            "unit": "°C",
-            "threshold": 95,
-            "message": f"Generator coolant temperature {sensors['generator']['gen_temp']}°C exceeds safe limit (95°C).",
-            "timestamp": int(time.time() * 1000)
-        })
-    elif sensors["generator"]["gen_temp"] > 88:
-        alerts["generator"] = "warning"
-        active_alerts.append({
-            "id": f"ALT-{station_id}-GEN-02",
-            "buildingId": "generator",
-            "buildingName": "Generator Shed",
-            "level": "warning",
-            "sensor": "gen_temp",
-            "value": sensors["generator"]["gen_temp"],
-            "unit": "°C",
-            "threshold": 88,
-            "message": f"Elevated generator temperature ({sensors['generator']['gen_temp']}°C).",
-            "timestamp": int(time.time() * 1000)
-        })
+
+# ═══════════════════════════════════════════════════════════════
+#  COMPUTE SNAPSHOT (pure) — no IO, no mutation
+# ═══════════════════════════════════════════════════════════════
+
+def compute_alerts(sid: str, sensors: dict, ts_ms: int):
+    """Existing unified alert rules (gen_temp, wind), evaluated from sensors so
+    they work for both telemetry sources. Wind thresholds are in m/s."""
+    alerts: Dict[str, str] = {}
+    active_alerts: List[dict] = []
+
+    gen_temp = sensors.get("generator", {}).get("gen_temp")
+    if gen_temp is not None:
+        if gen_temp > 95:
+            alerts["generator"] = "critical"
+            active_alerts.append({
+                "id": f"ALT-{sid}-GEN-01", "buildingId": "generator", "buildingName": "Generator Shed",
+                "level": "critical", "sensor": "gen_temp", "value": gen_temp, "unit": "°C", "threshold": 95,
+                "message": f"Generator coolant temperature {gen_temp}°C exceeds safe limit (95°C).",
+                "timestamp": ts_ms,
+            })
+        elif gen_temp > 88:
+            alerts["generator"] = "warning"
+            active_alerts.append({
+                "id": f"ALT-{sid}-GEN-02", "buildingId": "generator", "buildingName": "Generator Shed",
+                "level": "warning", "sensor": "gen_temp", "value": gen_temp, "unit": "°C", "threshold": 88,
+                "message": f"Elevated generator temperature ({gen_temp}°C).",
+                "timestamp": ts_ms,
+            })
+        else:
+            alerts["generator"] = "normal"
+
+    wind_kmh = sensors.get("lab", {}).get("env_wind")
+    if wind_kmh is not None:
+        wind_ms = wind_kmh / 3.6
+        if wind_ms > 25:
+            alerts["commsMast"] = "critical"
+            active_alerts.append({
+                "id": f"ALT-{sid}-WIND-01", "buildingId": "commsMast", "buildingName": "Comms Tower",
+                "level": "critical", "sensor": "env_wind", "value": round(wind_kmh, 1), "unit": "km/h", "threshold": 90,
+                "message": f"Gale wind speed ({wind_kmh:.0f} km/h) approaching mast structural safety limits.",
+                "timestamp": ts_ms,
+            })
+        elif wind_ms > 18:
+            alerts["commsMast"] = "warning"
+        else:
+            alerts["commsMast"] = "normal"
+    return alerts, active_alerts
+
+
+def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts_ms: int,
+                   last_batch_age, connected: bool, event_timeline=None, active_patterns=None) -> dict:
+    """Pure: sensors → alerts → cascade → health → snapshot dict."""
+    alerts, active_alerts = compute_alerts(sid, sensors, ts_ms)
+    dependency_alerts = analyze_dependency_cascade(alerts)
+    if any(a["level"] == "critical" for a in active_alerts) or any(d["severity"] == "critical" for d in dependency_alerts):
+        health = "critical"
+    elif active_alerts or dependency_alerts:
+        health = "warning"
     else:
-        alerts["generator"] = "normal"
-
-    if weather["wind"] > 25:
-        alerts["commsMast"] = "critical"
-        active_alerts.append({
-            "id": f"ALT-{station_id}-WIND-01",
-            "buildingId": "commsMast",
-            "buildingName": "Comms Tower",
-            "level": "critical",
-            "sensor": "env_wind",
-            "value": round(weather["wind"] * 3.6, 1),
-            "unit": "km/h",
-            "threshold": 90,
-            "message": f"Gale wind speed ({weather['wind'] * 3.6:.0f} km/h) approaching mast structural safety limits.",
-            "timestamp": int(time.time() * 1000)
-        })
-    elif weather["wind"] > 18:
-        alerts["commsMast"] = "warning"
-    else:
-        alerts["commsMast"] = "normal"
-
-    state["sensors"] = sensors
-    state["alerts"] = alerts
-    state["activeAlerts"] = active_alerts
-
+        health = "healthy"
     return {
-        "stationId": station_id,
-        "timestamp": int(time.time() * 1000),
+        "stationId": sid,
+        "timestamp": ts_ms,
+        "dataSource": source,
+        "provenance": provenance,
+        "lastBatchAgeSec": None if last_batch_age is None else round(last_batch_age, 1),
         "sensors": sensors,
         "alerts": alerts,
         "activeAlerts": active_alerts,
-        "aiHealth": "critical" if any(a["level"] == "critical" for a in active_alerts) else "warning" if active_alerts else "healthy",
-        "provenance": {
-            "weather_source": weather["source"],
-            "equipment_physics": "Aurora Causal Energy & Thermal Model (Physics-Derived)",
-            "station_coordinates": f"Lat {STATION_INFO[station_id]['latitude']}, Lon {STATION_INFO[station_id]['longitude']}"
-        }
+        "dependencyAlerts": dependency_alerts,
+        "aiHealth": health,
+        "eventTimeline": list(event_timeline or []),
+        "activePatterns": list(active_patterns or []),
+        "connected": connected,
     }
 
-# Background broadcast loop
-async def telemetry_broadcast_task():
-    while True:
-        for sid in ["maitri", "bharati"]:
-            try:
-                payload = compute_digital_twin_telemetry(sid)
-                await manager.broadcast(payload)
-            except Exception as e:
-                pass
-        await asyncio.sleep(2.0)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(telemetry_broadcast_task())
+def _coords(sid: str) -> str:
+    return f"Lat {STATION_INFO[sid]['latitude']}, Lon {STATION_INFO[sid]['longitude']}"
+
+
+def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
+    weather = fallback["weather"]
+    provenance = {
+        "equipment": "MODEL-DERIVED",
+        "environment": _weather_provenance(weather),
+        "storage": "HARDCODED-DEMO",
+        "injectedSensors": [],
+        "activeScenario": None,
+        "weatherSource": weather.get("source"),
+        "equipmentModel": "Aurora causal energy & thermal model (physics fallback in backend)",
+        "stationCoordinates": _coords(sid),
+    }
+    return build_snapshot(
+        sid, fallback["sensors"], source="physics-fallback", provenance=provenance,
+        ts_ms=fallback["computedAt"], last_batch_age=last_batch_age,
+        connected=store.is_connected(sid),
+    )
+
+
+def snapshot_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
+    sensors = {
+        bld: {sensor: reading["value"] for sensor, reading in readings.items()}
+        for bld, readings in batch["readings"].items()
+    }
+    injected = list(batch.get("injectedSensors") or [])
+    mode = batch.get("mode") or "reanalysis"
+    simulated_mode = mode == "simulation"
+    equipment_injected = any(not k.startswith("lab.") for k in injected)
+    env_injected = any(k.startswith("lab.") for k in injected)
+    provenance = {
+        "equipment": "SIMULATED" if (simulated_mode or equipment_injected) else "MODEL-DERIVED",
+        "environment": "SIMULATED" if (simulated_mode or env_injected) else "REANALYSIS",
+        "storage": "SIMULATED" if simulated_mode else "MODEL-DERIVED",
+        "injectedSensors": injected,
+        "activeScenario": batch.get("activeScenario"),
+        "weatherSource": batch.get("weatherSource"),
+        "equipmentModel": ("random-walk simulation (simulator.py)" if simulated_mode
+                           else "Aurora physics model (simulator.py)"),
+        "stationCoordinates": _coords(sid),
+    }
+    return build_snapshot(
+        sid, sensors, source="simulator", provenance=provenance,
+        ts_ms=batch.get("timestamp") or int(time.time() * 1000),
+        last_batch_age=last_batch_age, connected=store.is_connected(sid),
+        event_timeline=batch.get("eventTimeline"), active_patterns=batch.get("activePatterns"),
+    )
+
+
+def select_snapshot(sid: str) -> dict:
+    """Simulator batch if fresh (≤ SIM_BATCH_FRESH_S), else physics fallback."""
+    age = store.batch_age(sid)
+    batch = store.latest_batch(sid)
+    if batch is not None and age is not None and age <= app_config.SIM_BATCH_FRESH_S:
+        return snapshot_from_batch(sid, batch, age)
+    return snapshot_from_fallback(sid, store.get_fallback(sid), age)
+
+
+def published_snapshot(sid: str) -> dict:
+    snap = store.get_published(sid)
+    if snap is None:
+        raise HTTPException(status_code=503, detail="Telemetry not ready yet; retry shortly")
+    return snap
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Background tick (the only writer of physics state)
+# ═══════════════════════════════════════════════════════════════
+
+async def run_tick():
+    for sid in STATIONS:
+        try:
+            fallback = await asyncio.to_thread(advance_fallback, sid)
+            store.set_fallback(sid, fallback)
+            snap = select_snapshot(sid)
+            store.publish(sid, snap)
+            await manager.broadcast(sid, snap)
+        except Exception:
+            log.exception("Tick failed for station %s", sid)
+
+
+async def tick_loop():
+    while True:
+        await asyncio.sleep(app_config.TICK_INTERVAL_S)
+        await run_tick()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    await run_tick()   # prime: every station has a published snapshot before serving
+    task = asyncio.create_task(tick_loop())
+    log.info("Unified backend ready (v%s, tick %.1fs, batch freshness %.0fs)",
+             app_config.APP_VERSION, app_config.TICK_INTERVAL_S, app_config.SIM_BATCH_FRESH_S)
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Aurora Antarctic Digital Twin Platform", version=app_config.APP_VERSION, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=app_config.ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
 
 # ═══════════════════════════════════════════════════════════════
 #  WebSocket Route
@@ -298,22 +441,34 @@ async def websocket_endpoint(websocket: WebSocket):
     # CORSMiddleware does not cover WebSockets: enforce the origin allow-list here.
     # Non-browser clients (no Origin header) are allowed.
     origin = websocket.headers.get("origin")
-    if origin is not None and origin.rstrip("/") not in ALLOWED_ORIGINS:
-        print(f"[ws] Rejected connection from disallowed origin: {origin}")
+    if origin is not None and origin.rstrip("/") not in app_config.ALLOWED_ORIGINS:
+        log.warning("WS rejected: disallowed origin %s", origin)
         await websocket.close(code=1008)
         return
-    await manager.connect(websocket)
+    raw = websocket.query_params.get("stationId")
+    station_filter = None
+    if raw is not None:
+        station_filter = raw.strip().lower()
+        if station_filter not in STATION_INFO:
+            log.warning("WS rejected: unknown stationId %r", raw)
+            await websocket.close(code=1008)
+            return
+    await manager.connect(websocket, station_filter)
     try:
-        # Send initial snapshot immediately
-        for sid in ["maitri", "bharati"]:
-            payload = compute_digital_twin_telemetry(sid)
-            await websocket.send_json(payload)
+        # Initial snapshot(s) from the published cache — no computation.
+        for sid in ([station_filter] if station_filter else STATIONS):
+            snap = store.get_published(sid)
+            if snap is not None:
+                await websocket.send_json(snap)
         while True:
-            data = await websocket.receive_text()
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        pass
     except Exception:
+        log.warning("WS connection error", exc_info=True)
+    finally:
         manager.disconnect(websocket)
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Station & Telemetry REST APIs
@@ -348,34 +503,158 @@ def get_stations():
         }
     ]
 
+
 @app.get("/api/sensors/latest")
-def get_latest_sensors(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
-    return compute_digital_twin_telemetry(sid)
+def get_latest_sensors(sid: str = Depends(station_param)):
+    return published_snapshot(sid)
+
+
+@app.get("/api/station/{station_id}/state")
+def get_station_state(station_id: str):
+    return published_snapshot(require_station(station_id))
+
+
+# ── Simulator ingest ──────────────────────────────────────────
+
+class SensorValue(BaseModel):
+    value: float = Field(allow_inf_nan=False)
+    unit: str = Field("", max_length=16)
+    sourceType: Optional[str] = Field(None, max_length=32)
+
+
+class SensorBatch(BaseModel):
+    """Superset of the legacy Java SensorBatchDTO (new fields are optional)."""
+    stationId: str = Field(max_length=32)
+    timestamp: Optional[int] = None
+    readings: Dict[str, Dict[str, SensorValue]]
+    eventTimeline: Optional[List[Dict[str, Any]]] = None
+    activePatterns: Optional[List[str]] = None
+    mode: Optional[str] = Field(None, max_length=32)
+    activeScenario: Optional[str] = Field(None, max_length=64)
+    injectedSensors: Optional[List[str]] = None
+    weatherSource: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("readings")
+    @classmethod
+    def _bounded_readings(cls, v):
+        if len(v) > 20 or any(len(s) > 20 for s in v.values()):
+            raise ValueError("too many buildings/sensors (max 20 x 20)")
+        if any(len(b) > 40 or any(len(k) > 40 for k in s) for b, s in v.items()):
+            raise ValueError("building/sensor ids must be <= 40 chars")
+        return v
+
+    @field_validator("eventTimeline")
+    @classmethod
+    def _bounded_timeline(cls, v):
+        if v is None:
+            return v
+        out = []
+        for ev in v[-50:]:
+            out.append({k: (str(val)[:200] if isinstance(val, str) else val)
+                        for k, val in ev.items() if k in ("type", "message", "timestamp", "tick")})
+        return out
+
+    @field_validator("activePatterns", "injectedSensors")
+    @classmethod
+    def _bounded_str_list(cls, v):
+        return None if v is None else [str(x)[:80] for x in v[:50]]
+
 
 @app.post("/api/sensors/batch")
-async def ingest_sensor_batch(batch: dict = Body(...)):
-    return {"status": "success", "received": True, "stationId": batch.get("stationId", "maitri")}
+async def ingest_sensor_batch(batch: SensorBatch):
+    sid = require_station(batch.stationId)
+    points = store.record_batch(sid, batch.model_dump())
+    return {"status": "accepted", "stationId": sid,
+            "receivedAt": int(time.time() * 1000), "historyPoints": points}
+
+
+# ── Health ───────────────────────────────────────────────────
+
+_sim_probe_lock = threading.Lock()
+_sim_probe_cache = {"at": 0.0, "value": None}
+
+
+def _check_db() -> dict:
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=2)
+        try:
+            conn.execute("SELECT 1 FROM observations LIMIT 1").fetchall()
+        finally:
+            conn.close()
+        return {"ok": True, "path": str(DB_PATH), "error": None}
+    except Exception as exc:
+        log.warning("Health: DB check failed: %s", exc)
+        return {"ok": False, "path": str(DB_PATH), "error": str(exc)}
+
+
+def _probe_simulator() -> dict:
+    """GET simulator /health + /api/chronos-status (1 s timeout, cached 5 s)."""
+    with _sim_probe_lock:
+        if _sim_probe_cache["value"] is not None and time.monotonic() - _sim_probe_cache["at"] < 5:
+            return _sim_probe_cache["value"]
+    base = app_config.SIMULATOR_URL
+    result = {
+        "simulator": {"reachable": False, "url": base, "error": None},
+        "chronos": {"available": "unknown", "modelLoaded": "unknown", "source": "simulator"},
+    }
+    try:
+        requests.get(f"{base}/health", timeout=1).raise_for_status()
+        result["simulator"]["reachable"] = True
+        cs = requests.get(f"{base}/api/chronos-status", timeout=1).json()
+        result["chronos"] = {"available": bool(cs.get("chronos_available")),
+                             "modelLoaded": bool(cs.get("model_loaded")), "source": "simulator"}
+    except Exception as exc:
+        result["simulator"]["error"] = str(exc)[:200]
+    with _sim_probe_lock:
+        _sim_probe_cache.update(at=time.monotonic(), value=result)
+    return result
+
+
+@app.get("/api/health")
+async def health():
+    db = await asyncio.to_thread(_check_db)
+    probe = await asyncio.to_thread(_probe_simulator)
+    stations = {}
+    for sid in STATIONS:
+        snap = store.get_published(sid)
+        age = store.batch_age(sid)
+        stations[sid] = {
+            "dataSource": snap["dataSource"] if snap else None,
+            "lastBatchAgeSec": None if age is None else round(age, 1),
+            "historyPoints": store.history_len(sid),
+        }
+    return {
+        "status": "ok" if db["ok"] else "degraded",
+        "version": app_config.APP_VERSION,
+        "db": db,
+        "simulator": probe["simulator"],
+        "chronos": probe["chronos"],
+        "stations": stations,
+    }
+
 
 @app.get("/api/ai/analysis")
-def get_ai_analysis(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
+def get_ai_analysis(sid: str = Depends(station_param)):
     risk = assess_blizzard_and_polar_risks(sid)
+    snap = published_snapshot(sid)
     return {
         "stationId": sid,
         "overallHealth": risk["overall_health"],
         "riskScore": risk["risk_score"],
         "windChill": risk["wind_chill_c"],
         "currentWeather": risk["current_weather"],
-        "dependencyAlerts": risk["identified_risks"],
+        # Cascade alerts (shape expected by DependencyGraph.jsx) — ported from legacy ai-service
+        "dependencyAlerts": snap["dependencyAlerts"],
+        "telemetryHealth": snap["aiHealth"],
+        "dataSource": snap["dataSource"],
+        # Weather/blizzard rule hits (previously mislabelled as dependencyAlerts)
+        "riskAlerts": risk["identified_risks"],
         "provenance": risk["provenance"]
     }
 
 @app.get("/api/predictions")
-def get_predictions(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
-    state = STATION_STATE.get(sid, STATION_STATE["maitri"])
-    sensors = state["sensors"]
+def get_predictions(sid: str = Depends(station_param)):
+    sensors = published_snapshot(sid)["sensors"]
     preds = {}
     for b_id, s_map in sensors.items():
         preds[b_id] = {}
@@ -403,10 +682,7 @@ def get_predictions(stationId: Optional[str] = None, station: Optional[str] = No
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/ncpor/live")
-def get_ncpor_live(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
-    if sid not in STATION_INFO:
-        sid = "maitri"
+def get_ncpor_live(sid: str = Depends(station_param)):
     weather = get_latest_weather_for_station(sid)
     return {
         "status": "success",
@@ -426,12 +702,10 @@ def get_ncpor_live(stationId: Optional[str] = None, station: Optional[str] = Non
     }
 
 @app.post("/api/ncpor/ingest")
-def trigger_ncpor_ingestion(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station)
+def trigger_ncpor_ingestion(sid: Optional[str] = Depends(optional_station_param)):
     results = {}
     if sid:
-        norm_sid = sid.lower()
-        results[norm_sid] = ingest_live_station(norm_sid)
+        results[sid] = ingest_live_station(sid)
     else:
         results["maitri"] = ingest_live_station("maitri")
         results["bharati"] = ingest_live_station("bharati")
@@ -439,12 +713,10 @@ def trigger_ncpor_ingestion(stationId: Optional[str] = None, station: Optional[s
 
 @app.get("/api/ncpor/observations")
 def get_ncpor_observations(
-    stationId: Optional[str] = None,
-    station: Optional[str] = None,
+    sid: str = Depends(station_param),
     parameter: str = "temperature",
     limit: int = 200
 ):
-    sid = (stationId or station or "maitri").lower()
     df = query_observations(sid, parameter, limit=limit)
     if df.empty:
         return {"status": "empty", "records": []}
@@ -462,33 +734,27 @@ def get_ncpor_observations(
 
 @app.get("/api/anomaly")
 def get_anomaly_results(
-    stationId: Optional[str] = None,
-    station: Optional[str] = None,
+    sid: str = Depends(station_param),
     parameter: str = "temperature",
     algorithm: str = "isf"
 ):
-    sid = (stationId or station or "maitri").lower()
     return run_anomaly_detection(sid, parameter, algorithm)
 
 @app.get("/api/forecast")
 def get_forecast_results(
-    stationId: Optional[str] = None,
-    station: Optional[str] = None,
+    sid: str = Depends(station_param),
     parameter: str = "temperature",
     model: str = "arima",
     horizon: int = 24
 ):
-    sid = (stationId or station or "maitri").lower()
     return run_time_series_forecast(sid, parameter, model, horizon)
 
 @app.get("/api/correlation")
-def get_correlation_matrix(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
+def get_correlation_matrix(sid: str = Depends(station_param)):
     return run_correlation_matrix(sid)
 
 @app.get("/api/risk")
-def get_station_risk(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
+def get_station_risk(sid: str = Depends(station_param)):
     return assess_blizzard_and_polar_risks(sid)
 
 # ═══════════════════════════════════════════════════════════════
@@ -496,27 +762,25 @@ def get_station_risk(stationId: Optional[str] = None, station: Optional[str] = N
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/twin-inspector")
-def get_twin_inspector(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
-    if sid not in STATION_STATE:
-        sid = "maitri"
-    weather = get_latest_weather_for_station(sid)
-    pm = STATION_STATE[sid]["physics"]
-    
-    weather_input = {
-        "env_temp": weather["temp"],
-        "env_wind": weather["wind"] * 3.6,
-        "env_pressure": weather["pressure"],
-        "env_humidity": weather["humidity"]
-    }
-    readings = pm.compute(weather_input, dt_seconds=2.0)
-    meta = readings.pop("_meta", {})
+def get_twin_inspector(sid: str = Depends(station_param)):
+    # Read-only: the causal chain from the physics-fallback model's last tick.
+    # (Never calls pm.compute() — only the background tick advances state.)
+    fallback = store.get_fallback(sid)
+    if fallback is None:
+        raise HTTPException(status_code=503, detail="Telemetry not ready yet; retry shortly")
+    weather = fallback["weather"]
+    readings = fallback["readings"]
+    meta = fallback["meta"]
+    snap = published_snapshot(sid)
     pb = meta.get("power_breakdown", {})
     tb = meta.get("thermal_breakdown", {})
 
     return {
         "station": sid,
         "stationId": sid,
+        # Causal chain below is always the backend physics model; telemetrySource says
+        # what the station's live telemetry currently comes from.
+        "telemetrySource": snap["dataSource"],
         "dataSource": {
             "label": f"NCPOR AWS Telemetry + Polar Physics Causal Model ({sid.upper()})",
             "weatherSource": weather["source"],
@@ -576,8 +840,8 @@ class WhatIfRequest(BaseModel):
 
 @app.post("/api/simulation/whatif")
 def run_what_if_simulation(req: WhatIfRequest):
-    station_id = (req.stationId or "maitri").lower()
-    base = compute_digital_twin_telemetry(station_id)
+    station_id = require_station(req.stationId)
+    base = published_snapshot(station_id)   # read-only baseline (no physics advance)
     weather = base["sensors"]["lab"]
     gen = base["sensors"]["generator"]
     heat = base["sensors"]["heating"]
@@ -713,6 +977,7 @@ def run_what_if_simulation(req: WhatIfRequest):
         "stationId": station_id,
         "scenarioId": req.scenarioId,
         "intensity": req.intensity,
+        "dataSource": base["dataSource"],
         "baseline": base["sensors"],
         "simulated": {
             "lab": sim_weather,
@@ -736,20 +1001,13 @@ def run_what_if_simulation(req: WhatIfRequest):
 # ═══════════════════════════════════════════════════════════════
 
 @app.post("/api/connection/toggle")
-def toggle_station_connection(stationId: Optional[str] = None):
-    sid = (stationId or "maitri").lower()
-    if sid in STATION_STATE:
-        curr = not STATION_STATE[sid].get("connected", True)
-        STATION_STATE[sid]["connected"] = curr
-    else:
-        curr = True
+def toggle_station_connection(sid: str = Depends(station_param)):
+    curr = store.toggle_connected(sid)
     return {"status": "success", "stationId": sid, "connected": curr}
 
 @app.get("/api/connection/status")
-def get_station_connection_status(stationId: Optional[str] = None):
-    sid = (stationId or "maitri").lower()
-    curr = STATION_STATE.get(sid, {}).get("connected", True)
-    return {"status": "success", "stationId": sid, "connected": curr}
+def get_station_connection_status(sid: str = Depends(station_param)):
+    return {"status": "success", "stationId": sid, "connected": store.is_connected(sid)}
 
 @app.post("/api/alerts/{alert_id}/acknowledge")
 def acknowledge_alert(alert_id: str):
@@ -760,8 +1018,7 @@ def acknowledge_alert(alert_id: str):
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/logistics")
-def get_logistics(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
+def get_logistics(sid: str = Depends(station_param)):
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -800,6 +1057,7 @@ class InventoryUpdateRequest(BaseModel):
 
 @app.post("/api/logistics/update")
 def update_inventory_item(req: InventoryUpdateRequest):
+    req.stationId = require_station(req.stationId)
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
     now_ts = int(time.time() * 1000)
@@ -832,6 +1090,7 @@ class DispatchCommandRequest(BaseModel):
 
 @app.post("/api/remote/dispatch")
 def dispatch_remote_command(req: DispatchCommandRequest):
+    req.stationId = require_station(req.stationId)
     cmd_id = f"CMD-{int(time.time())}-{req.stationId[:3].upper()}"
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
@@ -862,8 +1121,7 @@ def dispatch_remote_command(req: DispatchCommandRequest):
     }
 
 @app.get("/api/remote/commands")
-def get_remote_commands(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
+def get_remote_commands(sid: str = Depends(station_param)):
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -877,13 +1135,14 @@ def get_remote_commands(stationId: Optional[str] = None, station: Optional[str] 
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/alerts")
-def get_alerts(stationId: Optional[str] = None, station: Optional[str] = None):
-    sid = (stationId or station or "maitri").lower()
-    telemetry = compute_digital_twin_telemetry(sid)
+def get_alerts(sid: str = Depends(station_param)):
+    snap = published_snapshot(sid)   # read-only
     return {
         "stationId": sid,
-        "activeAlerts": telemetry["activeAlerts"],
-        "alerts": telemetry["alerts"]
+        "activeAlerts": snap["activeAlerts"],
+        "alerts": snap["alerts"],
+        "dependencyAlerts": snap["dependencyAlerts"],
+        "dataSource": snap["dataSource"],
     }
 
 # ═══════════════════════════════════════════════════════════════
@@ -903,7 +1162,7 @@ def get_admin_config():
     return {
         "system": {
             "name": "AURORA Antarctic Digital Twin Platform",
-            "version": "3.0.0",
+            "version": app_config.APP_VERSION,
             "status": "Healthy / Mission Control Ready",
             "activeStations": ["Maitri", "Bharati"],
             "ingestionSource": "NCPOR Official Data Infrastructure (https://data.ncpor.res.in)"
@@ -939,7 +1198,7 @@ class ExplainRequest(BaseModel):
 @app.post("/api/aurora-explain")
 @app.post("/api/explain")
 def get_ai_explanation(req: ExplainRequest):
-    station = req.station
+    station = require_station(req.station)
     risk = assess_blizzard_and_polar_risks(station)
     weather = get_latest_weather_for_station(station)
     
@@ -968,4 +1227,4 @@ def get_ai_explanation(req: ExplainRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=API_PORT)
+    uvicorn.run(app, host=app_config.HOST, port=app_config.API_PORT)

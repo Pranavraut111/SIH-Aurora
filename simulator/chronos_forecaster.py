@@ -16,7 +16,7 @@ Architecture:
 
 This module is INDEPENDENT of the existing:
     - Physics forecast (forecast_engine.py)
-    - Exponential smoothing baseline (ai-service/ai_service.py)
+    - Exponential smoothing baseline (legacy/ai-service/ai_service.py)
     - Anomaly detector (anomaly_engine.py)
     - Decision engine (decision_engine.py)
 

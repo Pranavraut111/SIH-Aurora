@@ -6,7 +6,7 @@ venv/
 # Build outputs
 dist/
 dist-ssr/
-backend/target/
+legacy/backend/target/
 
 # Python caches
 __pycache__/

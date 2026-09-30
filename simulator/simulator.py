@@ -1207,12 +1207,18 @@ def main():
             for station_id, sim in stations.items():
                 readings = sim.tick()
 
+                source_info = sim.get_data_source_info()
                 payload = {
                     "stationId": station_id,
                     "timestamp": int(time.time() * 1000),
                     "readings": readings,
                     "eventTimeline": sim.event_log[-50:],
                     "activePatterns": [p["name"] for p in sim.active_patterns],
+                    # Provenance hints for the unified backend (additive, optional fields)
+                    "mode": source_info.get("mode"),
+                    "activeScenario": sim.active_scenario,
+                    "injectedSensors": sorted(sim.active_injections.keys()),
+                    "weatherSource": source_info.get("dataset") or source_info.get("label"),
                 }
 
                 try:

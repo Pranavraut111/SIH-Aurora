@@ -146,6 +146,15 @@ AURORA_DATE_SOURCE = "env" if _explicit_date else ("weather_cache" if AURORA_DAT
 if AURORA_DATE is None:
     log.warning("No common ERA5 cache found in %s; weather layer will try to download", WEATHER_CACHE_DIR)
 
+# ── Unified backend runtime ───────────────────────────────────
+APP_VERSION = "3.1.0"
+# A simulator batch newer than this (seconds) makes the simulator the telemetry source.
+SIM_BATCH_FRESH_S = _get_float("SIM_BATCH_FRESH_S", 10.0)
+# Rolling in-memory history per sensor (points).
+HISTORY_MAX_POINTS = _get_int("HISTORY_MAX_POINTS", 300)
+# Background tick interval (seconds). The tick is the ONLY code that advances physics state.
+TICK_INTERVAL_S = _get_float("TICK_INTERVAL_S", 2.0)
+
 # ── LLM (Groq) — server-side only ─────────────────────────────
 GROQ_API_KEY = _get("GROQ_API_KEY", "")
 GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -161,4 +170,6 @@ def summary() -> dict:
         "AURORA_DATE": AURORA_DATE, "AURORA_DATE_SOURCE": AURORA_DATE_SOURCE,
         "GROQ_API_KEY": "set" if GROQ_API_KEY else "not set", "GROQ_MODEL": GROQ_MODEL,
         "LOG_LEVEL": LOG_LEVEL,
+        "APP_VERSION": APP_VERSION, "SIM_BATCH_FRESH_S": SIM_BATCH_FRESH_S,
+        "HISTORY_MAX_POINTS": HISTORY_MAX_POINTS, "TICK_INTERVAL_S": TICK_INTERVAL_S,
     }

@@ -11,7 +11,18 @@
 - `simulator/simulator.py` (:8001) is an **internal** service (physics tick loop,
   anomaly/forecast/decision/Chronos/Groq). The browser must not call it directly;
   expose what the UI needs through the unified backend.
-- `backend/` (Java Spring Boot) and `ai-service/` are **legacy**. Do not extend them.
+- `legacy/backend/` (Java Spring Boot) and `legacy/ai-service/` are **legacy** (see `legacy/README.md`).
+  Not started by scripts. Do not extend them.
+- Telemetry: `simulator.py` POSTs `/api/sensors/batch`; the unified backend's background tick is the
+  **only** code that advances physics state (`advance_fallback`). All GET/WS reads return the last
+  published snapshot (`dataSource`: `simulator` | `physics-fallback`, plus `provenance`). Never call
+  `StationPhysicsModel.compute()` from a request handler.
+- Station ids are validated by one dependency (`station_param` / `require_station`): unknown → 404.
+
+## Running locally
+- Python venv lives at the repo root: `python3 -m venv .venv && .venv/bin/pip install -r simulator/requirements.txt`
+  (`.venv/` is gitignored). Then `npm install` and `./start.sh` (Windows: `start.ps1`), which starts
+  backend → waits for `/api/health` → simulator → Vite, and stops all of them on Ctrl-C.
 - **Firebase is disabled** (P0-6). It had public read/write rules and duplicated
   persistence. It only initialises with `VITE_ENABLE_FIREBASE=true` + config, and
   `database.rules.json` denies everything. Don't re-enable without adding auth + scoped rules.

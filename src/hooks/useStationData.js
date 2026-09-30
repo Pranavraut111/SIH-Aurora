@@ -16,6 +16,12 @@ import { WS_URL } from '../config';
 import { apiGet, apiPost } from '../services/api';
 const RECONNECT_DELAY = 3000;
 
+// Per-station stream: the backend sends only this station's snapshots.
+function stationWsUrl(stationId) {
+  const sep = WS_URL.includes('?') ? '&' : '?';
+  return `${WS_URL}${sep}stationId=${encodeURIComponent(stationId)}`;
+}
+
 export function useStationData(activeStation = 'maitri') {
   const [stationData, setStationData] = useState({
     sensors: {},
@@ -70,7 +76,8 @@ export function useStationData(activeStation = 'maitri') {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(stationWsUrl(activeStationRef.current));
+      ws._station = activeStationRef.current; // which station this stream is subscribed to
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -137,6 +144,13 @@ export function useStationData(activeStation = 'maitri') {
             activePatterns: state.activePatterns || [],
             offlineQueueSize: 0,
             isCached: false,
+            // Backend telemetry source + provenance ("simulator" | "physics-fallback")
+            telemetrySource: state.dataSource ?? null,
+            provenance: state.provenance ?? null,
+            // Cascade alerts + health now arrive on every WS message; without these the
+            // 2 s WS update wiped the values set by the 4 s /ai/analysis poll.
+            dependencyAlerts: state.dependencyAlerts || [],
+            aiHealth: state.aiHealth || 'healthy',
           });
         } catch (e) {
           console.error('Failed to parse WebSocket message:', e);
@@ -144,9 +158,14 @@ export function useStationData(activeStation = 'maitri') {
       };
 
       ws.onclose = () => {
+        // Use THIS socket (not wsRef): on a station switch wsRef already holds the new socket.
+        if (ws._aiPollId) clearInterval(ws._aiPollId);
+        if (wsRef.current === ws) wsRef.current = null;
+        if (ws._switching) {
+          console.log('[WS] Closed previous station stream (station switch)');
+          return; // a new socket is already connecting; no fallback, no retry
+        }
         console.log('[WS] Disconnected, falling back to local cache/simulation');
-        if (wsRef.current?._aiPollId) clearInterval(wsRef.current._aiPollId);
-        wsRef.current = null;
         if (!isManuallyDisconnectedRef.current) {
           fallbackToSimulation();
           reconnectTimer.current = setTimeout(connectWebSocket, RECONNECT_DELAY);
@@ -294,10 +313,20 @@ export function useStationData(activeStation = 'maitri') {
     };
   }, []);
 
-  // When station changes, reset history
+  // When station changes: reset history and re-subscribe the WS to the new station.
+  // Compare against the socket's own station (not a "first run" flag) so React
+  // StrictMode's dev double-mount doesn't trigger a spurious reconnect.
   useEffect(() => {
     historyRef.current = {};
-  }, [activeStation]);
+    const old = wsRef.current;
+    if (old && old._station !== activeStation && !isManuallyDisconnectedRef.current) {
+      old._switching = true;
+      old.close();
+      wsRef.current = null;
+      clearTimeout(reconnectTimer.current);
+      connectWebSocket();
+    }
+  }, [activeStation, connectWebSocket]);
 
   return {
     stationData,

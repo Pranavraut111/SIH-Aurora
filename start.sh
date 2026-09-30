@@ -1,86 +1,116 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-#  Aurora — Start All Services
-#  Launches Frontend + Backend + AI Service + Simulator
+#  Aurora — start all services (macOS / Linux)
+#    1. simulator/unified_backend.py  (single public backend, API_PORT, default 8080)
+#    2. simulator/simulator.py        (internal control API, SIM_PORT, default 8001)
+#    3. Vite dev server               (VITE_PORT, default 5173)
+#
+#  Ports/host come from simulator/config.py (root .env). Python comes from the
+#  repo venv (.venv/) unless AURORA_PYTHON is set. Ctrl-C stops everything.
+#  Windows: use start.ps1. Legacy Java/ai-service are NOT started (see legacy/).
+#  Written for bash 3.2+ (macOS default).
 # ═══════════════════════════════════════════════════════════════
+set -eo pipefail
 
-set -e
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY="${AURORA_PYTHON:-$ROOT/.venv/bin/python}"
+VITE_PORT="${VITE_PORT:-5173}"
+HEALTH_TIMEOUT_S="${HEALTH_TIMEOUT_S:-60}"
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
+info() { printf "${CYAN}[start]${NC} %s\n" "$*"; }
+fail() { printf "${RED}[start] ERROR:${NC} %s\n" "$*" >&2; exit 1; }
 
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║          Aurora — Antarctic Station Digital Twin          ║"
-echo "║          Starting all services...                        ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
-echo ""
-
-# Colors
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-# Python executable selection
-if [ -f "$ROOT_DIR/simulator/.venv/bin/python3" ]; then
-  PYTHON_BIN="$ROOT_DIR/simulator/.venv/bin/python3"
-else
-  PYTHON_BIN="python3"
+# ── Preflight ─────────────────────────────────────────────────
+if [ ! -x "$PY" ]; then
+  fail "Python venv not found at $PY
+  Create it from the repo root:
+    python3 -m venv .venv
+    .venv/bin/pip install -r simulator/requirements.txt
+  (optional Chronos extras: .venv/bin/pip install -r simulator/requirements-ml.txt)
+  Or point AURORA_PYTHON at an existing interpreter."
 fi
+"$PY" -c "import fastapi, flask, dotenv, sklearn" 2>/dev/null \
+  || fail "Python deps missing in $PY — run: $PY -m pip install -r simulator/requirements.txt"
+command -v npm >/dev/null 2>&1 || fail "npm not found (install Node.js 18+)"
+[ -d "$ROOT/node_modules" ] || fail "node_modules missing — run: npm install"
+command -v curl >/dev/null 2>&1 || fail "curl not found (needed for the health check)"
 
-# 1. Start Frontend (Vite)
-echo -e "${CYAN}[1/4]${NC} Starting React frontend on :5173..."
-cd "$ROOT_DIR" && npm run dev &
-FRONTEND_PID=$!
-sleep 2
+# Single source of truth for ports/host: config.py (loads the root .env)
+read -r API_PORT SIM_PORT BIND_HOST < <(cd "$ROOT/simulator" && "$PY" -c \
+  'import config as c; print(c.API_PORT, c.SIM_PORT, c.HOST)' 2>/dev/null) \
+  || fail "could not read ports from simulator/config.py"
+HEALTH_HOST="$BIND_HOST"
+[ "$HEALTH_HOST" = "0.0.0.0" ] && HEALTH_HOST="127.0.0.1"
 
-# 2. Start Backend
-if command -v mvn &>/dev/null && [ "$USE_SPRING" = "1" ]; then
-  echo -e "${CYAN}[2/4]${NC} Starting Spring Boot backend on :8080..."
-  cd "$ROOT_DIR/backend" && mvn spring-boot:run -q &
-  BACKEND_PID=$!
-  sleep 8
-else
-  echo -e "${CYAN}[2/4]${NC} Starting Unified Mission Control backend on :8080..."
-  cd "$ROOT_DIR/simulator" && $PYTHON_BIN unified_backend.py &
-  BACKEND_PID=$!
-  sleep 3
-fi
+port_owner() {  # prints "PID command" of the listener, empty if the port is free
+  # NB: lsof exits 1 when nothing listens; `|| true` keeps set -e/pipefail from aborting.
+  if command -v lsof >/dev/null 2>&1; then
+    { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null || true; } | awk 'NR==2{print $2" "$1}'
+  elif (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; then
+    echo "unknown-process"
+  fi
+  return 0
+}
+for p in "$API_PORT" "$SIM_PORT" "$VITE_PORT"; do
+  owner="$(port_owner "$p")"
+  [ -z "$owner" ] || fail "port $p is already in use (pid/cmd: $owner). Stop it or change the port in .env / VITE_PORT."
+done
 
-# 3. Start AI Service (FastAPI)
-echo -e "${CYAN}[3/4]${NC} Starting AI service on :8000..."
-cd "$ROOT_DIR/ai-service" && $PYTHON_BIN ai_service.py &
-AI_PID=$!
-sleep 2
+# ── Process management ────────────────────────────────────────
+# Job control: every background job gets its own process group, so Ctrl-C only
+# reaches this script, and cleanup can kill each service's whole tree.
+set -m
+PGIDS=""
+cleanup() {
+  trap - INT TERM EXIT
+  printf "\n"; info "Stopping services..."
+  for pg in $PGIDS; do kill -TERM -- "-$pg" 2>/dev/null || true; done
+  sleep 1
+  for pg in $PGIDS; do kill -KILL -- "-$pg" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  info "All services stopped."
+}
+trap cleanup INT TERM EXIT
 
-# 4. Start Simulator (with Control API on :8001)
-echo -e "${CYAN}[4/4]${NC} Starting sensor simulator on :8001..."
-cd "$ROOT_DIR/simulator"
-# Load environment variables (Groq API key, etc.)
-if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
-  echo "       Loaded .env (Groq API key configured)"
-fi
-$PYTHON_BIN simulator.py &
-SIM_PID=$!
+start_service() {  # name, workdir, command...
+  local name="$1" dir="$2"; shift 2
+  (cd "$dir" && exec "$@") 2>&1 | sed -u "s/^/[$name] /" &
+  local pgid
+  pgid="$(ps -o pgid= -p $! | tr -d ' ')"
+  PGIDS="$PGIDS $pgid"
+  eval "${name}_PID=$!"
+}
 
-echo ""
-echo -e "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  All services started!                                   ║${NC}"
-echo -e "${GREEN}║                                                          ║${NC}"
-echo -e "${GREEN}║  Frontend:      http://localhost:5173                     ║${NC}"
-echo -e "${GREEN}║  Backend:       http://localhost:8080                     ║${NC}"
-echo -e "${GREEN}║  AI Service:    http://localhost:8000                     ║${NC}"
-echo -e "${GREEN}║  Simulator API: http://localhost:8001                     ║${NC}"
-echo -e "${GREEN}║  H2 Console:    http://localhost:8080/h2-console          ║${NC}"
-echo -e "${GREEN}║                                                          ║${NC}"
-echo -e "${GREEN}║  Demo Control:  Click the 🎮 button in the app           ║${NC}"
-echo -e "${GREEN}║  AI Panel:      Click the 'AI / Aurora' tab              ║${NC}"
-echo -e "${GREEN}║                                                          ║${NC}"
-echo -e "${GREEN}║  Press Ctrl+C to stop all services                       ║${NC}"
-echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
-echo ""
+# ── Start ─────────────────────────────────────────────────────
+info "1/3 unified backend on $BIND_HOST:$API_PORT"
+start_service backend "$ROOT/simulator" "$PY" unified_backend.py
 
-# Trap Ctrl+C to kill all child processes
-trap "echo 'Shutting down...'; kill $FRONTEND_PID $BACKEND_PID $AI_PID $SIM_PID 2>/dev/null; exit" SIGINT SIGTERM
+info "waiting for http://$HEALTH_HOST:$API_PORT/api/health (timeout ${HEALTH_TIMEOUT_S}s)..."
+elapsed=0
+until curl -fsS -m 2 "http://$HEALTH_HOST:$API_PORT/api/health" >/dev/null 2>&1; do
+  kill -0 "$backend_PID" 2>/dev/null || fail "backend exited during startup (see [backend] log above)"
+  [ "$elapsed" -ge "$HEALTH_TIMEOUT_S" ] && fail "backend not healthy after ${HEALTH_TIMEOUT_S}s"
+  sleep 1; elapsed=$((elapsed + 1))
+done
+info "backend healthy"
 
-# Wait for all background processes
+info "2/3 simulator on $BIND_HOST:$SIM_PORT"
+start_service simulator "$ROOT/simulator" "$PY" simulator.py
+
+info "3/3 vite on :$VITE_PORT"
+start_service vite "$ROOT" npm run dev -- --port "$VITE_PORT" --strictPort
+
+printf "${GREEN}"
+cat <<EOF
+╔═══════════════════════════════════════════════════════════╗
+  Aurora is starting
+    Frontend:     http://localhost:$VITE_PORT
+    Backend API:  http://$HEALTH_HOST:$API_PORT   (health: /api/health)
+    Simulator:    http://$HEALTH_HOST:$SIM_PORT   (internal)
+  Press Ctrl+C to stop all services
+╚═══════════════════════════════════════════════════════════╝
+EOF
+printf "${NC}"
+
 wait
