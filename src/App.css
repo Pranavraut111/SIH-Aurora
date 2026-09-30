@@ -1,0 +1,159 @@
+/* ═══════════════════════════════════════════════════════════════
+   Aurora — App-level Layout & Command Center Architecture
+   ═══════════════════════════════════════════════════════════════ */
+
+.aurora-app {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+/* ── App Layout Body (Sidebar + Main Stage) ───────────────── */
+.app-layout-body {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: calc(100vh - 54px);
+  position: relative;
+  overflow: hidden;
+  margin-top: 54px;
+}
+
+/* ── Main Viewport Stage (Fills 100% of remaining width) ─── */
+.main-stage {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Overview Stage (3D Twin full-bleed centerpiece) ────── */
+.overview-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.scene-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* ── Module Content Scroll Area (Full views) ─────────────── */
+.module-content-scroll {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 24px;
+  z-index: 20;
+}
+
+.module-content-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.module-content-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.module-content-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+/* ── Ambient aurora gradient blobs ────────────────────────── */
+.ambient-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ambient-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: 0.1;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.blob-1 {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  top: -15%;
+  right: -8%;
+  animation: blob-drift-1 8s ease-in-out infinite;
+}
+
+.blob-2 {
+  width: 450px;
+  height: 450px;
+  background: radial-gradient(circle, var(--accent-2) 0%, transparent 70%);
+  bottom: -15%;
+  left: -8%;
+  animation: blob-drift-2 7s ease-in-out infinite;
+}
+
+.blob-3 {
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  top: 50%;
+  left: 40%;
+  opacity: 0.05;
+  animation: blob-drift-3 6s ease-in-out infinite;
+}
+
+@keyframes blob-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-20px, 15px) scale(1.06); }
+  66% { transform: translate(15px, -10px) scale(0.96); }
+}
+
+@keyframes blob-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(18px, -15px) scale(1.04); }
+  66% { transform: translate(-12px, 18px) scale(1.08); }
+}
+
+@keyframes blob-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(30px, -20px) scale(1.1); }
+}
+
+/* ── Reduced motion ─────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .ambient-blob {
+    animation: none;
+  }
+}
+
+/* ── Mobile & Small Screen Breakpoints ──────────────────── */
+@media (max-width: 768px) {
+  .app-layout-body {
+    flex-direction: column;
+  }
+  .sidebar-nav {
+    width: 100% !important;
+    height: auto;
+  }
+  .module-content-scroll {
+    padding: 12px;
+  }
+}

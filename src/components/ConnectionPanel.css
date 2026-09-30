@@ -1,0 +1,371 @@
+/* ═══════════════════════════════════════════════════════════════
+   Aurora — ConnectionPanel Drawer Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+.conn-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 95;
+}
+
+.conn-drawer {
+  position: fixed;
+  top: 56px;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 90vw;
+  z-index: 100;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: rgba(10, 14, 23, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+  overflow-y: auto;
+}
+
+.conn-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.conn-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conn-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.conn-icon {
+  color: #38bdf8;
+}
+
+.conn-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.conn-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.conn-status-dot.online {
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
+}
+
+.conn-status-dot.offline {
+  background: #f87171;
+  box-shadow: 0 0 8px #f87171;
+  animation: pulse-badge 1.5s infinite;
+}
+
+.conn-close-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.conn-close-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* ── Status Card ─────────────────────────────────────────── */
+.conn-status-card {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.conn-status-card.online {
+  background: rgba(52, 211, 153, 0.08);
+  border-color: rgba(52, 211, 153, 0.25);
+}
+
+.conn-status-card.offline {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.conn-status-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.conn-status-card.online .conn-status-title-row {
+  color: #34d399;
+}
+
+.conn-status-card.offline .conn-status-title-row {
+  color: #f87171;
+}
+
+.conn-status-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.conn-status-detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ── Metrics Grid ────────────────────────────────────────── */
+.conn-metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.conn-metric-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conn-metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.conn-metric-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.text-success { color: #34d399 !important; }
+.text-danger { color: #f87171 !important; }
+
+/* ── Bandwidth Section ───────────────────────────────────── */
+.conn-bw-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conn-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.conn-bw-bar-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conn-bw-bar {
+  position: relative;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.conn-bw-fill.raw {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(148, 163, 184, 0.3);
+}
+
+.conn-bw-fill.compressed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #34d399);
+}
+
+.conn-bw-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.conn-bw-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.conn-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+}
+
+.conn-stat-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.conn-stat.highlight .conn-stat-value {
+  color: #38bdf8;
+}
+
+.conn-stat-unit {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* ── Source ──────────────────────────────────────────────── */
+.conn-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.conn-source-label {
+  color: var(--text-muted);
+}
+
+.conn-source-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* ── Action Button ───────────────────────────────────────── */
+.conn-action-section {
+  margin-top: 4px;
+}
+
+.conn-toggle-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.conn-toggle-btn.disconnect {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #f87171;
+}
+
+.conn-toggle-btn.disconnect:hover {
+  background: rgba(248, 113, 113, 0.22);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.conn-toggle-btn.reconnect {
+  background: rgba(52, 211, 153, 0.15);
+  border-color: rgba(52, 211, 153, 0.35);
+  color: #34d399;
+}
+
+.conn-toggle-btn.reconnect:hover {
+  background: rgba(52, 211, 153, 0.25);
+  border-color: rgba(52, 211, 153, 0.5);
+}
+
+/* ── Queue Card ──────────────────────────────────────────── */
+.conn-queue-card {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conn-queue-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #f87171;
+}
+
+.queue-icon {
+  color: #f87171;
+}
+
+.conn-queue-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.conn-queue-detail {
+  font-size: 12px;
+  color: #f8fafc;
+}
+
+.conn-queue-count {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.conn-queue-info {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 0;
+}

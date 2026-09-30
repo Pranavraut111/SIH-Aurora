@@ -1,0 +1,47 @@
+# Dependencies / virtualenvs
+node_modules/
+.venv/
+venv/
+
+# Build outputs
+dist/
+dist-ssr/
+backend/target/
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# OS / editor junk
+.DS_Store
+._*
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.sw?
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Local tool settings
+.claude/settings.local.json
+
+# NOTE: simulator/weather_cache/ and simulator/data_store/ are intentionally
+# committed — they are required for the offline demo.
+
+# Local code-review-graph index (machine-specific cache)
+.code-review-graph/
+
+# Local MCP config (contains absolute paths) — copy from .mcp.json.example
+.mcp.json

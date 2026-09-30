@@ -1,0 +1,507 @@
+/* ═══════════════════════════════════════════════════════════════
+   Aurora — Infrastructure & Energy Dashboards Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Container ───────────────────────────────────────────── */
+.infra-module-container,
+.energy-module-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 10px 0 40px 0;
+}
+
+/* ── Headers ─────────────────────────────────────────────── */
+.infra-header,
+.energy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 14, 23, 0.85);
+  backdrop-filter: blur(16px);
+}
+
+.infra-header-left,
+.energy-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.infra-header-icon-box,
+.energy-header-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: rgba(167, 139, 250, 0.15);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: #a78bfa;
+}
+
+.energy-header-icon-box {
+  background: rgba(251, 191, 36, 0.15);
+  border-color: rgba(251, 191, 36, 0.35);
+  color: #fbbf24;
+}
+
+.infra-title-row,
+.energy-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.infra-title,
+.energy-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.infra-badge-active,
+.energy-badge-active {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(167, 139, 250, 0.15);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: #a78bfa;
+  font-family: var(--font-mono);
+}
+
+.energy-badge-active {
+  background: rgba(251, 191, 36, 0.15);
+  border-color: rgba(251, 191, 36, 0.35);
+  color: #fbbf24;
+}
+
+.infra-subtitle,
+.energy-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ── Infrastructure KPIs ─────────────────────────────────── */
+.infra-header-kpis {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.infra-kpi-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 80px;
+}
+
+.kpi-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kpi-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.kpi-sub {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.text-success { color: #34d399 !important; }
+.text-warning { color: #fbbf24 !important; }
+.text-danger { color: #f87171 !important; }
+.text-cyan { color: #38bdf8 !important; }
+.text-amber { color: #f59e0b !important; }
+.text-emerald { color: #10b981 !important; }
+
+/* ── Section Headings ────────────────────────────────────── */
+.infra-section-heading {
+  margin-top: 6px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* ── Infrastructure Cards Grid ───────────────────────────── */
+.infra-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.infra-card {
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(10, 14, 23, 0.85);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.infra-card:hover {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: rgba(167, 139, 250, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.infra-card.warning {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.04);
+}
+
+.infra-card.critical {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.infra-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.infra-card-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #a78bfa;
+}
+
+.infra-card-title-wrap {
+  flex: 1;
+}
+
+.infra-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.infra-card-module-tag {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.infra-card-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+
+.badge-normal, .badge-success {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+}
+
+.badge-warning {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+}
+
+.badge-critical {
+  background: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.infra-card-readings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+}
+
+.infra-reading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.infra-reading-name {
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.infra-reading-val {
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.infra-card-footer {
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.infra-card-inspect-hint {
+  font-size: 10px;
+  color: #a78bfa;
+  font-weight: 500;
+}
+
+/* ── Dependency Graph Wrapper ────────────────────────────── */
+.infra-dep-wrapper {
+  width: 100%;
+}
+
+/* ── Energy Hero Grid ────────────────────────────────────── */
+.energy-header-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gen-status-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gen-status-pill.online {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+}
+
+.gen-status-pill.standby {
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.status-dot-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.energy-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.energy-hero-card {
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: rgba(10, 14, 23, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.card-val-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.hero-val {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.hero-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.card-sub-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hero-bar-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.hero-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* ── Energy Split Grid ───────────────────────────────────── */
+.energy-split-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.energy-subpanel {
+  padding: 20px;
+  border-radius: 14px;
+  background: rgba(10, 14, 23, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.subpanel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subpanel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.load-bars-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.load-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.load-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.load-item-name {
+  color: var(--text-secondary);
+}
+
+.load-item-val {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.load-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.load-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.chp-details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chp-metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.chp-label {
+  color: var(--text-secondary);
+}
+
+.chp-val {
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.chp-efficiency-box {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.chp-note {
+  font-size: 11px;
+  color: #38bdf8;
+  line-height: 1.4;
+}
+
+@media (max-width: 900px) {
+  .energy-split-grid {
+    grid-template-columns: 1fr;
+  }
+}

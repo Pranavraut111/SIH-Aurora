@@ -1,0 +1,20 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "sensor_snapshots": {
+      "$stationId": {
+        ".indexOn": [
+          "clientTimestamp"
+        ]
+      }
+    },
+    "alert_history": {
+      "$stationId": {
+        ".indexOn": [
+          "clientTimestamp"
+        ]
+      }
+    }
+  }
+}
