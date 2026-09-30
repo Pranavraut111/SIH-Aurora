@@ -1,1 +1,18 @@
-requests>=2.31
+# Aurora — Python runtime dependencies (unified_backend.py + simulator.py)
+# Tested on Python 3.13. Install:  pip install -r simulator/requirements.txt
+# Optional ML extras (Chronos):     pip install -r simulator/requirements-ml.txt
+
+# Web / API
+fastapi==0.142.2
+uvicorn[standard]==0.54.0      # [standard] provides the WebSocket library for /ws/station
+pydantic==2.13.5
+flask==3.1.3
+flask-cors==6.0.5
+requests==2.34.2
+python-dotenv==1.2.3
+
+# Science / ML
+numpy==2.5.3
+pandas==3.0.6
+scikit-learn==1.7.2            # MUST match the version used to train anomaly_model_*.pkl
+statsmodels==0.15.0

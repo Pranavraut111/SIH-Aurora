@@ -20,8 +20,7 @@ import {
   LuMic,
 } from 'react-icons/lu';
 import './AiPanel.css';
-
-const API_URL = 'http://localhost:8080/api';
+import { apiGet, apiPost } from '../services/api';
 
 const SENSOR_NAMES = {
   gen_power: 'Generator Power',
@@ -73,22 +72,19 @@ export default function AiPanel({ activeStation = 'maitri' }) {
     let isMounted = true;
     const fetchPredictions = async () => {
       try {
-        const res = await fetch(`${API_URL}/predictions?stationId=${activeStation}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted) {
-            setPredictions(data.predictions || {});
-            setForecasterCount(data.forecasterCount || 24);
-          }
-        } else {
-          const res2 = await fetch(`http://localhost:8080/api/anomaly?stationId=${activeStation}`);
-          if (res2.ok && isMounted) {
-            const data2 = await res2.json();
-            setPredictions(data2.predictions || {});
-          }
+        const data = await apiGet(`/predictions?stationId=${activeStation}`);
+        if (isMounted) {
+          setPredictions(data?.predictions || {});
+          setForecasterCount(data?.forecasterCount || 24);
         }
-      } catch (e) {
-        /* silent fallback */
+      } catch (err) {
+        if (err?.kind !== 'http') return; // network/timeout: unchanged silent fallback
+        try {
+          const data2 = await apiGet(`/anomaly?stationId=${activeStation}`);
+          if (isMounted) setPredictions(data2?.predictions || {});
+        } catch (err2) {
+          console.warn('[AiPanel] anomaly fallback failed:', err2);
+        }
       }
     };
     fetchPredictions();
@@ -123,19 +119,13 @@ export default function AiPanel({ activeStation = 'maitri' }) {
       setLoadingExplain(true);
       
       try {
-        const res = await fetch(`${API_URL}/aurora-explain`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ station: activeStation, freeText: transcript, question: "free" }),
-        });
-        if (res.ok) {
-          const d = await res.json();
-          setExplanation(`**Query:** "${transcript}"\n\n${d.explanation}`);
-        } else {
-          setExplanation(`**Query:** "${transcript}"\n\nFallback: All physical sensor residuals are nominal. Cannot connect to LLM backend.`);
-        }
+        const d = await apiPost('/aurora-explain', { station: activeStation, freeText: transcript, question: "free" });
+        setExplanation(`**Query:** "${transcript}"\n\n${d?.explanation}`);
       } catch (e) {
-        setExplanation(`**Query:** "${transcript}"\n\nFallback: Physics models nominal.`);
+        // Fallback texts unchanged for now; removed in a later step (P0-5).
+        setExplanation(e?.kind === 'http'
+          ? `**Query:** "${transcript}"\n\nFallback: All physical sensor residuals are nominal. Cannot connect to LLM backend.`
+          : `**Query:** "${transcript}"\n\nFallback: Physics models nominal.`);
       } finally {
         setLoadingExplain(false);
       }
@@ -156,16 +146,11 @@ export default function AiPanel({ activeStation = 'maitri' }) {
   const handleRequestExplain = async () => {
     setLoadingExplain(true);
     try {
-      const res = await fetch(`${API_URL}/aurora-explain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ station: activeStation }),
-      });
-      if (res.ok) {
-        const d = await res.json();
-        setExplanation(d.explanation);
-      } else {
-        // Mock fallback grounded explanation if backend offline
+      const d = await apiPost('/aurora-explain', { station: activeStation });
+      setExplanation(d?.explanation);
+    } catch (e) {
+      if (e?.kind === 'http') {
+        // Mock fallback grounded explanation if backend offline (removed in P0-5)
         setExplanation(
           `## Aurora AI Diagnostic Briefing [${activeStation.toUpperCase()}]\n\n` +
           `• **Subsystem Integrity:** Nominal operation across 24 physics-informed LSTM neural forecasters.\n` +
@@ -173,13 +158,13 @@ export default function AiPanel({ activeStation = 'maitri' }) {
           `• **Generator & Power Grid:** Fuel flow rate and coolant jacket thermals exhibit zero anomalous drift.\n` +
           `• **Recommendation:** Maintain standard 30-day polar maintenance schedule.`
         );
+      } else {
+        setExplanation(
+          `## Aurora AI Diagnostic Briefing [${activeStation.toUpperCase()}]\n\n` +
+          `• **Subsystem Status:** All station sensor residuals are within nominal thermodynamic boundaries.\n` +
+          `• **Telemetry Analysis:** Generator, habitat trace heating, and water circuits operating with 99.4% confidence.`
+        );
       }
-    } catch (e) {
-      setExplanation(
-        `## Aurora AI Diagnostic Briefing [${activeStation.toUpperCase()}]\n\n` +
-        `• **Subsystem Status:** All station sensor residuals are within nominal thermodynamic boundaries.\n` +
-        `• **Telemetry Analysis:** Generator, habitat trace heating, and water circuits operating with 99.4% confidence.`
-      );
     } finally {
       setLoadingExplain(false);
     }

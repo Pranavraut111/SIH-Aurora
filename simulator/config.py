@@ -1,0 +1,164 @@
+"""
+Aurora — central configuration for the Python services (P1-1).
+
+Single source of truth: the ROOT `.env` file (repo root), loaded with
+python-dotenv. Real environment variables always win over `.env` values.
+`simulator/.env` is still read as a *fallback* for backward compatibility
+(deprecated — move its values to the root `.env`).
+
+This is the ONLY module in simulator/ that may read os.environ.
+All file paths are resolved relative to this file, never the cwd.
+"""
+
+import logging
+import os
+import re
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# ── Paths (module-relative) ───────────────────────────────────
+SIM_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SIM_DIR.parent
+
+_ROOT_ENV = REPO_ROOT / ".env"
+_LEGACY_ENV = SIM_DIR / ".env"
+
+# Root .env first; legacy simulator/.env only fills vars not already set.
+load_dotenv(_ROOT_ENV, override=False)
+_legacy_env_used = _LEGACY_ENV.exists()
+if _legacy_env_used:
+    load_dotenv(_LEGACY_ENV, override=False)
+
+
+def _get(name: str, default=None):
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip()
+
+
+def _get_int(name: str, default: int) -> int:
+    raw = _get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logging.getLogger("aurora.config").warning("%s=%r is not an integer; using %s", name, raw, default)
+        return default
+
+
+def _get_float(name: str, default: float) -> float:
+    raw = _get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logging.getLogger("aurora.config").warning("%s=%r is not a number; using %s", name, raw, default)
+        return default
+
+
+def _resolve_path(raw, default: Path) -> Path:
+    """Relative paths in env vars are resolved against simulator/, not the cwd."""
+    if raw is None:
+        return default
+    p = Path(raw).expanduser()
+    return p if p.is_absolute() else (SIM_DIR / p).resolve()
+
+
+# ── Logging ───────────────────────────────────────────────────
+LOG_LEVEL = (_get("LOG_LEVEL", "INFO") or "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+log = logging.getLogger("aurora.config")
+if _legacy_env_used:
+    log.warning(
+        "DEPRECATED: loaded fallback env file %s — move its variables to the root .env (%s)",
+        _LEGACY_ENV, _ROOT_ENV,
+    )
+
+# ── Network ───────────────────────────────────────────────────
+HOST = _get("HOST", "127.0.0.1")               # Docker sets 0.0.0.0
+API_PORT = _get_int("API_PORT", 8080)          # unified_backend.py
+SIM_PORT = _get_int("SIM_PORT", 8001)          # simulator.py (internal)
+BACKEND_URL = (_get("BACKEND_URL", f"http://localhost:{API_PORT}")).rstrip("/")
+SIMULATOR_URL = (_get("SIMULATOR_URL", f"http://localhost:{SIM_PORT}")).rstrip("/")
+
+DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
+
+
+def parse_allowed_origins(raw) -> list:
+    """Comma-separated origins. Wildcards are dropped: we never allow '*'."""
+    origins = [o.strip().rstrip("/") for o in (raw or DEFAULT_ALLOWED_ORIGINS).split(",") if o.strip()]
+    if "*" in origins:
+        log.warning("ALLOWED_ORIGINS contains '*'; wildcard origins are not allowed and were ignored")
+        origins = [o for o in origins if o != "*"]
+    if not origins:
+        log.warning("ALLOWED_ORIGINS is empty; falling back to %s", DEFAULT_ALLOWED_ORIGINS)
+        origins = [DEFAULT_ALLOWED_ORIGINS]
+    return origins
+
+
+ALLOWED_ORIGINS = parse_allowed_origins(_get("ALLOWED_ORIGINS"))
+
+# ── Data files (module-relative) ──────────────────────────────
+DATA_DIR = SIM_DIR / "data_store"
+DB_PATH = _resolve_path(_get("DB_PATH"), DATA_DIR / "antarctic_observations.db")
+WEATHER_CACHE_DIR = SIM_DIR / "weather_cache"
+BASELINE_DATA_PATH = SIM_DIR / "baseline_data.json"
+FORECAST_ARENA_REPORT_PATH = SIM_DIR / "forecast_arena_results.md"
+
+
+def forecast_cache_path(station_id: str) -> Path:
+    return WEATHER_CACHE_DIR / f"{station_id}_forecast.json"
+
+
+def anomaly_model_path(station_id: str) -> Path:
+    return SIM_DIR / f"anomaly_model_{station_id}.pkl"
+
+
+# ── Simulation ────────────────────────────────────────────────
+_CACHE_RE = re.compile(r"^(?P<station>[a-z]+)_(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})\.json$")
+
+
+def latest_cached_weather_date(stations=("maitri", "bharati")):
+    """Latest replay start date for which EVERY station has an ERA5 cache file,
+    so startup never needs the network. None if no common date exists."""
+    dates_by_station = {s: set() for s in stations}
+    if WEATHER_CACHE_DIR.is_dir():
+        for f in WEATHER_CACHE_DIR.iterdir():
+            m = _CACHE_RE.match(f.name)
+            if m and m.group("station") in dates_by_station:
+                dates_by_station[m.group("station")].add(m.group("start"))
+    common = set.intersection(*dates_by_station.values()) if dates_by_station else set()
+    return max(common) if common else None
+
+
+AURORA_MODE = _get("AURORA_MODE", "reanalysis")    # "reanalysis" | "simulation"
+AURORA_SPEED = _get_float("AURORA_SPEED", 120.0)
+_explicit_date = _get("AURORA_DATE")
+AURORA_DATE = _explicit_date or latest_cached_weather_date()
+AURORA_DATE_SOURCE = "env" if _explicit_date else ("weather_cache" if AURORA_DATE else "none")
+if AURORA_DATE is None:
+    log.warning("No common ERA5 cache found in %s; weather layer will try to download", WEATHER_CACHE_DIR)
+
+# ── LLM (Groq) — server-side only ─────────────────────────────
+GROQ_API_KEY = _get("GROQ_API_KEY", "")
+GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
+
+
+def summary() -> dict:
+    """Non-secret view of the effective config (for startup logs)."""
+    return {
+        "HOST": HOST, "API_PORT": API_PORT, "SIM_PORT": SIM_PORT,
+        "BACKEND_URL": BACKEND_URL, "SIMULATOR_URL": SIMULATOR_URL,
+        "ALLOWED_ORIGINS": ALLOWED_ORIGINS, "DB_PATH": str(DB_PATH),
+        "AURORA_MODE": AURORA_MODE, "AURORA_SPEED": AURORA_SPEED,
+        "AURORA_DATE": AURORA_DATE, "AURORA_DATE_SOURCE": AURORA_DATE_SOURCE,
+        "GROQ_API_KEY": "set" if GROQ_API_KEY else "not set", "GROQ_MODEL": GROQ_MODEL,
+        "LOG_LEVEL": LOG_LEVEL,
+    }

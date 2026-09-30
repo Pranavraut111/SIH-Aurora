@@ -25,7 +25,8 @@ from flask_cors import CORS
 # Import new Phase 1/2 modules
 from weather_data import WeatherDataLayer
 from physics_model import StationPhysicsModel
-from service_config import ALLOWED_ORIGINS, HOST
+import config as app_config  # aliased: 'config' is a loop variable in this module
+from config import ALLOWED_ORIGINS, HOST
 
 # Phase 3: Anomaly detection
 try:
@@ -55,16 +56,17 @@ try:
 except ImportError:
     CHRONOS_AVAILABLE = False
 
-# ── Backend endpoint ──────────────────────────────────────────
-BACKEND_URL = "http://localhost:8080/api/sensors/batch"
+# ── Backend endpoint & ports (from config.py / root .env) ─────
+BACKEND_URL = f"{app_config.BACKEND_URL}/api/sensors/batch"
 TICK_INTERVAL = 2.0  # seconds
-CONTROL_PORT = 8001
+CONTROL_PORT = app_config.SIM_PORT
 
-# ── Default mode and replay settings ─────────────────────────
-# Can be overridden via environment variables or API
-DEFAULT_MODE = os.environ.get("AURORA_MODE", "reanalysis")  # "reanalysis" or "simulation"
-DEFAULT_DATE = os.environ.get("AURORA_DATE", None)           # YYYY-MM-DD for replay
-DEFAULT_SPEED = float(os.environ.get("AURORA_SPEED", "120")) # 120x = 2min per simulated day
+# ── Default mode and replay settings (config.py) ─────────────
+# AURORA_DATE defaults to the latest date present in weather_cache/,
+# so startup does not need the network. /mode can override at runtime.
+DEFAULT_MODE = app_config.AURORA_MODE    # "reanalysis" or "simulation"
+DEFAULT_DATE = app_config.AURORA_DATE    # YYYY-MM-DD for replay
+DEFAULT_SPEED = app_config.AURORA_SPEED  # 120x = 2 simulated hours per real minute
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -332,7 +334,7 @@ class StationSimulator:
 
         # ── Phase 3: Load trained anomaly model ──────────────
         if ANOMALY_AVAILABLE:
-            model_path = os.path.join(os.path.dirname(__file__), f"anomaly_model_{station_id}.pkl")
+            model_path = str(app_config.anomaly_model_path(station_id))
             if os.path.exists(model_path):
                 try:
                     self.anomaly_detector = AnomalyDetector(station_id)
@@ -938,9 +940,9 @@ def health():
 #   /api/decision → validated JSON → Groq → operator explanation
 #
 # Key ONLY from the environment (never hardcoded, never sent to the browser).
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_API_KEY = app_config.GROQ_API_KEY
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_MODEL = app_config.GROQ_MODEL
 # Honest client identification (no spoofed User-Agent).
 GROQ_USER_AGENT = "Aurora-DigitalTwin/1.0 (+https://github.com/Saeesh-Vele/SIH2026A)"
 # Operator free text is untrusted: cap its length and only ever place it in
@@ -1181,7 +1183,7 @@ def main():
     print("  Aurora v3 — Physics-Based Digital Twin Simulator")
     print(f"  Mode: {DEFAULT_MODE.upper()}")
     if DEFAULT_DATE:
-        print(f"  Replay date: {DEFAULT_DATE}")
+        print(f"  Replay date: {DEFAULT_DATE} (source: {app_config.AURORA_DATE_SOURCE})")
     print(f"  Speed: {DEFAULT_SPEED}x ({DEFAULT_SPEED*2/3600:.1f} simulated hours per real minute)")
     print(f"  Stations: {', '.join(STATION_PROFILES.keys())}")
     print(f"  Backend: {BACKEND_URL}")
@@ -1194,7 +1196,7 @@ def main():
     # Start Flask control API
     control_thread = threading.Thread(target=run_control_server, daemon=True)
     control_thread.start()
-    print(f"  Control API running on http://localhost:{CONTROL_PORT}")
+    print(f"  Control API running on http://{HOST}:{CONTROL_PORT}")
     print()
 
     consecutive_errors = 0

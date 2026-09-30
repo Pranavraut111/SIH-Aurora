@@ -21,7 +21,6 @@ import time
 import math
 import requests
 from datetime import datetime, timedelta
-from pathlib import Path
 
 # ── Station Coordinates (documented, real) ────────────────────
 STATION_COORDS = {
@@ -29,7 +28,8 @@ STATION_COORDS = {
     "bharati": {"lat": -69.41, "lon": 76.19,  "alt_m": 50,  "name": "Bharati", "region": "Larsemann Hills"},
 }
 
-CACHE_DIR = Path(__file__).parent / "weather_cache"
+from config import WEATHER_CACHE_DIR as CACHE_DIR
+
 CACHE_DIR.mkdir(exist_ok=True)
 
 OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"

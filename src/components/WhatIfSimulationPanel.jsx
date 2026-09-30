@@ -6,6 +6,7 @@ import {
   LuBatteryCharging, LuRotateCcw, LuCheck, LuActivity, LuInfo
 } from 'react-icons/lu';
 import './WhatIfSimulationPanel.css';
+import { apiPost } from '../services/api';
 
 const SCENARIOS = [
   {
@@ -73,8 +74,6 @@ const SCENARIOS = [
   }
 ];
 
-const API_URL = 'http://localhost:8080/api';
-
 export default function WhatIfSimulationPanel({ activeStation = 'maitri', sensorData = {} }) {
   const [selectedScenario, setSelectedScenario] = useState(SCENARIOS[0]);
   const [intensity, setIntensity] = useState(1.0);
@@ -94,24 +93,15 @@ export default function WhatIfSimulationPanel({ activeStation = 'maitri', sensor
     setSimulating(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(`${API_URL}/simulation/whatif`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stationId: activeStation,
-          scenarioId: selectedScenario.id,
-          intensity: Number(intensity)
-        })
+      const d = await apiPost('/simulation/whatif', {
+        stationId: activeStation,
+        scenarioId: selectedScenario.id,
+        intensity: Number(intensity)
       });
-      if (res.ok) {
-        const d = await res.json();
-        setSimResult(d);
-      } else {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
+      setSimResult(d);
     } catch (e) {
       console.warn('Simulation API error:', e);
-      setErrorMsg(`Could not connect to Simulation Engine (${e.message}). Please verify that backend is running on port 8080.`);
+      setErrorMsg(`Could not connect to Simulation Engine (${e.message}). Please verify that the backend (VITE_API_URL) is running.`);
     } finally {
       setSimulating(false);
     }

@@ -6,8 +6,7 @@ import {
   LuShieldAlert, LuTerminal, LuRefreshCw
 } from 'react-icons/lu';
 import './RemoteControlPanel.css';
-
-const API_URL = 'http://localhost:8080/api';
+import { apiGet, apiPost } from '../services/api';
 
 export default function RemoteControlPanel({ activeStation = 'maitri', sensorData, onAcknowledgeAlert }) {
   const [commands, setCommands] = useState([]);
@@ -23,16 +22,10 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
 
   const fetchState = async () => {
     try {
-      const res1 = await fetch(`${API_URL}/remote/commands?stationId=${activeStation}`);
-      if (res1.ok) {
-        const d = await res1.json();
-        setCommands(d.commands || []);
-      }
-      const res2 = await fetch(`${API_URL}/alerts?stationId=${activeStation}`);
-      if (res2.ok) {
-        const d = await res2.json();
-        setActiveAlerts(d.activeAlerts || []);
-      }
+      const d1 = await apiGet(`/remote/commands?stationId=${activeStation}`);
+      setCommands(d1?.commands || []);
+      const d2 = await apiGet(`/alerts?stationId=${activeStation}`);
+      setActiveAlerts(d2?.activeAlerts || []);
     } catch (e) {
       console.warn('C&C fetch error:', e);
     }
@@ -47,22 +40,15 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
   const handleDispatch = async (subsystem, command, params = {}) => {
     setDispatching(true);
     try {
-      const res = await fetch(`${API_URL}/remote/dispatch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stationId: activeStation,
-          subsystem,
-          command,
-          parameters: params,
-          issuedBy: 'Remote Mission Control Commander'
-        })
+      const d = await apiPost('/remote/dispatch', {
+        stationId: activeStation,
+        subsystem,
+        command,
+        parameters: params,
+        issuedBy: 'Remote Mission Control Commander'
       });
-      if (res.ok) {
-        const d = await res.json();
-        setDispatchMsg(`Command dispatched: ${command} (${d.executionTimeMs}ms)`);
-        fetchState();
-      }
+      setDispatchMsg(`Command dispatched: ${command} (${d?.executionTimeMs}ms)`);
+      fetchState();
     } catch (err) {
       console.error(err);
     } finally {

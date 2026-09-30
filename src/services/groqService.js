@@ -7,7 +7,10 @@
      React → /api/aurora-explain → Decision JSON → Groq → Response
    ═══════════════════════════════════════════════════════════════ */
 
-const AI_SERVICE_URL = 'http://localhost:8001';
+import { SIM_URL } from '../config';
+
+// NOTE: dead code (no importers) — kept until P2 cleanup; see PROJECT_CONTEXT.md §11.
+const AI_SERVICE_URL = SIM_URL;
 
 /**
  * Ask Aurora to explain the current decision state.

@@ -32,6 +32,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 
 from physics_model import StationPhysicsModel
+from config import anomaly_model_path
 
 # ═══════════════════════════════════════════════════════
 #  Feature definitions
@@ -694,7 +695,7 @@ if __name__ == "__main__":
                 shown += 1
 
         # Save
-        model_path = os.path.join(os.path.dirname(__file__), f"anomaly_model_{station}.pkl")
+        model_path = str(anomaly_model_path(station))
         detector.save(model_path)
         print(f"\n  Model saved: {model_path}")
 

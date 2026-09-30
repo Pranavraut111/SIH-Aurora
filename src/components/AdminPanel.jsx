@@ -5,8 +5,8 @@ import {
   LuRefreshCw, LuShieldCheck, LuMapPin, LuCheck, LuServer
 } from 'react-icons/lu';
 import './AdminPanel.css';
+import { apiGet, apiPost } from '../services/api';
 
-const API_URL = 'http://localhost:8080/api';
 
 export default function AdminPanel({ activeStation = 'maitri' }) {
   const [config, setConfig] = useState(null);
@@ -19,15 +19,12 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch(`${API_URL}/admin/config`);
-      if (res.ok) {
-        const d = await res.json();
-        setConfig(d);
-        if (d.thresholds) {
-          setGenTempCrit(d.thresholds.generator_temp_critical);
-          setWindCrit(d.thresholds.wind_speed_critical_ms);
-          setFuelReorder(d.thresholds.fuel_reorder_days);
-        }
+      const d = await apiGet('/admin/config');
+      setConfig(d);
+      if (d?.thresholds) {
+        setGenTempCrit(d.thresholds.generator_temp_critical);
+        setWindCrit(d.thresholds.wind_speed_critical_ms);
+        setFuelReorder(d.thresholds.fuel_reorder_days);
       }
     } catch (e) {
       console.warn('Admin config error:', e);
@@ -47,11 +44,7 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
   const handleTriggerIngest = async (stationId) => {
     setIngesting(true);
     try {
-      await fetch(`${API_URL}/ncpor/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stationId })
-      });
+      await apiPost('/ncpor/ingest', { stationId });
       setSaveStatus(`Ingestion pipeline synced for ${stationId.toUpperCase()} from NCPOR.`);
     } catch (e) {
       setSaveStatus('Ingestion complete.');

@@ -20,9 +20,8 @@ import sqlite3
 import json
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "data_store" / "antarctic_observations.db"
+from config import DB_PATH
 
 def get_db_connection():
     return sqlite3.connect(str(DB_PATH))

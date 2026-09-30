@@ -1,7 +1,7 @@
 """
 Aurora & NCPOR Antarctic Digital Twin — Unified Mission Control Backend
 Runs FastAPI + Uvicorn + WebSockets on port 8080. CORS origins and bind
-host come from ALLOWED_ORIGINS / HOST (see service_config.py).
+host come from ALLOWED_ORIGINS / HOST (see config.py).
 Serves:
 - Real-time station telemetry WebSocket (/ws/station)
 - Official NCPOR/NPDC live & historical data APIs
@@ -41,7 +41,7 @@ from analytics_ai_engine import (
     query_observations
 )
 from physics_model import StationPhysicsModel
-from service_config import ALLOWED_ORIGINS, HOST
+from config import ALLOWED_ORIGINS, HOST, API_PORT
 
 app = FastAPI(title="Aurora Antarctic Digital Twin Platform", version="3.0.0")
 
@@ -968,4 +968,4 @@ def get_ai_explanation(req: ExplainRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=8080)
+    uvicorn.run(app, host=HOST, port=API_PORT)

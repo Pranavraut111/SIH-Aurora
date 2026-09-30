@@ -12,9 +12,8 @@ import {
   getActiveAlerts,
 } from '../data/stationData';
 import { analyzeStation } from '../services/decisionEngine';
-
-const WS_URL = 'ws://localhost:8080/ws/station';
-const API_URL = 'http://localhost:8080/api';
+import { WS_URL } from '../config';
+import { apiGet, apiPost } from '../services/api';
 const RECONNECT_DELAY = 3000;
 
 export function useStationData(activeStation = 'maitri') {
@@ -84,15 +83,12 @@ export function useStationData(activeStation = 'maitri') {
           if (isManuallyDisconnectedRef.current) return;
           const sid = activeStationRef.current;
           try {
-            const res = await fetch(`${API_URL}/ai/analysis?stationId=${sid}`);
-            if (res.ok) {
-              const ai = await res.json();
-              setStationData(prev => ({
-                ...prev,
-                aiHealth: ai.overallHealth || 'healthy',
-                dependencyAlerts: ai.dependencyAlerts || [],
-              }));
-            }
+            const ai = await apiGet(`/ai/analysis?stationId=${sid}`);
+            setStationData(prev => ({
+              ...prev,
+              aiHealth: ai?.overallHealth || 'healthy',
+              dependencyAlerts: ai?.dependencyAlerts || [],
+            }));
           } catch (e) { /* AI service optional */ }
         }, 4000);
         ws._aiPollId = aiPollId;
@@ -255,7 +251,7 @@ export function useStationData(activeStation = 'maitri') {
 
     // Inform backend if running
     try {
-      await fetch(`${API_URL}/connection/toggle?stationId=${activeStationRef.current}`, { method: 'POST' });
+      await apiPost(`/connection/toggle?stationId=${activeStationRef.current}`);
     } catch (e) {
       /* Handled gracefully */
     }
@@ -263,7 +259,7 @@ export function useStationData(activeStation = 'maitri') {
 
   const acknowledgeAlert = useCallback(async (alertId) => {
     try {
-      await fetch(`${API_URL}/alerts/${alertId}/acknowledge`, { method: 'POST' });
+      await apiPost(`/alerts/${alertId}/acknowledge`);
       setStationData(prev => ({
         ...prev,
         activeAlerts: prev.activeAlerts.filter(a => a.id !== alertId)

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import './TwinInspector.css';
+import { apiGet, simGet, simPost } from '../services/api';
 
 /**
  * Digital Twin Inspector — Shows the full causal chain breakdown
@@ -27,14 +28,12 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
     
     const fetchData = () => {
       setLoading(true);
-      fetch(`http://localhost:8080/api/twin-inspector?station=${activeStation}`)
-        .then(r => r.json())
+      apiGet(`/twin-inspector?station=${activeStation}`)
         .then(d => { setData(d); setLoading(false); })
         .catch(() => {
-          fetch(`http://localhost:8001/api/twin-inspector?station=${activeStation}`)
-            .then(r => r.json())
+          simGet(`/api/twin-inspector?station=${activeStation}`)
             .then(d => { setData(d); setLoading(false); })
-            .catch(() => setLoading(false));
+            .catch((err) => { console.warn('[TwinInspector] both sources failed:', err); setLoading(false); });
         });
     };
 
@@ -61,22 +60,13 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
   };
 
   const handleReplay = () => {
-    fetch('http://localhost:8001/mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'reanalysis', date: replayDate, speed: replaySpeed }),
-    })
-      .then(r => r.json())
+    simPost('/mode', { mode: 'reanalysis', date: replayDate, speed: replaySpeed })
       .then(() => setTab('chain'))
       .catch(console.error);
   };
 
   const handleSwitchToSim = () => {
-    fetch('http://localhost:8001/mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'simulation' }),
-    }).catch(console.error);
+    simPost('/mode', { mode: 'simulation' }).catch(console.error);
   };
 
   return (

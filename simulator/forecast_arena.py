@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from physics_model import StationPhysicsModel
 from weather_data import WeatherDataLayer
+from config import FORECAST_ARENA_REPORT_PATH
 
 # Try to import Chronos
 try:
@@ -442,7 +443,7 @@ if __name__ == "__main__":
 
     if all_results:
         report = generate_report(all_results)
-        report_path = os.path.join(os.path.dirname(__file__), "forecast_arena_results.md")
+        report_path = str(FORECAST_ARENA_REPORT_PATH)
         with open(report_path, "w") as f:
             f.write(report)
         print(f"\n{'='*60}")

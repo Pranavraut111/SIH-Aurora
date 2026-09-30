@@ -1,0 +1,5 @@
+# Aurora — OPTIONAL ML extras (Chronos-Bolt forecaster, ~190 MB model download on first use)
+# Install on top of requirements.txt:  pip install -r simulator/requirements-ml.txt
+# The simulator runs without these; /api/chronos-* then reports chronos_available=false.
+torch==2.14.0
+chronos-forecasting==2.3.2

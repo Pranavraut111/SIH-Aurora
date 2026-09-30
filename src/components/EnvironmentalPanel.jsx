@@ -9,8 +9,7 @@ import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import './EnvironmentalPanel.css';
-
-const API_URL = 'http://localhost:8080/api';
+import { apiGet, apiPost } from '../services/api';
 
 export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri' }) {
   const [plotType, setPlotType] = useState('timeseries'); // 'timeseries' | 'anomaly' | 'forecast' | 'correlation' | 'seasonal' | 'risk'
@@ -40,35 +39,16 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
     setLoading(true);
     try {
       if (plotType === 'timeseries') {
-        const res = await fetch(`${API_URL}/ncpor/observations?stationId=${activeStation}&parameter=${selectedParam}&limit=120`);
-        if (res.ok) {
-          const d = await res.json();
-          setObservations(d.records || []);
-        }
+        const d = await apiGet(`/ncpor/observations?stationId=${activeStation}&parameter=${selectedParam}&limit=120`);
+        setObservations(d?.records || []);
       } else if (plotType === 'anomaly') {
-        const res = await fetch(`${API_URL}/anomaly?stationId=${activeStation}&parameter=${selectedParam}&algorithm=${anomalyAlgo}`);
-        if (res.ok) {
-          const d = await res.json();
-          setAnomalyData(d);
-        }
+        setAnomalyData(await apiGet(`/anomaly?stationId=${activeStation}&parameter=${selectedParam}&algorithm=${anomalyAlgo}`));
       } else if (plotType === 'forecast') {
-        const res = await fetch(`${API_URL}/forecast?stationId=${activeStation}&parameter=${selectedParam}&model=${forecastModel}&horizon=${horizonHours}`);
-        if (res.ok) {
-          const d = await res.json();
-          setForecastData(d);
-        }
+        setForecastData(await apiGet(`/forecast?stationId=${activeStation}&parameter=${selectedParam}&model=${forecastModel}&horizon=${horizonHours}`));
       } else if (plotType === 'correlation') {
-        const res = await fetch(`${API_URL}/correlation?stationId=${activeStation}`);
-        if (res.ok) {
-          const d = await res.json();
-          setCorrelationData(d);
-        }
+        setCorrelationData(await apiGet(`/correlation?stationId=${activeStation}`));
       } else if (plotType === 'risk') {
-        const res = await fetch(`${API_URL}/risk?stationId=${activeStation}`);
-        if (res.ok) {
-          const d = await res.json();
-          setRiskData(d);
-        }
+        setRiskData(await apiGet(`/risk?stationId=${activeStation}`));
       }
     } catch (e) {
       console.warn('[NCPOR] Fetch error:', e);
@@ -85,20 +65,15 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
     setIngesting(true);
     setIngestStatus('Connecting to https://data.ncpor.res.in live AWS endpoint...');
     try {
-      const res = await fetch(`${API_URL}/ncpor/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stationId: activeStation })
-      });
-      if (res.ok) {
-        const d = await res.json();
-        setIngestStatus(`Ingested fresh observations for ${activeStation.toUpperCase()} from NCPOR AWS!`);
-        fetchData();
-      } else {
-        setIngestStatus('Ingestion complete (using cached verified telemetry).');
-      }
+      await apiPost('/ncpor/ingest', { stationId: activeStation });
+      setIngestStatus(`Ingested fresh observations for ${activeStation.toUpperCase()} from NCPOR AWS!`);
+      fetchData();
     } catch (err) {
-      setIngestStatus('Ingestion triggered.');
+      // Messages unchanged for now; fake-success wording is removed in a later step (P0-5).
+      console.warn('[NCPOR] Ingest request failed:', err);
+      setIngestStatus(err?.kind === 'http'
+        ? 'Ingestion complete (using cached verified telemetry).'
+        : 'Ingestion triggered.');
     } finally {
       setIngesting(false);
       setTimeout(() => setIngestStatus(null), 5000);

@@ -11,8 +11,8 @@ import {
   LuX, LuPlay, LuRotateCcw, LuTriangleAlert, LuSettings,
 } from 'react-icons/lu';
 import './DemoControl.css';
+import { simGet, simPost } from '../services/api';
 
-const SIMULATOR_URL = 'http://localhost:8001';
 
 const SCENARIO_ICONS = {
   generator_failure: LuZap,
@@ -41,13 +41,10 @@ export default function DemoControl() {
   useEffect(() => {
     const fetchScenarios = async () => {
       try {
-        const res = await fetch(`${SIMULATOR_URL}/scenarios`);
-        if (res.ok) {
-          const data = await res.json();
-          setScenarios(data.scenarios || {});
-          setActiveScenario(data.activeScenario);
-          setTickCount(data.tickCount);
-        }
+        const data = await simGet('/scenarios');
+        setScenarios(data?.scenarios || {});
+        setActiveScenario(data?.activeScenario);
+        setTickCount(data?.tickCount);
       } catch (e) { /* Simulator not running */ }
     };
     fetchScenarios();
@@ -58,11 +55,9 @@ export default function DemoControl() {
   const triggerScenario = useCallback(async (scenarioId) => {
     setInjecting(scenarioId);
     try {
-      const res = await fetch(`${SIMULATOR_URL}/inject/${scenarioId}`, { method: 'POST' });
-      if (res.ok) {
-        setActiveScenario(scenarioId);
-        setTimeout(() => setInjecting(null), 1000);
-      }
+      await simPost(`/inject/${scenarioId}`);
+      setActiveScenario(scenarioId);
+      setTimeout(() => setInjecting(null), 1000);
     } catch (e) {
       console.error('Failed to inject scenario:', e);
       setInjecting(null);
@@ -71,7 +66,7 @@ export default function DemoControl() {
 
   const resetAll = useCallback(async () => {
     try {
-      await fetch(`${SIMULATOR_URL}/reset`, { method: 'POST' });
+      await simPost('/reset');
       setActiveScenario(null);
     } catch (e) {
       console.error('Failed to reset:', e);

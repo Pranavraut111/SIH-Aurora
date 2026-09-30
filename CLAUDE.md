@@ -15,8 +15,20 @@
 - **Firebase is disabled** (P0-6). It had public read/write rules and duplicated
   persistence. It only initialises with `VITE_ENABLE_FIREBASE=true` + config, and
   `database.rules.json` denies everything. Don't re-enable without adding auth + scoped rules.
-- Services read `ALLOWED_ORIGINS` (never `*`) and `HOST` (default `127.0.0.1`) from env;
-  Python services use `simulator/service_config.py`.
+- Services read `ALLOWED_ORIGINS` (never `*`) and `HOST` (default `127.0.0.1`) from env.
+
+## Configuration
+- **The root `.env` is the single source of configuration.** Copy `.env.example` → `.env`;
+  it documents every variable. `simulator/.env` is a deprecated fallback only.
+- Python: import from `simulator/config.py` — the ONLY place in `simulator/` that reads
+  `os.environ` or contains `localhost`. All file paths resolve relative to that module.
+  (In `simulator.py` the module is imported as `app_config`, because `config` is a loop variable there.)
+- Frontend: import `API_URL` / `WS_URL` / `SIM_URL` from `src/config.js` (the only file in
+  `src/` with `localhost`), and make HTTP calls through `src/services/api.js`
+  (`apiGet/apiPost/simGet/simPost`), which throws `ApiError` and never returns fake data.
+- Python deps: `simulator/requirements.txt` (runtime, pinned), `simulator/requirements-ml.txt`
+  (optional Chronos), `requirements-dev.txt` (pytest/httpx/ruff). `scikit-learn` must stay
+  at 1.7.2 to match the pickled models.
 
 ## Honesty / provenance
 - Never present fabricated or mock data as real.

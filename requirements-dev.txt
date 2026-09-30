@@ -1,0 +1,5 @@
+# Aurora — developer tooling (tests + lint)
+# Install:  pip install -r simulator/requirements.txt -r requirements-dev.txt
+pytest==9.1.1
+httpx==0.28.1        # FastAPI TestClient
+ruff==0.16.9

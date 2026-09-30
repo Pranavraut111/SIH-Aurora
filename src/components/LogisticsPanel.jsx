@@ -6,8 +6,7 @@ import {
   LuCheck, LuShieldCheck, LuSparkles
 } from 'react-icons/lu';
 import './LogisticsPanel.css';
-
-const API_URL = 'http://localhost:8080/api';
+import { apiGet, apiPost } from '../services/api';
 
 const CATEGORY_ICONS = {
   Energy: LuFuel,
@@ -29,11 +28,8 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
   const fetchInventory = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/logistics?stationId=${activeStation}`);
-      if (res.ok) {
-        const d = await res.json();
-        setItems(d.items || []);
-      }
+      const d = await apiGet(`/logistics?stationId=${activeStation}`);
+      setItems(d?.items || []);
     } catch (e) {
       console.warn('Failed to fetch logistics:', e);
     } finally {
@@ -56,23 +52,16 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
     if (!editingItem) return;
 
     try {
-      const res = await fetch(`${API_URL}/logistics/update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stationId: activeStation,
-          itemId: editingItem.id,
-          current: Number(formCurrent),
-          dailyConsumption: Number(formDaily),
-          updatedBy: operatorName
-        })
+      await apiPost('/logistics/update', {
+        stationId: activeStation,
+        itemId: editingItem.id,
+        current: Number(formCurrent),
+        dailyConsumption: Number(formDaily),
+        updatedBy: operatorName
       });
-
-      if (res.ok) {
-        setSaveStatus(`Updated ${editingItem.name} successfully.`);
-        setEditingItem(null);
-        fetchInventory();
-      }
+      setSaveStatus(`Updated ${editingItem.name} successfully.`);
+      setEditingItem(null);
+      fetchInventory();
     } catch (err) {
       console.error(err);
     } finally {

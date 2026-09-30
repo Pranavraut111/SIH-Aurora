@@ -14,11 +14,10 @@ import time
 import sqlite3
 import os
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
-DATA_DIR = Path(__file__).parent / "data_store"
-DATA_DIR.mkdir(exist_ok=True)
-DB_PATH = DATA_DIR / "antarctic_observations.db"
+from config import DB_PATH, WEATHER_CACHE_DIR
+
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 STATION_INFO = {
     "maitri": {
@@ -281,7 +280,7 @@ def ingest_cached_historical_data():
     Ingests all existing cached Antarctic datasets (ERA5 reanalysis & seasonal observation files)
     into the unified database with full metadata and provenance.
     """
-    cache_dir = Path(__file__).parent / "weather_cache"
+    cache_dir = WEATHER_CACHE_DIR
     if not cache_dir.exists():
         return 0
 

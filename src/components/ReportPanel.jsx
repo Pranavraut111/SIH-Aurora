@@ -6,8 +6,18 @@ import {
   LuPackage, LuRadioTower, LuSparkles, LuCheck, LuInfo, LuMapPin
 } from 'react-icons/lu';
 import './ReportPanel.css';
+import { apiGet } from '../services/api';
 
-const API_URL = 'http://localhost:8080/api';
+// Preserves the previous `r.ok ? r.json() : null` semantics: HTTP errors → null,
+// network/timeout errors still reject (caught by the caller's try/catch).
+function nullOnHttpError(err) {
+  if (err?.kind === 'http') {
+    console.warn('[Report] data source returned', err.status, err.url);
+    return null;
+  }
+  throw err;
+}
+
 
 export default function ReportPanel({ activeStation = 'maitri', sensorData = {} }) {
   const [reportData, setReportData] = useState(null);
@@ -28,11 +38,12 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
     setLoading(true);
     try {
       const [weatherRes, riskRes, logisticsRes, alertsRes, configRes] = await Promise.all([
-        fetch(`${API_URL}/ncpor/live?stationId=${selectedStation}`).then(r => r.ok ? r.json() : null),
-        fetch(`${API_URL}/risk?stationId=${selectedStation}`).then(r => r.ok ? r.json() : null),
-        fetch(`${API_URL}/logistics?stationId=${selectedStation}`).then(r => r.ok ? r.json() : null),
-        fetch(`${API_URL}/alerts?stationId=${selectedStation}`).then(r => r.ok ? r.json() : null),
-        fetch(`${API_URL}/admin/config`).then(r => r.ok ? r.json() : null),
+        // Non-2xx → null (unchanged behaviour); network errors still reject.
+        apiGet(`/ncpor/live?stationId=${selectedStation}`).catch(nullOnHttpError),
+        apiGet(`/risk?stationId=${selectedStation}`).catch(nullOnHttpError),
+        apiGet(`/logistics?stationId=${selectedStation}`).catch(nullOnHttpError),
+        apiGet(`/alerts?stationId=${selectedStation}`).catch(nullOnHttpError),
+        apiGet('/admin/config').catch(nullOnHttpError),
       ]);
 
       setReportData({

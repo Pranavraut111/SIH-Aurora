@@ -23,6 +23,7 @@ import {
   LuMic,
 } from 'react-icons/lu';
 import './OverviewHUD.css';
+import { apiPost } from '../services/api';
 
 export default function OverviewHUD({
   sensorData,
@@ -86,21 +87,14 @@ export default function OverviewHUD({
     const promptContext = `CONVERSATION HISTORY:\n${historyText}\n\nSYSTEM INSTRUCTION:\n${systemInstruction}\n\nCURRENT USER VOICE QUERY: "${queryText}"`;
 
     try {
-      const res = await fetch(`http://localhost:8080/api/aurora-explain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ station: activeStation, freeText: promptContext, question: 'free' }),
-      });
-      if (res.ok) {
-        const d = await res.json();
-        const ans = d.explanation;
-        setChatHistory(prev => [...prev.slice(-4), { role: 'user', content: queryText }, { role: 'aurora', content: ans }]);
-        await speak(ans);
-      } else {
-        await speak("I'm sorry, I am unable to connect to the backend logic matrix.");
-      }
+      const d = await apiPost('/aurora-explain', { station: activeStation, freeText: promptContext, question: 'free' });
+      const ans = d?.explanation;
+      setChatHistory(prev => [...prev.slice(-4), { role: 'user', content: queryText }, { role: 'aurora', content: ans }]);
+      await speak(ans);
     } catch (e) {
-      await speak("Network anomaly detected. I cannot process that right now.");
+      await speak(e?.kind === 'http'
+        ? "I'm sorry, I am unable to connect to the backend logic matrix."
+        : "Network anomaly detected. I cannot process that right now.");
     }
   };
 

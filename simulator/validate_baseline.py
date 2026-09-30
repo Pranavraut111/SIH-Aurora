@@ -11,13 +11,14 @@ import sys, os, json, datetime
 sys.path.insert(0, os.path.dirname(__file__))
 
 from physics_model import StationPhysicsModel
+from config import WEATHER_CACHE_DIR, BASELINE_DATA_PATH
 
 TICK_DT = 120  # 2-minute simulated steps
 
 
 def load_cached_weather(station_id: str) -> list:
     """Load the cached ERA5 JSON and return hourly weather records."""
-    cache_dir = os.path.join(os.path.dirname(__file__), "weather_cache")
+    cache_dir = str(WEATHER_CACHE_DIR)
     # Find any cached file for this station
     for f in sorted(os.listdir(cache_dir)):
         if f.startswith(station_id) and f.endswith(".json"):
@@ -182,7 +183,7 @@ if __name__ == "__main__":
 
     # Save baseline data for anomaly training
     baseline = {"maitri": maitri_records, "bharati": bharati_records}
-    out_path = os.path.join(os.path.dirname(__file__), "baseline_data.json")
+    out_path = str(BASELINE_DATA_PATH)
     with open(out_path, "w") as f:
         json.dump(baseline, f)
     print(f"\n  Baseline saved: {out_path}")

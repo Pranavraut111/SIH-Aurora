@@ -24,7 +24,6 @@ Weather provenance:
 import os, json, time, copy, math, random
 import requests
 from datetime import datetime, timedelta
-from pathlib import Path
 
 # Local imports
 import sys
@@ -37,7 +36,8 @@ STATION_COORDS = {
     "bharati": {"lat": -69.41, "lon": 76.19},
 }
 
-CACHE_DIR = Path(__file__).parent / "weather_cache"
+from config import WEATHER_CACHE_DIR as CACHE_DIR, forecast_cache_path
+
 CACHE_DIR.mkdir(exist_ok=True)
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -68,7 +68,7 @@ class WeatherForecast:
 
     def fetch(self) -> bool:
         """Fetch forecast, cache for 1 hour."""
-        cache_file = CACHE_DIR / f"{self.station_id}_forecast.json"
+        cache_file = forecast_cache_path(self.station_id)
 
         # Cache valid for 1 hour
         if cache_file.exists():
