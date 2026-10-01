@@ -324,12 +324,25 @@ jobs:
             docker compose logs --tail=120
             exit 1
           }
-          curl -fsS http://localhost/api/health | tee /tmp/ml-health.json
+          # The backend probes the simulator's /api/chronos-status with a 1 s timeout and
+          # caches it for 5 s, so poll rather than asserting on the first read.
+          for i in $(seq 1 20); do
+            curl -fsS http://localhost/api/health -o /tmp/ml-health.json || true
+            if python3 -c "
+          import json,sys
+          h = json.load(open('/tmp/ml-health.json'))
+          sys.exit(0 if h.get('chronos', {}).get('available') is True else 1)
+          " 2>/dev/null; then
+              echo "chronos available"
+              python3 -c "import json; print('chronos:', json.load(open('/tmp/ml-health.json'))['chronos'])"
+              break
+            fi
+            sleep 6
+          done
           python3 -c "
           import json; h = json.load(open('/tmp/ml-health.json'))
           c = h['chronos']
           assert c['available'] is True, f'Chronos not available with WITH_ML=true: {c}'
-          print('chronos:', c)
           "
           # The simulator must not be OOM-killed under the 3g limit.
           test "$(docker inspect --format '{{.State.OOMKilled}}' "$(docker compose ps -q simulator)")" = "false"
