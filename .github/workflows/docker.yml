@@ -45,9 +45,19 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Build and start the stack
+      # Build and start are separate steps so a failure says which one broke, and
+      # --progress plain keeps the full build output in the log.
+      - name: Show the compose configuration
         run: |
-          docker compose up --build -d
+          docker compose version
+          docker compose config --quiet && echo "compose config is valid"
+
+      - name: Build the images
+        run: docker compose build --progress plain
+
+      - name: Start the stack
+        run: |
+          docker compose up -d --no-build
           docker compose ps
 
       - name: Wait for all three containers to be healthy

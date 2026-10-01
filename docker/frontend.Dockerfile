@@ -15,9 +15,9 @@ FROM node:${NODE_VERSION}-alpine AS builder
 # src/config.js resolves ws:// or wss:// from window.location for a relative WS path.
 ARG VITE_API_URL=/api
 ARG VITE_WS_URL=/ws/station
+# Firebase stays off (P0-6): the SDK is a dynamic import, so it is not even bundled.
 ENV VITE_API_URL=${VITE_API_URL} \
     VITE_WS_URL=${VITE_WS_URL} \
-    # Firebase stays off (P0-6): the SDK is a dynamic import, so it is not even bundled.
     VITE_ENABLE_FIREBASE=false
 
 WORKDIR /build
@@ -47,9 +47,10 @@ COPY docker/nginx.conf /etc/nginx/templates/default.conf.template
 
 # The upstream host:port is templated so compose (or another orchestrator) can move the
 # backend without rebuilding. nginx substitutes these into the conf at container start.
+# NGINX_ENVSUBST_FILTER keeps the substitution to BACKEND_*, so nginx's own
+# $variables in the template are never touched.
 ENV BACKEND_HOST=backend \
     BACKEND_PORT=8080 \
-    # Only BACKEND_* is substituted, so nginx's own $variables are never touched.
     NGINX_ENVSUBST_FILTER=^BACKEND_
 
 # nginx:alpine runs as root only to bind :80 and then drops to the `nginx` user for

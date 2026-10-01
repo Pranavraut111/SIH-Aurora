@@ -54,15 +54,15 @@ RUN apt-get update \
 
 COPY --from=builder /opt/venv /opt/venv
 
+# HOST=0.0.0.0: containers must listen on all interfaces; compose decides what is
+# published. DB_PATH lives on the aurora-data volume, which the entrypoint seeds on
+# first start. HF_HOME is writable and shared, so the Chronos cache survives restarts.
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    # Containers must listen on all interfaces; the port is published (or not) by compose.
     HOST=0.0.0.0 \
     API_PORT=8080 \
-    # Persisted by the aurora-data volume; the entrypoint seeds it on first start.
     DB_PATH=/data/antarctic_observations.db \
-    # Writable, and shared with the simulator so the model cache survives restarts.
     HF_HOME=/hf-cache
 
 WORKDIR /app
