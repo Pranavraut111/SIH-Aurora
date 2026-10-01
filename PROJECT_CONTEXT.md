@@ -1,14 +1,131 @@
 # PROJECT_CONTEXT.md — Aurora: Antarctic Station Digital Twin (SIH PS 26060)
 
-> Audit date: **2026-09-30** · Auditor: automated senior-architect review (read-only; no source files changed)
-> Repo root: `SIH2/` (not a git repository: no history, branches, or CI)
+> Original audit: **2026-09-30** · **Re-audited 2026-10-01** (§0 below is the re-audit; §1–§19 are the
+> original audit, kept as the historical record with per-item status added)
 >
 > **Evidence labels used throughout**
 > - **VERIFIED**: I ran it or directly observed it (command output, HTTP response, DB query).
 > - **INFERRED**: a reasonable conclusion from reading the code, but not executed.
 > - **UNKNOWN**: can't be determined from the repo.
 >
-> All runtime verification was done on a **copy** of the repo in a scratch directory, with a fresh Python 3.13 venv, Maven 3.9.9 and JDK 24. The repo's own DB, caches and models were not touched.
+> The original audit ran against a copy of the repo in a scratch directory. The re-audit ran against
+> the working tree at commit `a745600` plus the two CI workflows, which execute the full stack in
+> Docker on Linux.
+
+---
+
+## 0. Re-audit — 2026-10-01
+
+### 0.1 What changed since the original audit
+
+The repo is now **a git repository with CI**: 56 commits on `main`, two GitHub Actions workflows
+(`ci.yml`, `docker.yml`), both green on `a745600` (runs 36887442144 and 36887442292, VERIFIED).
+The original header's "not a git repository: no history, branches, or CI" no longer holds.
+
+| Claim in the original audit | Status now |
+|---|---|
+| Two backends fight over :8080 | **Resolved.** `simulator/unified_backend.py` is the only backend; the Java backend and ai-service moved to `legacy/` and are not started by any script (`start.sh:10` says so explicitly, VERIFIED) |
+| No tests | **Resolved.** 337 pytest (+16 `slow`, +7 `ml` deselected by default), 82 Vitest, 4 Playwright e2e; `simulator/` coverage **72%** (VERIFIED) |
+| No CI | **Resolved.** ruff + pytest + coverage, lint + Vitest + build on Node 20 and 22, e2e, gitleaks; a second workflow builds multi-arch images and runs the whole compose stack including an offline phase |
+| `ruff check` / lint state | `ruff check .` exits **0**; oxlint reports **27 warnings, 0 errors** (VERIFIED) |
+| No deployment story | **Resolved.** `docker compose up -d` runs the three services; multi-arch images on GHCR; HTTPS and offline overlays; `docs/DEPLOYMENT.md` |
+| Bundle ~1.6 MB single chunk | **440 kB entry chunk** (gzip 133 kB); three.js (535 kB) and recharts are lazy (VERIFIED) |
+| No write protection | **Partially resolved.** `ADMIN_TOKEN` gates all 11 state-changing routes; nginx rate limits; `APP_ENV=production` refuses an unsafe config. Still **no user accounts or roles** |
+
+### 0.2 Broken items (§13) — all 24 re-checked
+
+Every B-item from §13 is addressed. Evidence is the file or test that now covers it.
+
+| # | Status | Evidence |
+|---|---|---|
+| B1 | Fixed | `legacy/{backend,ai-service}`; `start.sh` starts backend → simulator → Vite only |
+| B2 | Fixed | `POST /api/sensors/batch` exists; `test_api_contract.py::test_sensor_batch_ingest_is_accepted_and_grows_history` |
+| B3 | Fixed | `ConvergenceTracker` (≥200 ticks + drift gate) and a retrained v3 model; `anomaly_model_card.md` documents the v2→v3 change; `test_anomaly_model.py` |
+| B4 | Fixed | `simulator/requirements.txt` pins flask, numpy, pandas, scikit-learn 1.7.2, statsmodels, `uvicorn[standard]` |
+| B5 | Fixed | No committed venvs; `.venv/` gitignored; `make setup` creates it |
+| B6 | N/A | Java is legacy and not built |
+| B7 | Fixed | `migrations/001_fix_era5_wind_units.py`; all conversion via `units.py`; `test_wind_units.py`, `test_migration_001.py` |
+| B8 | Fixed | `analytics_ai_engine.py` selects newest rows (`ORDER BY timestamp DESC`) then reverses; `test_analytics_window.py` |
+| B9 | Fixed | fuel read from `readings["generator"]["gen_fuel_rate"]`; `test_chronos_inputs.py` |
+| B10 | Fixed | per-station inference guard; `test_chronos_inputs.py` |
+| B11 | Fixed | `chronos_available()` reports the real import state; `test_chronos.py` |
+| B12 | Fixed | `ExplainRequest` has `question` and `freeText`; `test_backend_ai.py` |
+| B13 | Fixed | one schema via `twin_inspector.build_twin_inspector`, used by both services |
+| B14 | Fixed | `DemoControl({ activeStation })` |
+| B15–B17 | N/A | Java / ai-service are legacy |
+| B18 | Fixed | `require_station` → 404; `test_api_contract.py` covers 8 GET routes and the POST routes |
+| B19 | Fixed | replay wraps (`_last_loop`); `test_replay_and_forecast.py` |
+| B20 | Fixed | single browser-demo subscription (`simUnsubRef`); `useStationData.test.js` |
+| B21 | Fixed | `dataSourceRef` mirror; reconnect backoff tested |
+| B22 | Fixed | `alert_engine.py` reads `alert_threshold_overrides`; `test_alerts.py` |
+| B23 | Fixed | `sim_hours_per_real_minute()` used in the banner |
+| B24 | Fixed | README rewritten against the code; `docs/DEPLOYMENT.md` added |
+
+### 0.3 Action plan (§17) — current state
+
+**P0 — all seven done.** P0-6's "rotate the Groq key" is the maintainer's action and is UNKNOWN
+from the repo; everything else is in code (Firebase disabled, CORS restricted to `ALLOWED_ORIGINS`,
+no `*`).
+
+**P1 — 8 of 11 done, 3 partial, none untouched:**
+
+| # | Status | Note |
+|---|---|---|
+| P1-1, P1-2, P1-4, P1-6, P1-9, P1-10, P1-11 | Done | config modules, `station_config.json` as the single source, newest-window analytics, logistics audit log, simulated command lifecycle, Chronos fixes, B13–B23 |
+| P1-3 | **Partial** | Still SQLite (durable, WAL, migrations) with a 300-point in-memory buffer and history endpoints for alerts and logistics. No PostgreSQL/TimescaleDB, no retention policy, and per-sensor telemetry history is still in memory only |
+| P1-5 | **Not done** | `/api/simulation/whatif` still returns narrative strings plus four deltas (25 `impacts.append` calls). It does not run `StationPhysicsModel` forward over N hours, so there are no trajectories or fuel-autonomy projections |
+| P1-7 | **Partial** | The energy panel reads the physics `power_breakdown`, but there is still no battery/renewables model |
+| P1-8 | **Partial** | `ADMIN_TOKEN` gates every write and the UI has an operator login, but there is no identity, no roles and no per-station scoping. The operator name on an audit record is self-declared |
+
+**P2 — 4 of 8 done:**
+
+| # | Status | Note |
+|---|---|---|
+| P2-1, P2-2, P2-5, P2-8 | Done | test suites + CI; Docker/compose with health checks and pinned bases; bundle code-split and fonts self-hosted; README rewritten and `git init` done |
+| P2-3 | Not done | No edge store-and-forward prototype |
+| P2-4 | Not done | One shared 3D scene for both stations; three.js still 0.128 |
+| P2-6 | **Partial** | The WebSocket filters by station (`station_filter`), but five panels still poll through `usePolling` |
+| P2-7 | **Partial** | Ingestion works and records its dataset honestly; there is no scheduled job, no parser unit test, and the Maitri 48 m/s wind reading is still unexplained (UNKNOWN) |
+
+**P3 — none started** (as expected; they are post-hackathon scope).
+
+### 0.4 Issues found during the re-audit period
+
+These were found by the Docker/CI work and are fixed, but are recorded because each would
+have reached a live deployment:
+
+| Issue | Impact | Fix |
+|---|---|---|
+| nginx resolved the backend once at config load | Any recreate of the backend container (e.g. editing `.env` then `docker compose up -d`) left nginx proxying a dead IP; the whole site 502s | Per-request resolution via a variable `proxy_pass` + `resolver` |
+| `add_header` is not inherited into a location that sets its own | CSP, nosniff, Referrer-Policy, X-Frame-Options, COOP and Permissions-Policy were absent on **every** response | Headers moved to an included snippet, included in each location; CI asserts them on HTML, a hashed asset and the proxied API |
+| `limit_req` without `nodelay` on the explain route | Excess callers were queued 12–24 s instead of refused, and a sequential caller could never be refused at all | `nodelay`, so the 4th rapid request gets the friendly 429 |
+| `AnimatePresence mode="wait"` + lazy panels | Selecting a module whose chunk was not cached left the **previous** panel on screen | Dropped `mode="wait"`; Suspense wraps AnimatePresence. The module tour now asserts each panel's own heading |
+| `X-Admin-Token` missing from CORS `allow_headers` | The operator login would work in Docker (same-origin) but fail in local dev (Vite:5173 → backend:8080 preflight) | Header allowed; preflight covered by a pytest |
+| The frontend image did not copy `simulator/station_config.json` | `npm run build` failed in Docker — `src/data/stationConfig.js` imports it at build time | File copied at the matching relative depth |
+
+### 0.5 Remaining honest gaps
+
+Unchanged from the original audit and still true:
+
+1. **No real hardware telemetry.** Everything equipment-related is model-derived from ERA5.
+2. **Ground truth is the model itself.** Forecast validation measures self-consistency, not skill.
+3. **Building parameters are estimated**, not from NCPOR drawings (each carries a `basis` field).
+4. **Anomaly detection is validated against synthetic degradations only.**
+5. **No user accounts or roles** — one shared `ADMIN_TOKEN`; see P1-8.
+6. **What-if is narrative, not simulated** — see P1-5.
+7. **Thresholds are prototypes**, not certified limits.
+8. The forecast arena's physics leg is still a noise approximation, so that comparison is not fair.
+
+### 0.6 How to verify this re-audit
+
+```bash
+make test          # 337 pytest + 82 Vitest
+make lint          # ruff (exits 0) + oxlint (27 warnings, 0 errors)
+make coverage      # simulator/ at 72%
+make e2e           # 4 Playwright specs
+docker compose up -d && curl -s localhost/api/health | python3 -m json.tool
+gh run list --limit 5
+```
 
 ---
 
@@ -309,6 +426,10 @@ No env vars exist for backend URLs, ports, DB, or the Firebase config; all are h
 
 ### 6.3 Commands and results
 
+> **Re-audit note (2026-10-01):** superseded. Use `make setup`, `make dev`, `make test`,
+> `make lint`, `make e2e`, or `docker compose up -d`. The script-style test files referenced
+> below were converted to pytest and deleted; see §0.6.
+
 | # | Command | Result |
 |---|---|---|
 | 1 | `npm install` | Already installed; `npm ls` OK (VERIFIED) |
@@ -414,6 +535,9 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 
 ### 9.1 Java Spring Boot (`backend/`, :8080): `StationController.java`
 
+> **Re-audit note:** moved to `legacy/backend/`. Not started, not extended, and no longer
+> binds :8080.
+
 | Method | Path | Purpose | Request → Response | Status |
 |---|---|---|---|---|
 | POST | `/api/sensors/batch` | Ingest simulator tick; store, threshold, broadcast | `SensorBatchDTO {stationId, timestamp, readings{bld{sensor{value,unit}}}, eventTimeline[], activePatterns[]}` → `StationStateDTO` | ✅ VERIFIED |
@@ -475,6 +599,8 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 | POST | `/api/explain`, `/api/explain/incident` | Legacy Groq wrappers | ⚠️ only called by dead `groqService.js` |
 
 ### 9.4 AI service (`ai-service/ai_service.py`, :8000)
+
+> **Re-audit note:** moved to `legacy/ai-service/`. Not started.
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
@@ -552,6 +678,11 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 
 ## 12. What Is Working (VERIFIED)
 
+> **Re-audit note (2026-10-01):** still broadly true, with two corrections — the Java
+> backend and ai-service are now in `legacy/` and not started, and `test_full_suite.py` was
+> replaced by `simulator/tests/test_api_contract.py` (37 shape-asserting tests). Current
+> figures are in §0.
+
 - Frontend **builds** (`vite build` OK) and lints with **0 errors**.
 - **Physics model** passes **35/35** invariant tests; forward run is self-consistent (gen-temp MAE < 1 °C with perfect weather).
 - **Chronos-Bolt** loads and produces valid p10 ≤ p50 ≤ p90 quantiles; **39/40** tests pass.
@@ -566,6 +697,9 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 ---
 
 ## 13. What Is Broken or Not Working
+
+> **Re-audit note (2026-10-01):** every item below is **fixed or N/A**. This table is kept as
+> the historical record; see §0.2 for the per-item status and the test that now covers it.
 
 | # | Problem | Reproduction | Evidence / suspected cause |
 |---|---|---|---|
@@ -711,6 +845,9 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 
 ## 17. Prioritized Action Plan
 
+> **Re-audit note (2026-10-01):** P0 complete; P1 8/11 done and 3 partial; P2 4/8 done.
+> See §0.3 for the current state of each item.
+
 Effort: **S** ≤ 1 day · **M** 2-4 days · **L** ≥ 1 week (one developer).
 
 ### P0: Blockers (make the demo coherent and honest)
@@ -763,6 +900,11 @@ Effort: **S** ≤ 1 day · **M** 2-4 days · **L** ≥ 1 week (one developer).
 ---
 
 ## 18. Open Questions / Assumptions
+
+> **Re-audit note (2026-10-01):** Q1 is **answered** — `unified_backend.py` is the single
+> backend (P0-1). Q6 is **answered** — Firebase is disabled and its SDK is no longer even
+> bundled. Q7 is **partly answered** — writes require `ADMIN_TOKEN`, but roles remain
+> undefined. Q2–Q5 and Q8–Q10 are still open and still need NCPOR input.
 
 1. **Which backend is canonical, Java or Python unified?** The README describes Java + Flask; the UI was built against the unified FastAPI. The team must decide (P0-1).
 2. Will NCPOR provide **real equipment logs** (generator run-hours, fuel receipts, HVAC data)? Everything equipment-related is model-derived until then.
