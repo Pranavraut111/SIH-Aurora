@@ -4,7 +4,7 @@
    Normal operation runs organically — these are for reproducing
    specific scenarios during judging.
    ═══════════════════════════════════════════════════════════════ */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LuZap, LuFlame, LuSnowflake, LuDroplets, LuWind,
@@ -12,6 +12,7 @@ import {
 } from 'react-icons/lu';
 import './DemoControl.css';
 import { apiGet, apiPost } from '../services/api';
+import { usePolling } from '../hooks/usePolling';
 
 
 const SCENARIO_ICONS = {
@@ -42,26 +43,19 @@ export default function DemoControl({ activeStation = 'maitri' }) {
     : e?.kind === 'http' ? `Backend error (HTTP ${e.status})` : 'Backend unreachable');
 
   // Fetch available scenarios for the ACTIVE station (B14), via the backend proxy
-  useEffect(() => {
-    let alive = true;
-    const fetchScenarios = async () => {
-      try {
-        const data = await apiGet(`/sim/scenarios?stationId=${activeStation}`);
-        if (!alive) return;
-        setScenarios(data?.scenarios || {});
-        setActiveScenario(data?.activeScenario ?? null);
-        setTickCount(data?.tickCount ?? 0);
-        setError(null);
-      } catch (e) {
-        if (!alive) return;
-        if (e?.status !== 503) console.warn('[DemoControl] scenarios unavailable', e);
-        setError(describe(e));
-      }
-    };
-    fetchScenarios();
-    const interval = setInterval(fetchScenarios, 3000);
-    return () => { alive = false; clearInterval(interval); };
-  }, [activeStation]);
+  usePolling(async (isActive) => {
+    try {
+      const data = await apiGet(`/sim/scenarios?stationId=${activeStation}`);
+      if (!isActive()) return;
+      setScenarios(data?.scenarios || {});
+      setActiveScenario(data?.activeScenario ?? null);
+      setTickCount(data?.tickCount ?? 0);
+      setError(null);
+    } catch (e) {
+      if (isActive()) setError(describe(e));
+      throw e;                         // let usePolling back off (logged there)
+    }
+  }, 3000, { key: activeStation });
 
   const triggerScenario = useCallback(async (scenarioId) => {
     setInjecting(scenarioId);

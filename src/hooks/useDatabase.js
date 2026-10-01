@@ -3,16 +3,13 @@
    Bridges the live data stream to Firebase Realtime Database persistence.
    - Auto-persists sensor snapshots (throttled to 30s)
    - Auto-logs alerts (deduped by building+severity)
-   - Provides query functions for historical data
+   (Firebase is disabled by default — see CLAUDE.md; these calls are no-ops then.)
    ═══════════════════════════════════════════════════════════════ */
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   writeSensorSnapshot,
   logAlert,
   clearAlertCache,
-  getRecentSnapshots,
-  getRecentAlerts,
-  writeDailySummary,
 } from '../services/databaseService';
 
 export function useDatabase(stationId, stationData, enabled = true) {
@@ -50,25 +47,4 @@ export function useDatabase(stationId, stationData, enabled = true) {
 
     prevAlerts.current = { ...currentAlerts };
   }, [stationId, stationData?.alerts, enabled]);
-
-  const fetchHistory = useCallback(
-    (count = 50) => getRecentSnapshots(stationId, count),
-    [stationId],
-  );
-
-  const fetchAlertHistory = useCallback(
-    (count = 30) => getRecentAlerts(stationId, count),
-    [stationId],
-  );
-
-  const saveDailySummary = useCallback(
-    (summary) => writeDailySummary(stationId, summary),
-    [stationId],
-  );
-
-  return {
-    fetchHistory,
-    fetchAlertHistory,
-    saveDailySummary,
-  };
 }

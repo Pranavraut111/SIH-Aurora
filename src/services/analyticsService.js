@@ -38,36 +38,12 @@ export function trackBuildingView(buildingId, stationId) {
 }
 
 /**
- * Track alert interaction (click, acknowledge).
- */
-export function trackAlertAction(action, buildingId, severity) {
-  try {
-    logEvent('alert_action', {
-      action, // 'click' | 'acknowledge'
-      building: buildingId,
-      severity,
-    });
-  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
-}
-
-/**
  * Track connection toggle events.
  */
 export function trackConnectionToggle(newState) {
   try {
     logEvent('connection_toggle', {
       state: newState ? 'connected' : 'disconnected',
-    });
-  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
-}
-
-/**
- * Track demo scenario activation.
- */
-export function trackDemoScenario(scenarioId) {
-  try {
-    logEvent('demo_scenario', {
-      scenario: scenarioId,
     });
   } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }

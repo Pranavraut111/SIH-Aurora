@@ -3,8 +3,9 @@
    Structured mission control views with live telemetry,
    equipment status matrix, interactive dependency graph, and microgrid flow.
    ═══════════════════════════════════════════════════════════════ */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { apiGet } from '../services/api';
+import { usePolling } from '../hooks/usePolling';
 import { motion } from 'framer-motion';
 import { BUILDINGS } from '../data/stationData';
 import DependencyGraph from './DependencyGraph';
@@ -16,10 +17,6 @@ import {
   LuGauge,
   LuFlame,
   LuActivity,
-  LuShieldCheck,
-  LuShieldAlert,
-  LuTriangleAlert,
-  LuCircleCheck,
   LuDroplets,
   LuRadio,
   LuFuel,
@@ -30,7 +27,6 @@ import './ModulePanels.css';
 // ── Building Status Card ──────────────────────────────────────
 function BuildingCard({ buildingId, building, sensors = {}, alertLevel = 'normal', onClick }) {
   const sensorEntries = Object.entries(sensors);
-  const isNormal = alertLevel === 'normal';
 
   const getIcon = (id) => {
     switch (id) {
@@ -193,29 +189,27 @@ export function EnergyPanel({ sensorData = {}, activeStation = 'maitri', telemet
   const [twin, setTwin] = useState({ station: null, data: null, error: null });
   // Fuel stock comes from the operator-entered logistics ledger, not a constant
   const [fuel, setFuel] = useState({ station: null, item: null, error: null });
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const data = await apiGet(`/twin-inspector?stationId=${activeStation}`);
-        if (alive) setTwin({ station: activeStation, data, error: null });
-      } catch (err) {
-        console.error('[EnergyPanel] twin-inspector failed', err);
-        if (alive) setTwin({ station: activeStation, data: null, error: err });
-      }
-      try {
-        const inv = await apiGet(`/logistics?stationId=${activeStation}`);
-        const item = (inv.items || []).find((i) => i.id === `${activeStation}-fuel`) || null;
-        if (alive) setFuel({ station: activeStation, item, error: null });
-      } catch (err) {
-        console.error('[EnergyPanel] logistics failed', err);
-        if (alive) setFuel({ station: activeStation, item: null, error: err });
-      }
-    };
-    load();
-    const id = setInterval(load, 5000);
-    return () => { alive = false; clearInterval(id); };
-  }, [activeStation]);
+  usePolling(async (isActive) => {
+    let failed = null;
+    try {
+      const data = await apiGet(`/twin-inspector?stationId=${activeStation}`);
+      if (isActive()) setTwin({ station: activeStation, data, error: null });
+    } catch (err) {
+      console.error('[EnergyPanel] twin-inspector failed', err);
+      if (isActive()) setTwin({ station: activeStation, data: null, error: err });
+      failed = err;
+    }
+    try {
+      const inv = await apiGet(`/logistics?stationId=${activeStation}`);
+      const item = (inv.items || []).find((i) => i.id === `${activeStation}-fuel`) || null;
+      if (isActive()) setFuel({ station: activeStation, item, error: null });
+    } catch (err) {
+      console.error('[EnergyPanel] logistics failed', err);
+      if (isActive()) setFuel({ station: activeStation, item: null, error: err });
+      failed = failed || err;
+    }
+    if (failed) throw failed;           // let usePolling back off
+  }, 5000, { key: activeStation });
 
   const twinData = twin.station === activeStation ? twin.data : null;
   const twinError = twin.station === activeStation ? twin.error : null;

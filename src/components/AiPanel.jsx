@@ -8,9 +8,10 @@
      /api/aurora-explain  Groq LLM, or an offline summary when unavailable
    No mock fallbacks: when a source is down the panel says so.
    ═══════════════════════════════════════════════════════════════ */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { LuSparkles, LuMic, LuActivity, LuShieldCheck, LuTriangleAlert, LuListTree, LuTrendingUp } from 'react-icons/lu';
 import { apiGet, apiPost } from '../services/api';
+import { usePolling } from '../hooks/usePolling';
 import './AiPanel.css';
 
 const POLL_MS = 3000;
@@ -36,20 +37,15 @@ function useAiSource(path, activeStation) {
   // Results are tagged with their station so a station switch shows "Loading…"
   // instead of the previous station's data (no reset-in-effect needed).
   const [state, setState] = useState({ station: null, data: null, error: null });
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const data = await apiGet(`${path}?stationId=${activeStation}`, { timeoutMs: 5000 });
-        if (alive) setState({ station: activeStation, data, error: null });
-      } catch (err) {
-        if (alive) setState({ station: activeStation, data: null, error: err });
-      }
-    };
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => { alive = false; clearInterval(id); };
-  }, [path, activeStation]);
+  usePolling(async (isActive) => {
+    try {
+      const data = await apiGet(`${path}?stationId=${activeStation}`, { timeoutMs: 5000 });
+      if (isActive()) setState({ station: activeStation, data, error: null });
+    } catch (err) {
+      if (isActive()) setState({ station: activeStation, data: null, error: err });
+      throw err;                       // let usePolling back off
+    }
+  }, POLL_MS, { key: `${path}|${activeStation}` });
   return state.station === activeStation
     ? { ...state, loading: false }
     : { data: null, error: null, loading: true };

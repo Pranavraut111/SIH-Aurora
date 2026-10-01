@@ -549,7 +549,7 @@ function StationScene3D({
     });
 
     // Subsystem alert pulses
-    Object.entries(buildingMeshes.current).forEach(([id, { body, indicator, bodyMat }]) => {
+    Object.entries(buildingMeshes.current).forEach(([id, { indicator, bodyMat }]) => {
       const alertLevel = alertStates[id] || 'normal';
       const alertColor = ALERT_COLORS[alertLevel];
 

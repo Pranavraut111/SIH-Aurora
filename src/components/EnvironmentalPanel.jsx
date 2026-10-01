@@ -1,9 +1,17 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
-  LuThermometerSnowflake, LuWind, LuGauge, LuDroplets,
-  LuSparkles, LuRefreshCw, LuTriangleAlert, LuTrendingUp,
-  LuCalendar, LuLayoutGrid, LuActivity, LuFlame, LuCloudSnow, LuShieldAlert
+  LuThermometerSnowflake,
+  LuWind,
+  LuGauge,
+  LuDroplets,
+  LuSparkles,
+  LuRefreshCw,
+  LuTriangleAlert,
+  LuTrendingUp,
+  LuLayoutGrid,
+  LuActivity,
+  LuShieldAlert,
 } from 'react-icons/lu';
 import {
   ComposedChart, LineChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -18,7 +26,6 @@ export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'm
   const [anomalyAlgo, setAnomalyAlgo] = useState('isf'); // 'isf' | 'svm'
   const [forecastModel, setForecastModel] = useState('arima'); // 'arima' | 'trend'
   const [horizonHours, setHorizonHours] = useState(24);
-  const [season, setSeason] = useState('wi'); // 'su' | 'fa' | 'wi' | 'sp'
   
   const [observations, setObservations] = useState([]);
   const [anomalyData, setAnomalyData] = useState(null);
@@ -356,7 +363,6 @@ export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'm
     const vals = observations.map(o => o.value);
     const minVal = Math.min(...vals);
     const maxVal = Math.max(...vals);
-    const range = maxVal - minVal || 1;
     const unit = observations[0]?.unit || '';
 
     // Format data for recharts
@@ -408,11 +414,6 @@ export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'm
     }
 
     const items = anomalyData.results;
-    const vals = items.map(o => o.value);
-    const minVal = Math.min(...vals);
-    const maxVal = Math.max(...vals);
-    const range = maxVal - minVal || 1;
-    const unit = items[0]?.unit || '';
 
     // Format data for recharts
     const chartData = items.map((o) => ({
@@ -473,11 +474,6 @@ export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'm
 
     const hist = forecastData.historical || [];
     const fc = forecastData.forecast || [];
-    const allVals = [...hist.map(h => h.actual), ...fc.map(f => f.predicted), ...fc.map(f => f.upper_bound), ...fc.map(f => f.lower_bound)];
-    const minVal = Math.min(...allVals);
-    const maxVal = Math.max(...allVals);
-    const range = maxVal - minVal || 1;
-    const totalPoints = hist.length + fc.length;
     const unit = forecastData.forecast[0]?.unit || '';
 
     // Format data for recharts

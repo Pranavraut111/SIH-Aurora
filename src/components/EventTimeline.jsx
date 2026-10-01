@@ -5,8 +5,14 @@
    ═══════════════════════════════════════════════════════════════ */
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LuClock, LuTriangleAlert, LuCircleCheck, LuCloud, LuZap,
-  LuBrain, LuRadio, LuChevronDown, LuChevronUp, LuX,
+  LuClock,
+  LuTriangleAlert,
+  LuCircleCheck,
+  LuCloud,
+  LuZap,
+  LuBrain,
+  LuRadio,
+  LuX,
 } from 'react-icons/lu';
 import './EventTimeline.css';
 

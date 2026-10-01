@@ -1,8 +1,13 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
-  LuSettings, LuUsers, LuDatabase, LuSlidersHorizontal,
-  LuRefreshCw, LuMapPin, LuCheck, LuServer
+  LuSettings,
+  LuUsers,
+  LuDatabase,
+  LuSlidersHorizontal,
+  LuRefreshCw,
+  LuCheck,
+  LuServer,
 } from 'react-icons/lu';
 import './AdminPanel.css';
 import { apiGet, apiPost, describeApiError } from '../services/api';

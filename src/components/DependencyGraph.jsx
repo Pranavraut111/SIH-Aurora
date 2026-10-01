@@ -3,7 +3,7 @@
    Interactive node diagram showing building dependencies
    and cascading failure analysis
    ═══════════════════════════════════════════════════════════════ */
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LuLayers, LuShieldCheck, LuTriangleAlert, LuZap } from 'react-icons/lu';
 import './DependencyGraph.css';
@@ -46,7 +46,7 @@ export default function DependencyGraph({
   const { nodes: GRAPH_NODES, edges: GRAPH_EDGES } = graphFor(stationId);
   const svgRef = useRef(null);
   const [hoveredNode, setHoveredNode] = useState(null);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 420 });
+  const [dimensions] = useState({ width: 800, height: 420 });
 
   // Find edges affected by cascades
   const cascadeEdges = new Set();

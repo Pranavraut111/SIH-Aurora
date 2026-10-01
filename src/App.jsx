@@ -40,7 +40,7 @@ export default function App() {
   const [activeStation, setActiveStation] = useState('maitri');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [selectedBuilding, setSelectedBuilding] = useState(null);
-  const [hoveredBuilding, setHoveredBuilding] = useState(null);
+  const [, setHoveredBuilding] = useState(null);   // hover is tracked by the scene; no consumer yet
   const [showTimeline, setShowTimeline] = useState(false);
   const [showTwinInspector, setShowTwinInspector] = useState(false);
   const [showConnectionDrawer, setShowConnectionDrawer] = useState(false);

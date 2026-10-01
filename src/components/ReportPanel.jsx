@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  LuFileText, LuPrinter, LuDownload, LuShare2, LuCalendar,
-  LuShieldCheck, LuTriangleAlert, LuThermometerSnowflake, LuZap,
-  LuPackage, LuRadioTower, LuSparkles, LuCheck, LuInfo, LuMapPin
+  LuFileText,
+  LuPrinter,
+  LuDownload,
+  LuShare2,
+  LuShieldCheck,
+  LuSparkles,
 } from 'react-icons/lu';
 import './ReportPanel.css';
 import { apiGet } from '../services/api';
@@ -31,9 +34,8 @@ const v = (x, unit = '') => (x == null ? '—' : `${x}${unit}`);
 export default function ReportPanel({ activeStation = 'maitri', sensorData = {} }) {
   const [reportData, setReportData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedPeriod, setSelectedPeriod] = useState('24h');
+  const [selectedPeriod] = useState('24h');
   const [selectedStation, setSelectedStation] = useState(activeStation);
-  const [includeSim, setIncludeSim] = useState(true);
   const [printTimestamp, setPrintTimestamp] = useState(new Date().toUTCString());
   const reportRef = useRef(null);
 

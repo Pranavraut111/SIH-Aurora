@@ -1,13 +1,13 @@
 """
 Aurora v3 — Sensor Simulator (Dual Station, Physics-Based)
-Feeds BOTH Maitri and Bharati to the Spring Boot backend.
+Feeds BOTH Maitri and Bharati to the unified FastAPI backend (POST /api/sensors/batch).
 
 MODES:
   🟢 REANALYSIS — ERA5 weather → physics thermal/power model → model-derived equipment state
   🔵 SIMULATION — Random walk with organic weather patterns (Developer/Test Mode)
 
 Each station runs independently. Manual injection works in both modes.
-Flask control API on port 8001.
+Internal Flask control API on SIM_PORT (default 8001); the browser never calls it.
 """
 
 import time

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import './TwinInspector.css';
 import { apiGet, apiPost } from '../services/api';
+import { usePolling } from '../hooks/usePolling';
 
 /**
  * Digital Twin Inspector — Shows the full causal chain breakdown
@@ -25,25 +26,22 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
   const [error, setError] = useState(null);
   const [modeMsg, setModeMsg] = useState(null);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    
-    const fetchData = () => {
-      setLoading(true);
-      apiGet(`/twin-inspector?stationId=${activeStation}`)
-        .then(d => { setData(d); setError(null); setLoading(false); })
-        .catch((err) => {
-          console.error('[TwinInspector] backend request failed:', err);
-          setError(err?.kind === 'http' ? `Backend error (HTTP ${err.status})` : 'Backend unreachable');
-          setData(null);
-          setLoading(false);
-        });
-    };
-
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
-    return () => clearInterval(interval);
-  }, [activeStation, isOpen]);
+  usePolling(async (isActive) => {
+    setLoading(true);
+    try {
+      const d = await apiGet(`/twin-inspector?stationId=${activeStation}`);
+      if (isActive()) { setData(d); setError(null); }
+    } catch (err) {
+      console.error('[TwinInspector] backend request failed:', err);
+      if (isActive()) {
+        setError(err?.kind === 'http' ? `Backend error (HTTP ${err.status})` : 'Backend unreachable');
+        setData(null);
+      }
+      throw err;                       // let usePolling back off
+    } finally {
+      if (isActive()) setLoading(false);
+    }
+  }, 3000, { key: activeStation, enabled: Boolean(isOpen) });
 
   if (!isOpen) return null;
 

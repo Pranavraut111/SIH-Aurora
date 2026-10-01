@@ -1,16 +1,21 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from 'react';
+import { motion } from 'framer-motion';
 import {
-  LuRadioTower, LuZap, LuFlame, LuDroplets, LuSatellite,
-  LuCircleCheck, LuOctagonAlert, LuClock, LuSend,
-  LuShieldAlert, LuTerminal, LuRefreshCw
+  LuRadioTower,
+  LuZap,
+  LuFlame,
+  LuDroplets,
+  LuSatellite,
+  LuCircleCheck,
+  LuTerminal,
 } from 'react-icons/lu';
 import './RemoteControlPanel.css';
 import { apiGet, apiPost, describeApiError } from '../services/api';
 import { getOperatorName } from '../services/operator';
+import { usePolling } from '../hooks/usePolling';
 import { stationMeta } from '../data/stationConfig';
 
-export default function RemoteControlPanel({ activeStation = 'maitri', sensorData, onAcknowledgeAlert }) {
+export default function RemoteControlPanel({ activeStation = 'maitri', onAcknowledgeAlert }) {
   const [commands, setCommands] = useState([]);
   const [activeAlerts, setActiveAlerts] = useState([]);
   const [dispatching, setDispatching] = useState(false);
@@ -24,22 +29,17 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
   const [snowMeltState, setSnowMeltState] = useState(true);
   const [antennaGainState, setAntennaGainState] = useState('AUTO');
 
-  const fetchState = async () => {
-    try {
-      const d1 = await apiGet(`/remote/commands?stationId=${activeStation}`);
-      setCommands(d1?.commands || []);
-      const d2 = await apiGet(`/alerts?stationId=${activeStation}`);
-      setActiveAlerts(d2?.activeAlerts || []);
-    } catch (e) {
-      console.error('C&C fetch error:', e);
-    }
+  // Throws on failure so usePolling can back off; one-off callers log instead.
+  const loadState = async (isActive = () => true) => {
+    const d1 = await apiGet(`/remote/commands?stationId=${activeStation}`);
+    const d2 = await apiGet(`/alerts?stationId=${activeStation}`);
+    if (!isActive()) return;
+    setCommands(d1?.commands || []);
+    setActiveAlerts(d2?.activeAlerts || []);
   };
+  const fetchState = () => loadState().catch((e) => console.error('C&C refresh failed:', e));
 
-  useEffect(() => {
-    fetchState();
-    const interval = setInterval(fetchState, 3000);
-    return () => clearInterval(interval);
-  }, [activeStation]);
+  usePolling(loadState, 3000, { key: activeStation });
 
   const handleDispatch = async (subsystem, command, params = {}) => {
     setDispatching(true);

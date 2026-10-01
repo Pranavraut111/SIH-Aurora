@@ -1,9 +1,20 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from 'react';
+import { motion } from 'framer-motion';
 import {
-  LuPlay, LuSlidersHorizontal, LuTriangleAlert, LuZap, LuFlame,
-  LuDroplets, LuRadioTower, LuShieldAlert, LuArrowRight, LuSparkles,
-  LuBatteryCharging, LuRotateCcw, LuCheck, LuActivity, LuInfo
+  LuPlay,
+  LuSlidersHorizontal,
+  LuTriangleAlert,
+  LuZap,
+  LuFlame,
+  LuDroplets,
+  LuRadioTower,
+  LuShieldAlert,
+  LuArrowRight,
+  LuSparkles,
+  LuBatteryCharging,
+  LuRotateCcw,
+  LuActivity,
+  LuInfo,
 } from 'react-icons/lu';
 import './WhatIfSimulationPanel.css';
 import { apiPost, describeApiError } from '../services/api';

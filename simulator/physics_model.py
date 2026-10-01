@@ -528,14 +528,3 @@ class StationPhysicsModel:
         }
 
         return readings
-
-    def apply_injection(self, key: str, target: float):
-        """Apply a manual injection override (for testing/demo)."""
-        parts = key.split(".")
-        if len(parts) == 2:
-            bld, sensor = parts
-            if sensor == "gen_temp":
-                self.gen_temp_C = target
-            elif sensor == "gen_rpm":
-                self.gen_rpm = target
-            # For other sensors, the injection is handled by the main simulator loop

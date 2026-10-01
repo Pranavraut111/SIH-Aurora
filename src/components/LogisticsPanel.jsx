@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LuPackage, LuPlus, LuPencil, LuTriangleAlert,
-  LuFuel, LuUtensils, LuBriefcaseMedical, LuWrench, LuDroplets,
-  LuCheck, LuShieldCheck, LuSparkles
+  LuPackage,
+  LuPencil,
+  LuFuel,
+  LuUtensils,
+  LuBriefcaseMedical,
+  LuWrench,
+  LuDroplets,
+  LuCheck,
+  LuShieldCheck,
 } from 'react-icons/lu';
 import './LogisticsPanel.css';
 import { apiGet, apiPost, describeApiError } from '../services/api';
@@ -18,9 +24,8 @@ const CATEGORY_ICONS = {
   Water: LuDroplets,
 };
 
-export default function LogisticsPanel({ activeStation = 'maitri', sensorData }) {
+export default function LogisticsPanel({ activeStation = 'maitri' }) {
   const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [formCurrent, setFormCurrent] = useState('');
   const [formDaily, setFormDaily] = useState('');
@@ -30,7 +35,6 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
   const [history, setHistory] = useState([]);
 
   const fetchInventory = async () => {
-    setLoading(true);
     try {
       const [d, h] = await Promise.all([
         apiGet(`/logistics?stationId=${activeStation}`),
@@ -42,8 +46,6 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
     } catch (e) {
       console.error('Failed to fetch logistics:', e);
       setLoadError(describeApiError(e));
-    } finally {
-      setLoading(false);
     }
   };
 

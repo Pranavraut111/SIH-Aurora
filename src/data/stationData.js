@@ -106,33 +106,6 @@ function makeSensorDefs(profile, stationId) {
   ]));
 }
 
-// ── Inventory data (logistics module) ───────────────────────
-export const INVENTORY_PROFILES = {
-  maitri: [
-    { id: 'inv_diesel', name: 'Diesel Fuel', category: 'fuel', current: 142000, max: 200000, unit: 'L', reorderAt: 40000, dailyUse: 680 },
-    { id: 'inv_kerosene', name: 'Kerosene', category: 'fuel', current: 18500, max: 30000, unit: 'L', reorderAt: 5000, dailyUse: 120 },
-    { id: 'inv_food_rations', name: 'Food Rations', category: 'food', current: 186, max: 365, unit: 'days', reorderAt: 30, dailyUse: 1 },
-    { id: 'inv_fresh_water', name: 'Fresh Water Reserve', category: 'water', current: 45000, max: 60000, unit: 'L', reorderAt: 15000, dailyUse: 800 },
-    { id: 'inv_gen_filters', name: 'Generator Filters', category: 'spares', current: 24, max: 50, unit: 'pcs', reorderAt: 8, dailyUse: 0.07 },
-    { id: 'inv_heating_parts', name: 'Heating System Spares', category: 'spares', current: 18, max: 40, unit: 'kits', reorderAt: 6, dailyUse: 0.03 },
-    { id: 'inv_medical', name: 'Medical Supplies', category: 'medical', current: 92, max: 100, unit: '%', reorderAt: 30, dailyUse: 0.1 },
-    { id: 'inv_batteries', name: 'Battery Packs', category: 'spares', current: 56, max: 100, unit: 'pcs', reorderAt: 15, dailyUse: 0.15 },
-  ],
-  bharati: [
-    { id: 'inv_diesel', name: 'Diesel Fuel', category: 'fuel', current: 154000, max: 220000, unit: 'L', reorderAt: 45000, dailyUse: 750 },
-    { id: 'inv_kerosene', name: 'Kerosene', category: 'fuel', current: 22000, max: 35000, unit: 'L', reorderAt: 6000, dailyUse: 140 },
-    { id: 'inv_food_rations', name: 'Food Rations', category: 'food', current: 210, max: 365, unit: 'days', reorderAt: 30, dailyUse: 1 },
-    { id: 'inv_fresh_water', name: 'Fresh Water Reserve', category: 'water', current: 52000, max: 70000, unit: 'L', reorderAt: 18000, dailyUse: 950 },
-    { id: 'inv_gen_filters', name: 'Generator Filters', category: 'spares', current: 32, max: 60, unit: 'pcs', reorderAt: 10, dailyUse: 0.08 },
-    { id: 'inv_heating_parts', name: 'Heating System Spares', category: 'spares', current: 22, max: 50, unit: 'kits', reorderAt: 8, dailyUse: 0.04 },
-    { id: 'inv_medical', name: 'Medical Supplies', category: 'medical', current: 96, max: 100, unit: '%', reorderAt: 30, dailyUse: 0.08 },
-    { id: 'inv_batteries', name: 'Battery Packs', category: 'spares', current: 68, max: 120, unit: 'pcs', reorderAt: 20, dailyUse: 0.12 },
-  ],
-};
-
-// Legacy export for backward compat
-export const INVENTORY = INVENTORY_PROFILES.maitri;
-
 // ═══════════════════════════════════════════════════════════════
 // ORGANIC EVENT ENGINE
 // Instead of button-driven events, weather & equipment naturally
@@ -193,7 +166,7 @@ const WEATHER_PATTERNS = {
 // Cascade rules: when an upstream system degrades, downstream feels it
 const CASCADE_RULES = {
   // If outside temp drops, heating demand increases → more power needed
-  env_temp: (val, state) => {
+  env_temp: (val, _state) => {
     if (val < -40) {
       return [
         { building: 'heating', sensor: 'heat_a_flow', nudge: 0.3 },
@@ -212,7 +185,7 @@ const CASCADE_RULES = {
     return [];
   },
   // If generator power drops, everything downstream degrades
-  gen_power: (val, state) => {
+  gen_power: (val, _state) => {
     if (val < 80) {
       return [
         { building: 'heating', sensor: 'heat_a_temp', nudge: -0.5 },
@@ -224,7 +197,7 @@ const CASCADE_RULES = {
     return [];
   },
   // If generator temp rises, RPM and power degrade
-  gen_temp: (val, state) => {
+  gen_temp: (val, _state) => {
     if (val > 95) {
       return [
         { building: 'generator', sensor: 'gen_rpm', nudge: -5 },
@@ -234,7 +207,7 @@ const CASCADE_RULES = {
     return [];
   },
   // If wind speed is extreme, comms degrade
-  env_wind: (val, state) => {
+  env_wind: (val, _state) => {
     if (val > 80) {
       return [
         { building: 'commsMast', sensor: 'comms_signal', nudge: -1.5 },
@@ -431,12 +404,6 @@ function addEvent(state, type, message, data = {}) {
   }
 }
 
-// Expose for decision engine to add events
-export function addStationEvent(stationId, type, message, data) {
-  const state = stationStates[stationId];
-  if (state) addEvent(state, type, message, data);
-}
-
 // ── Global tick (ticks all stations) ────────────────────────
 function tickAll() {
   Object.values(stationStates).forEach(tickStation);
@@ -485,19 +452,6 @@ export function stopSimulation() {
   }
 }
 
-// ── Force an anomaly on a specific building (for dev/test mode) ──
-export function injectAnomaly(buildingId, sensorId, targetValue, stationId = 'maitri') {
-  const state = stationStates[stationId];
-  if (state?.sensorValues[buildingId]?.[sensorId] !== undefined) {
-    state.sensorValues[buildingId][sensorId] = targetValue;
-    addEvent(state, 'injection', `[DEV] Injected ${sensorId} = ${targetValue} on ${buildingId}`, {
-      building: buildingId,
-      sensor: sensorId,
-      value: targetValue,
-    });
-  }
-}
-
 // ── Active alerts list (for alert panel) ────────────────────
 export function getActiveAlerts(snapshot) {
   const alerts = [];
@@ -541,12 +495,3 @@ export function getActiveAlerts(snapshot) {
   return alerts;
 }
 
-// ── Get event timeline for a station ────────────────────────
-export function getEventTimeline(stationId = 'maitri') {
-  return stationStates[stationId]?.eventTimeline || [];
-}
-
-// ── Get inventory for a station ─────────────────────────────
-export function getInventory(stationId = 'maitri') {
-  return INVENTORY_PROFILES[stationId] || INVENTORY_PROFILES.maitri;
-}

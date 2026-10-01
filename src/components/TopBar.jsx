@@ -10,7 +10,6 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { STATION_IDS, stationMeta, formatCoords } from '../data/stationConfig';
 import {
-  LuSnowflake,
   LuChevronDown,
   LuMapPin,
   LuTriangleAlert,

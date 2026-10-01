@@ -10,12 +10,7 @@ import {
   ref,
   push,
   set,
-  get,
-  query,
-  orderByChild,
-  limitToLast,
-  onValue,
-  serverTimestamp
+  serverTimestamp,
 } from 'firebase/database';
 
 // ── Sensor Snapshot Writes ───────────────────────────────────
@@ -74,90 +69,3 @@ export function clearAlertCache(stationId, buildingId) {
   alertCache.delete(`${stationId}:${buildingId}`);
 }
 
-// ── Query Historical Data ───────────────────────────────────
-export async function getRecentSnapshots(stationId, count = 50) {
-  if (!firebaseEnabled) return [];
-  try {
-    const snapshotsRef = query(
-      ref(db, `sensor_snapshots/${stationId}`),
-      orderByChild('clientTimestamp'),
-      limitToLast(Math.min(count, 100))
-    );
-    const snap = await get(snapshotsRef);
-    if (!snap.exists()) return [];
-    
-    const data = [];
-    snap.forEach((child) => {
-      data.push({ id: child.key, ...child.val() });
-    });
-    return data.reverse();
-  } catch (err) {
-    console.warn('[Firebase] Failed to fetch snapshots:', err.message);
-    return [];
-  }
-}
-
-export async function getRecentAlerts(stationId, count = 30) {
-  if (!firebaseEnabled) return [];
-  try {
-    const alertsRef = query(
-      ref(db, `alert_history/${stationId}`),
-      orderByChild('clientTimestamp'),
-      limitToLast(count)
-    );
-    const snap = await get(alertsRef);
-    if (!snap.exists()) return [];
-    
-    const data = [];
-    snap.forEach((child) => {
-      data.push({ id: child.key, ...child.val() });
-    });
-    return data.reverse();
-  } catch (err) {
-    console.warn('[Firebase] Failed to fetch alerts:', err.message);
-    return [];
-  }
-}
-
-// ── Station Config ──────────────────────────────────────────
-export async function saveStationConfig(stationId, config) {
-  if (!firebaseEnabled) return false;
-  try {
-    const configRef = ref(db, `station_config/${stationId}`);
-    await set(configRef, { ...config, updatedAt: serverTimestamp() });
-    return true;
-  } catch (err) {
-    console.warn('[Firebase] Failed to save config:', err.message);
-    return false;
-  }
-}
-
-export function subscribeStationConfig(stationId, callback) {
-  if (!firebaseEnabled) return () => {};
-  const configRef = ref(db, `station_config/${stationId}`);
-  const unsubscribe = onValue(configRef, (snap) => {
-    if (snap.exists()) callback(snap.val());
-  }, (err) => {
-    console.warn('[Firebase] Config subscription error:', err.message);
-  });
-  
-  return unsubscribe; // Call to detach listener
-}
-
-// ── Daily Summary ───────────────────────────────────────────
-export async function writeDailySummary(stationId, summary) {
-  if (!firebaseEnabled) return false;
-  const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-  try {
-    const summaryRef = ref(db, `daily_summaries/${stationId}/${dateStr}`);
-    await set(summaryRef, {
-      ...summary,
-      date: dateStr,
-      createdAt: serverTimestamp(),
-    });
-    return true;
-  } catch (err) {
-    console.warn('[Firebase] Failed to write daily summary:', err.message);
-    return false;
-  }
-}

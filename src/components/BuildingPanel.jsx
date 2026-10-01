@@ -3,7 +3,7 @@
    Glassmorphic slide-in panel with live sensor data,
    animated numbers, sparkline charts, and alert status.
    ═══════════════════════════════════════════════════════════════ */
-import { useRef, useEffect, useState, useMemo } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BUILDINGS, getSensorDefs, DEPENDENCY_GRAPH } from '../data/stationData';
 import { Icon } from './IconMap';
