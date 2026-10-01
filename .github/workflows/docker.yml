@@ -244,6 +244,101 @@ jobs:
             echo "HEAD ${path}: 200, no body"
           done
 
+      # ── Abuse protection ──────────────────────────────────────
+      - name: Writes need the operator token
+        run: |
+          # The compose stack runs without ADMIN_TOKEN by default, so set one and restart
+          # just the two Python services to prove the 401 path end to end.
+          echo "ADMIN_TOKEN=ci-operator-token" >> .env
+          docker compose up -d --force-recreate backend simulator
+          for i in $(seq 1 40); do
+            curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
+            sleep 3
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            "http://localhost/api/sim/reset?stationId=maitri")
+          test "$code" = "401" || { echo "::error::unauthenticated write returned $code, expected 401"; exit 1; }
+          echo "no token  -> 401"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'X-Admin-Token: wrong' "http://localhost/api/sim/reset?stationId=maitri")
+          test "$code" = "401" || { echo "::error::wrong token returned $code, expected 401"; exit 1; }
+          echo "wrong token -> 401"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'X-Admin-Token: ci-operator-token' "http://localhost/api/sim/reset?stationId=maitri")
+          test "$code" = "200" || { echo "::error::valid token returned $code, expected 200"; exit 1; }
+          echo "right token -> 200"
+          # Reading stays public throughout, and the simulator still feeds telemetry
+          # (it authenticates with the same token from .env).
+          curl -fsS http://localhost/api/station/maitri/state >/dev/null
+          sleep 6
+          curl -fsS http://localhost/api/health | python3 -c "
+          import json,sys
+          h=json.load(sys.stdin)
+          assert h['simulator']['reachable'], h
+          print('simulator still ingesting with the token set')
+          "
+
+      - name: Oversized request bodies are rejected by nginx
+        run: |
+          python3 -c "print('x' * 200000)" > /tmp/big.json
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' --data-binary @/tmp/big.json \
+            http://localhost/api/aurora-explain)
+          test "$code" = "413" || { echo "::error::a 200 kB body returned $code, expected 413"; exit 1; }
+          echo "200 kB body -> 413"
+
+      - name: Rate limits return 429 when hammered
+        run: |
+          # The explain zone is 5r/m with burst 2, so a short burst must start 429ing.
+          got429=0
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+              -H 'Content-Type: application/json' \
+              -d '{"stationId":"maitri","question":"status"}' \
+              http://localhost/api/aurora-explain)
+            echo "explain #$i -> $code"
+            [ "$code" = "429" ] && got429=1 && break
+          done
+          test "$got429" = "1" || { echo "::error::the explain route never returned 429"; exit 1; }
+          # ...and the 429 carries the friendly JSON message, not nginx's HTML page.
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"stationId":"maitri","question":"status"}' \
+            http://localhost/api/aurora-explain | tee /tmp/429.json
+          grep -q 'please slow down' /tmp/429.json \
+            || { echo "::error::429 body is not the friendly JSON message"; exit 1; }
+
+          # The general /api zone is 10r/s with burst 20: 200 rapid requests must trip it.
+          got429=0
+          for i in $(seq 1 200); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost/api/station/maitri/state")
+            if [ "$code" = "429" ]; then got429=1; echo "general zone 429 after $i requests"; break; fi
+          done
+          test "$got429" = "1" || { echo "::error::the general /api zone never returned 429"; exit 1; }
+
+      - name: Normal dashboard use is not rate limited
+        run: |
+          # Let the buckets drain, then do what a page load does: a dozen reads.
+          sleep 5
+          for path in /api/health /api/stations /api/config/stations \
+                      /api/station/maitri/state /api/alerts?stationId=maitri \
+                      /api/risk?stationId=maitri /api/logistics?stationId=maitri \
+                      /api/admin/config?stationId=maitri /api/ncpor/live?stationId=maitri \
+                      /api/connection/status?stationId=maitri /api/remote/commands \
+                      /api/alerts/history?stationId=maitri; do
+            curl -fsS -o /dev/null "http://localhost${path}" \
+              || { echo "::error::a normal page-load request was rejected: $path"; exit 1; }
+          done
+          echo "a page load's worth of reads: all 200"
+
+      - name: Restore the no-token stack for the remaining steps
+        run: |
+          sed -i '/^ADMIN_TOKEN=/d' .env
+          docker compose up -d --force-recreate backend simulator
+          for i in $(seq 1 40); do
+            curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
+            sleep 3
+          done
+
       - name: The backend and simulator are NOT reachable from the host
         run: |
           fail=0

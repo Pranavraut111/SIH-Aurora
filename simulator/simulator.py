@@ -10,6 +10,7 @@ Each station runs independently. Manual injection works in both modes.
 Internal Flask control API on SIM_PORT (default 8001); the browser never calls it.
 """
 
+import collections
 import json
 import logging
 import math
@@ -1012,10 +1013,61 @@ LLM_UNAVAILABLE_MSG = (
     "LLM explanation unavailable: GROQ_API_KEY is not configured on the server. "
     "The structured decision data (/api/decision) is still available."
 )
+# Must start with "LLM explanation" so the backend treats it as an LLM failure and
+# substitutes its offline summary (see _LLM_FAILURE_PREFIXES in unified_backend.py).
+LLM_CAPPED_MSG = (
+    "LLM explanation unavailable: the server's hourly Groq budget "
+    f"({app_config.GROQ_MAX_CALLS_PER_HOUR} calls) is used up. "
+    "The structured decision data (/api/decision) is still available."
+)
+
+# ── Groq call budget ─────────────────────────────────────────
+# Outbound Groq calls are capped per rolling hour for the whole process, so a public demo
+# cannot run up a bill (nginx rate-limits the route on top of this). Past the cap nothing
+# is sent upstream: the explain routes report llmAvailable=false and the backend serves
+# its deterministic offline summary instead.
+_groq_calls: collections.deque = collections.deque()
+_groq_lock = threading.Lock()
+_groq_cap_logged = False
+
+
+def _groq_prune(now: float) -> None:
+    """Drop call timestamps older than an hour. Caller holds _groq_lock."""
+    cutoff = now - 3600.0
+    while _groq_calls and _groq_calls[0] < cutoff:
+        _groq_calls.popleft()
+
+
+def groq_budget_remaining() -> int:
+    """Calls still allowed this rolling hour. Does not consume any."""
+    with _groq_lock:
+        _groq_prune(time.time())
+        return max(0, app_config.GROQ_MAX_CALLS_PER_HOUR - len(_groq_calls))
+
+
+def _groq_take_slot() -> bool:
+    """Reserve one call. False when the hourly cap is already used up."""
+    global _groq_cap_logged
+    now = time.time()
+    with _groq_lock:
+        _groq_prune(now)
+        if len(_groq_calls) >= app_config.GROQ_MAX_CALLS_PER_HOUR:
+            if not _groq_cap_logged:
+                log.warning(
+                    "[Groq] hourly budget of %d calls is used up; serving offline summaries "
+                    "until it refills (raise GROQ_MAX_CALLS_PER_HOUR to change this)",
+                    app_config.GROQ_MAX_CALLS_PER_HOUR,
+                )
+                _groq_cap_logged = True
+            return False
+        _groq_calls.append(now)
+        _groq_cap_logged = False
+        return True
 
 
 def _llm_available() -> bool:
-    return bool(GROQ_API_KEY)
+    """A key is configured AND the hourly budget still has room."""
+    return bool(GROQ_API_KEY) and groq_budget_remaining() > 0
 
 
 def _clean_user_text(value, limit: int = MAX_USER_TEXT_CHARS) -> str:
@@ -1066,9 +1118,15 @@ QUESTION_PROMPTS = {
 
 
 def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> str:
-    """Call Groq API with the given prompts. Returns explanation text."""
-    if not _llm_available():
+    """Call Groq API with the given prompts. Returns explanation text.
+
+    Nothing leaves the process without a budget slot, so the hourly cap holds even if a
+    caller forgets to check _llm_available() first.
+    """
+    if not GROQ_API_KEY:
         return LLM_UNAVAILABLE_MSG
+    if not _groq_take_slot():
+        return LLM_CAPPED_MSG
     try:
         import urllib.request
         req = urllib.request.Request(
