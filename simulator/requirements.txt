@@ -1,5 +1,5 @@
 # Aurora — Python runtime dependencies (unified_backend.py + simulator.py)
-# Tested on Python 3.13. Install:  pip install -r simulator/requirements.txt
+# Tested on Python 3.12 (CI) and 3.13. Install:  pip install -r simulator/requirements.txt
 # Optional ML extras (Chronos):     pip install -r simulator/requirements-ml.txt
 
 # Web / API
