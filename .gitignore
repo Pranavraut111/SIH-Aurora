@@ -8,11 +8,14 @@ dist/
 dist-ssr/
 legacy/backend/target/
 
-# Python caches
+# Python caches / test artefacts
 __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Secrets — NEVER commit
 .env

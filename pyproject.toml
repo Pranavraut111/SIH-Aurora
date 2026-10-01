@@ -1,0 +1,76 @@
+# Aurora (SIH PS 26060) — tooling config.
+# The project is not packaged; this file only configures pytest, coverage and ruff.
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["simulator/tests"]
+# conftest.py puts simulator/ on sys.path, so tests import `physics_model`, `db`, … directly.
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m", "not ml and not slow",
+]
+markers = [
+    "ml: needs torch + chronos-forecasting (simulator/requirements-ml.txt). Run with `pytest -m ml`.",
+    "slow: heavy physics walk-forward over the committed ERA5 caches. Run with `pytest -m slow`.",
+]
+filterwarnings = [
+    # Warnings raised by Aurora's own code are bugs — fail on them.
+    "error:::simulator.*",
+    "error:::conftest",
+    "error:::test_.*",
+    # Everything else (dependency deprecations we don't control) stays a warning.
+    "default",
+]
+
+[tool.coverage.run]
+source = ["simulator"]
+branch = true
+omit = [
+    "simulator/tests/*",
+    "simulator/migrations/*",
+    # Offline CLI scripts: training/evaluation tools, not part of the running services.
+    "simulator/evaluate_anomaly.py",
+    "simulator/forecast_arena.py",
+    "simulator/validate_baseline.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["legacy", "node_modules", ".venv", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private buffers on purpose and import fixtures by name.
+"simulator/tests/*" = ["B018"]
+
+[tool.ruff.lint.isort]
+# simulator/ modules are imported flat (conftest.py adds it to sys.path), so ruff must
+# not mistake them for third-party packages.
+known-first-party = [
+    "alert_engine", "analytics_ai_engine", "anomaly_engine", "cascade", "chronos_forecaster",
+    "config", "db", "decision_engine", "decision_scheduler", "forecast_engine", "ncpor_ingestor",
+    "offline_explain", "physics_model", "simulator", "station_config", "station_store",
+    "twin_inspector", "unified_backend", "units", "validation", "weather_data",
+]

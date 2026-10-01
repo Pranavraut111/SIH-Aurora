@@ -81,8 +81,8 @@
 - Setup: copy `.mcp.json.example` to `.mcp.json` and set `cwd` to your local repo path (`.mcp.json` is gitignored).
 
 ## After every change
-1. Python tests: `cd simulator && python test_physics_invariants.py` (+ any pytest suites added later)
-2. `npm run lint`
+1. `make test` — `pytest` (repo root, 247 tests, no network) + `npm test` (Vitest)
+2. `make lint` — `ruff check .` + `npm run lint`
 3. `npm run build`
 4. Commit with a conventional commit message (`fix:`, `chore:`, `refactor:`, `docs:` …)
    and `git push`.
