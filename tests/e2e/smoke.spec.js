@@ -20,24 +20,22 @@ const API = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.API_PORT
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const WRITE_HEADERS = ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {};
 
-// Sidebar label -> text that only THAT module's panel renders. These are the panels'
-// own headings, which differ from the sidebar labels (the weather module is labelled
-// "Weather Observations" but its heading reads "Meteorological & AWS Observations").
-// The tour asserts the marker so it catches "the sidebar switched but the panel did not"
-// rather than merely "something is on screen" — a real bug hid there: Suspense inside
-// AnimatePresence mode="wait" left the previous panel mounted while the next module's
-// chunk loaded.
+// Module id -> text that only THAT module's panel renders. Legacy panels are matched on
+// their own headings; modules rebuilt on the design system on their page title. The tour
+// asserts the marker so it catches "the sidebar switched but the panel did not", and it
+// asserts exactly one module panel is mounted, which catches the opposite: audit F1, where
+// every visited module stayed stacked on screen. Both bugs hid behind a weaker check.
 const MODULES = [
-  ['Mission Overview', null],
-  ['Weather Observations', /Meteorological & AWS Observations/i],
-  ['Infrastructure', /Station Infrastructure & Subsystems/i],
-  ['Energy Grid', /Microgrid & Power/i],
-  ['Logistics & Supply', /Logistics & Critical Supplies/i],
-  ['Remote C&C', /Remote Commands/i],
-  ['What-If Sim', /Digital Twin/i],
-  ['AI Diagnostics', /Anomaly detection/i],
-  ['Station Reports', /Station Operations Report Generator/i],
-  ['System Admin', /System Administration & Ingestion Pipeline/i],
+  ['overview', null],
+  ['environmental', /Meteorological & AWS Observations/i],
+  ['infrastructure', /Station Infrastructure & Subsystems/i],
+  ['energy', /Energy grid/i],
+  ['logistics', /Logistics & Critical Supplies/i],
+  ['remote', /Remote Commands/i],
+  ['simulation', /Digital Twin/i],
+  ['ai', /Anomaly detection/i],
+  ['reports', /Station Operations Report Generator/i],
+  ['admin', /System Administration & Ingestion Pipeline/i],
 ];
 
 /** Vite's dev client and source maps are not the app under test. */
@@ -81,9 +79,16 @@ async function operatorLogin(page) {
 }
 
 async function openStation(page, stationId) {
-  await page.locator('.station-selector-btn').click();
-  await page.locator('.station-option').filter({ hasText: stationId === 'maitri' ? 'Maitri' : 'Bharati' }).click();
-  await expect(page.locator('.station-dropdown')).toHaveCount(0);
+  const option = page.getByTestId(`station-option-${stationId}`);
+  await option.click();
+  await expect(option).toHaveAttribute('aria-pressed', 'true');
+}
+
+/** Select a module in the sidebar and wait until it is the current page. */
+async function openModule(page, moduleId) {
+  await page.getByTestId(`nav-${moduleId}`).click();
+  await expect(page.getByTestId(`nav-${moduleId}`), `${moduleId} did not become the active module`)
+    .toHaveAttribute('aria-current', 'page');
 }
 
 test.beforeAll(async ({ request }) => {
@@ -125,22 +130,19 @@ test('every module opens cleanly', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.overview-stage')).toBeVisible();
 
-  for (const [label, marker] of MODULES) {
-    await page.locator('.sidebar-item', { hasText: label }).click();
-    const item = page.locator('.sidebar-item.active', { hasText: label });
-    await expect(item, `${label} did not become the active module`).toBeVisible();
+  for (const [id, marker] of MODULES) {
+    await openModule(page, id);
     // Either the overview stage or a module panel must render — never an empty stage
     // and never the ErrorBoundary fallback.
     await expect(page.locator('.overview-stage, .module-content-scroll')).toBeVisible();
-    await expect(page.getByTestId('error-boundary'), `${label} crashed`).toHaveCount(0);
-    // Exactly one module panel, and it is THIS module's; the loading placeholder clears.
-    // The count catches audit F1 (every visited module stayed stacked on screen), which a
-    // toContainText check alone cannot: the new marker is present either way.
+    await expect(page.getByTestId('error-boundary'), `${id} crashed`).toHaveCount(0);
     if (marker) {
-      await expect(page.getByTestId('module-panel'), `more than one module on screen after ${label}`).toHaveCount(1);
+      // Exactly one module page, and it is THIS module's; the loading placeholder clears.
+      await expect(page.getByTestId('module-panel'), `more than one module on screen after ${id}`).toHaveCount(1);
+      await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', id);
       await expect(page.getByTestId('panel-fallback')).toHaveCount(0);
       await expect(page.getByTestId('module-panel'),
-                   `${label} was selected but its panel did not render`).toContainText(marker);
+                   `${id} was selected but its panel did not render`).toContainText(marker);
     } else {
       await expect(page.getByTestId('module-panel')).toHaveCount(0);
     }
@@ -198,16 +200,16 @@ test('viewing needs no login, and writes are refused without one', async ({ page
   await expect(page.locator('.overview-stage')).toBeVisible();
 
   // The whole dashboard is viewable while signed out, and says so.
-  await expect(page.getByTestId('operator-login')).toHaveText(/READ-ONLY/);
+  await expect(page.getByTestId('operator-login')).toHaveText(/read-only/i);
   await expect(page.getByTestId('data-source-badge')).toBeVisible();
-  for (const label of ['Weather Observations', 'Logistics & Supply', 'System Admin']) {
-    await page.locator('.sidebar-item', { hasText: label }).click();
+  for (const id of ['environmental', 'logistics', 'admin']) {
+    await openModule(page, id);
     await expect(page.locator('.module-content-scroll')).toBeVisible();
   }
 
   // A write control is disabled, with the reason in its tooltip. The thresholds form
   // lives behind the "Alert Threshold Rules" tab of System Admin.
-  await page.locator('.sidebar-item', { hasText: 'System Admin' }).click();
+  await openModule(page, 'admin');
   await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
   const save = page.locator('button.btn-save-admin');
   await expect(save).toBeVisible();

@@ -2,11 +2,30 @@
    Aurora — operator login (write access).
    The token is held in memory only, so a refresh logs you out; see
    src/services/adminToken.js for why. Viewing never needs a login.
+   Signed out: a visible "Read-only" control that opens a dialog saying what
+   signing in unlocks. Signed in: "Operator"; one click signs out.
    ═══════════════════════════════════════════════════════════════ */
-import { useEffect, useRef, useState } from 'react';
-import { LuLock, LuLockOpen } from 'react-icons/lu';
+import { lazy, Suspense, useState } from 'react';
+import { Box, ButtonBase, Tooltip } from '@mui/material';
+import LockOpenOutlined from '@mui/icons-material/LockOpenOutlined';
+import LockOutlined from '@mui/icons-material/LockOutlined';
 import { useAdminToken } from '../hooks/useAdminToken';
-import './OperatorLogin.css';
+
+// The dialog (Modal, TextField, Alert) is only needed once someone signs in,
+// so it stays out of the initial bundle.
+const OperatorLoginDialog = lazy(() => import('./OperatorLoginDialog'));
+
+const pillSx = {
+  height: 28,
+  px: 2,
+  gap: 1.5,
+  borderRadius: '4px',
+  fontSize: 13,
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+  border: 1,
+  '& .MuiSvgIcon-root': { fontSize: 16 },
+};
 
 export default function OperatorLogin() {
   const { loggedIn, writeProtected, login, logout } = useAdminToken();
@@ -14,14 +33,14 @@ export default function OperatorLogin() {
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
 
   // Nothing to log in to when the server does not protect writes (local development).
   if (writeProtected !== true) return null;
+
+  function close() {
+    setOpen(false);
+    setError('');
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -39,59 +58,49 @@ export default function OperatorLogin() {
 
   if (loggedIn) {
     return (
-      <button
-        type="button"
-        className="status-pill operator-pill logged-in"
-        onClick={logout}
-        title="Signed in as operator — click to sign out. Writes are enabled."
-        data-testid="operator-logout"
-      >
-        <LuLockOpen size={13} />
-        <span className="pill-label font-mono">OPERATOR</span>
-      </button>
+      <Tooltip title="Signed in as operator: controls that change state are enabled. Click to sign out.">
+        <ButtonBase
+          onClick={logout}
+          data-testid="operator-logout"
+          aria-label="Operator: signed in. Sign out"
+          sx={{ ...pillSx, color: 'primary.main', borderColor: 'primary.main' }}
+        >
+          <LockOpenOutlined />
+          <span>Operator</span>
+        </ButtonBase>
+      </Tooltip>
     );
   }
 
   return (
-    <div className="operator-login-wrap">
-      <button
-        type="button"
-        className="status-pill operator-pill"
-        onClick={() => setOpen((v) => !v)}
-        title="Read-only. Sign in with the operator token to make changes."
-        data-testid="operator-login"
-      >
-        <LuLock size={13} />
-        <span className="pill-label font-mono">READ-ONLY</span>
-      </button>
+    <>
+      <Tooltip title="You can view everything. Sign in with the operator token to change thresholds, inventory, alerts or the simulator.">
+        <ButtonBase
+          onClick={() => setOpen(true)}
+          data-testid="operator-login"
+          aria-haspopup="dialog"
+          aria-label="Read-only. Sign in as operator"
+          sx={{ ...pillSx, color: 'text.secondary', borderColor: 'divider', '&:hover': { color: 'text.primary', borderColor: 'text.secondary' } }}
+        >
+          <LockOutlined />
+          <span>Read-only</span>
+          <Box component="span" sx={{ color: 'primary.main', display: { xs: 'none', sm: 'inline' } }}>Sign in</Box>
+        </ButtonBase>
+      </Tooltip>
 
       {open && (
-        <form className="operator-login-panel glass-panel" onSubmit={submit}>
-          <label htmlFor="operator-token">Operator token</label>
-          <input
-            id="operator-token"
-            ref={inputRef}
-            type="password"
-            autoComplete="off"
-            spellCheck="false"
+        <Suspense fallback={null}>
+          <OperatorLoginDialog
+            open={open}
             value={value}
-            onChange={(e) => { setValue(e.target.value); setError(''); }}
-            placeholder="X-Admin-Token"
-            data-testid="operator-token-input"
+            error={error}
+            busy={busy}
+            onChange={(v) => { setValue(v); setError(''); }}
+            onClose={close}
+            onSubmit={submit}
           />
-          <p className="operator-login-note">
-            Kept in memory only — a page refresh signs you out. Viewing the dashboard
-            never needs a token.
-          </p>
-          {error && <p className="operator-login-error" role="alert">{error}</p>}
-          <div className="operator-login-actions">
-            <button type="button" onClick={() => { setOpen(false); setError(''); }}>Cancel</button>
-            <button type="submit" disabled={busy || !value.trim()} data-testid="operator-submit">
-              {busy ? 'Checking…' : 'Sign in'}
-            </button>
-          </div>
-        </form>
+        </Suspense>
       )}
-    </div>
+    </>
   );
 }

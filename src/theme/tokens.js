@@ -1,0 +1,91 @@
+/* ═══════════════════════════════════════════════════════════════
+   Aurora — design tokens (docs/ui-redesign.md §2). The ONE place colours, type,
+   spacing, radius and motion are defined; theme.js feeds them to MUI and
+   chartTheme.js to Recharts. Never hardcode a hex value in a component.
+
+   Every text and status colour below clears WCAG AA (4.5:1) on every surface of
+   its mode, and on its own 16 % (dark) / 10 % (light) tint; control borders clear
+   the 3:1 non-text minimum. Ratios are recorded in docs/ui-redesign.md.
+   ═══════════════════════════════════════════════════════════════ */
+
+export const palette = {
+  dark: {
+    surface: {
+      app: '#0F1216',       // page background
+      base: '#161A20',      // cards, app bar, nav
+      raised: '#1C2129',    // hover rows, inset wells
+      overlay: '#232933',   // menus, dialogs, selected nav
+    },
+    text: { primary: '#E7EAEE', secondary: '#AAB2BD', muted: '#8C95A1' },
+    border: { subtle: '#262C35', default: '#323A45', control: '#646E7C' },
+    accent: { main: '#7FB2E5', strong: '#A3C8EE', contrastText: '#0F1216', tint: 'rgba(127, 178, 229, 0.14)' },
+  },
+  light: {
+    surface: { app: '#F5F6F8', base: '#FFFFFF', raised: '#EEF0F3', overlay: '#FFFFFF' },
+    text: { primary: '#171B21', secondary: '#454E5A', muted: '#5C6672' },
+    border: { subtle: '#E4E7EB', default: '#D3D8DE', control: '#8A939E' },
+    accent: { main: '#1F5E9E', strong: '#174A7D', contrastText: '#FFFFFF', tint: 'rgba(31, 94, 158, 0.10)' },
+  },
+};
+
+/** Status colours are reserved for status — never for decoration or categories. */
+export const status = {
+  dark: {
+    normal: { main: '#5DBB86', tint: 'rgba(93, 187, 134, 0.16)' },
+    warning: { main: '#E0A84A', tint: 'rgba(224, 168, 74, 0.16)' },
+    critical: { main: '#F0716A', tint: 'rgba(240, 113, 106, 0.16)' },
+    offline: { main: '#9AA3AE', tint: 'rgba(154, 163, 174, 0.16)' },
+    simulated: { main: '#A99BE8', tint: 'rgba(169, 155, 232, 0.16)' },
+  },
+  light: {
+    normal: { main: '#17703F', tint: 'rgba(23, 112, 63, 0.10)' },
+    warning: { main: '#8A5800', tint: 'rgba(138, 88, 0, 0.10)' },
+    critical: { main: '#B3261E', tint: 'rgba(179, 38, 30, 0.10)' },
+    offline: { main: '#5C6672', tint: 'rgba(92, 102, 114, 0.10)' },
+    simulated: { main: '#5B47B3', tint: 'rgba(91, 71, 179, 0.10)' },
+  },
+};
+
+/**
+ * Categorical series for charts and breakdowns: one hue (the accent) in steps,
+ * so a breakdown never borrows a status colour.
+ */
+export const series = {
+  dark: ['#7FB2E5', '#5C8FC2', '#A3C8EE', '#3F6F9F', '#C9DDF3'],
+  light: ['#1F5E9E', '#4F86C0', '#174A7D', '#8DB2D9', '#0F3459'],
+};
+
+export const fonts = {
+  ui: '"IBM Plex Sans Variable", "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+  mono: '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace',
+};
+
+/** Type scale (px). Nothing in the UI is smaller than 12. */
+export const type = {
+  caption: { fontSize: 12, lineHeight: 16, fontWeight: 500 },
+  bodySm: { fontSize: 13, lineHeight: 18, fontWeight: 400 },
+  body: { fontSize: 14, lineHeight: 20, fontWeight: 400 },
+  label: { fontSize: 12, lineHeight: 16, fontWeight: 600, letterSpacing: '0.02em' },
+  title: { fontSize: 16, lineHeight: 22, fontWeight: 600 },
+  pageTitle: { fontSize: 22, lineHeight: 28, fontWeight: 600, letterSpacing: '-0.01em' },
+  kpi: { fontSize: 28, lineHeight: 34, fontWeight: 500, letterSpacing: '-0.01em' },
+};
+
+/** 4-px base unit: theme.spacing(n) = 4n px. Use 1, 2, 3, 4, 6, 8, 12. */
+export const SPACING_UNIT = 4;
+
+export const radius = { control: 4, card: 6 };
+
+export const motion = {
+  // Short and functional: state changes only, never decoration.
+  duration: { short: 120, standard: 180, enter: 200, exit: 150 },
+  easing: 'cubic-bezier(0.2, 0, 0, 1)',
+};
+
+export const layout = {
+  appBarHeight: 56,
+  statusStripHeight: 36,
+  navWidth: 240,
+  navWidthCollapsed: 64,
+  contentMaxWidth: 1280,
+};
