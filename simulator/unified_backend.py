@@ -33,7 +33,7 @@ import requests
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Import digital twin engines
@@ -599,6 +599,14 @@ def _probe_simulator() -> dict:
     with _sim_probe_lock:
         _sim_probe_cache.update(at=time.monotonic(), value=result)
     return result
+
+
+@app.head("/api/health", include_in_schema=False)
+async def health_head():
+    """Liveness probe. HEAD answers 200 with no body, so `curl -I`, load balancers and
+    uptime checks work; FastAPI's @app.get does not register HEAD on its own (it would
+    be a 405). The detailed report is on GET."""
+    return Response(status_code=200)
 
 
 @app.get("/api/health")

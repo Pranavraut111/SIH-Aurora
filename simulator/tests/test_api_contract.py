@@ -286,3 +286,18 @@ def test_admin_threshold_override_round_trips(client):
     after = _ok(client, "/api/admin/config?stationId=maitri")
     assert after["thresholdOverrides"] == []
     assert after["thresholds"][sensor] == default
+
+
+# ── Liveness probes ─────────────────────────────────────────────────────────
+def test_health_answers_head_with_200_and_no_body(client):
+    """`curl -I`, load balancers and the nginx container healthcheck all send HEAD.
+    FastAPI's @app.get does not register HEAD, so this needs its own route."""
+    res = client.head("/api/health")
+    assert res.status_code == 200, res.text
+    assert res.content == b""
+
+
+def test_health_get_still_returns_the_full_report(client):
+    body = _ok(client, "/api/health")
+    assert body["db"]["ok"] is True
+    assert "stations" in body
