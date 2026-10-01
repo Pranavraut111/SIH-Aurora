@@ -1,0 +1,141 @@
+# ═══════════════════════════════════════════════════════════════
+#  Aurora — Antarctic Research Station Digital Twin (SIH PS 26060)
+#
+#      cp .env.example .env     # then set ALLOWED_ORIGINS for a non-localhost host
+#      docker compose up -d
+#
+#  Only the frontend publishes a port (HTTP_PORT, default 80). nginx serves the UI and
+#  reverse-proxies /api and /ws to the backend, so the browser sees one origin. The
+#  backend and the simulator are reachable only on the internal aurora network — the
+#  browser must never call the simulator directly (CLAUDE.md).
+#
+#  Memory limits are sized for a 2–4 GB VM. Measured idle RSS without the ML extras:
+#  backend ~180 MB, simulator ~410 MB, nginx ~10 MB. With WITH_ML=true the simulator
+#  needs roughly 3 GB for torch + Chronos (see docs/DEPLOYMENT.md).
+# ═══════════════════════════════════════════════════════════════
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# The root .env is the single source of configuration (CLAUDE.md). It is optional so a
+# bare `docker compose up -d` still works; per-service overrides below always win.
+x-env-file: &env-file
+  - path: .env
+    required: false
+
+services:
+  # ── Public entry point: UI + reverse proxy ──────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        # Relative URLs keep everything on one origin; src/config.js derives ws/wss
+        # from window.location, so this works over plain HTTP and behind TLS alike.
+        VITE_API_URL: /api
+        VITE_WS_URL: /ws/station
+    image: aurora-frontend:local
+    environment:
+      BACKEND_HOST: backend
+      BACKEND_PORT: "8080"
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [aurora]
+    restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ── The single public backend (internal-only; reached via nginx) ──
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+      args:
+        # The backend only proxies Chronos to the simulator, so it never needs torch.
+        WITH_ML: "false"
+    image: aurora-backend:local
+    env_file: *env-file
+    environment:
+      # These override anything in .env: inside the container the addresses are
+      # service names, the listener must be on all interfaces, and the DB lives on
+      # the aurora-data volume.
+      HOST: 0.0.0.0
+      API_PORT: "8080"
+      SIMULATOR_URL: http://simulator:8001
+      BACKEND_URL: http://backend:8080
+      DB_PATH: /data/antarctic_observations.db
+      # The backend checks the Origin header on WebSocket upgrades (CORSMiddleware does
+      # not cover WS), so this MUST list the origin the browser actually uses. Get it
+      # wrong and the UI silently falls back to browser-demo mode.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+    expose:
+      - "8080"
+    volumes:
+      - aurora-data:/data
+      - aurora-weather-cache:/app/simulator/weather_cache
+    networks: [aurora]
+    restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Internal physics + AI simulator (never exposed) ─────────
+  simulator:
+    build:
+      context: .
+      dockerfile: docker/simulator.Dockerfile
+      args:
+        # true also needs the larger memory limit below and ~2.5 GB of image space.
+        WITH_ML: ${WITH_ML:-false}
+    image: aurora-simulator:local
+    env_file: *env-file
+    environment:
+      HOST: 0.0.0.0
+      SIM_PORT: "8001"
+      BACKEND_URL: http://backend:8080
+      SIMULATOR_URL: http://simulator:8001
+      DB_PATH: /data/antarctic_observations.db
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      HF_HOME: /hf-cache
+    # The backend owns init_db(), which applies the migrations, so the simulator must
+    # not touch the database until the backend reports healthy.
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - aurora-data:/data
+      - aurora-weather-cache:/app/simulator/weather_cache
+      # Only used with WITH_ML=true; harmless (and tiny) otherwise.
+      - hf-cache:/hf-cache
+    networks: [aurora]
+    restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: ${SIMULATOR_MEMORY_LIMIT:-768M}
+
+networks:
+  aurora:
+    driver: bridge
+
+volumes:
+  # SQLite observations, alerts, logistics ledger and the audit log. Seeded from the
+  # committed demo database on first start; migrations run on every backend boot.
+  aurora-data:
+  # ERA5 replay caches (seeded from the repo) plus the forecast files the services
+  # refresh every 3 h. Keeping these is what lets the stack start with no internet.
+  aurora-weather-cache:
+  # HuggingFace cache for the Chronos weights (~190 MB), so WITH_ML=true downloads once.
+  hf-cache:
