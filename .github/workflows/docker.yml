@@ -62,6 +62,20 @@ jobs:
       - name: Build the frontend image
         run: docker compose build --progress plain frontend
 
+      - name: Image sizes
+        run: |
+          {
+            echo '### Image sizes (amd64, WITH_ML=false)'
+            echo
+            echo '| Image | Size |'
+            echo '|---|---|'
+            for img in aurora-frontend:local aurora-backend:local aurora-simulator:local; do
+              size=$(docker image inspect "$img" --format '{{.Size}}')
+              printf '| %s | %s |\n' "$img" "$(numfmt --to=iec --suffix=B "$size")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          docker images aurora-backend aurora-simulator aurora-frontend
+
       - name: Start the stack
         run: |
           docker compose up -d --no-build
@@ -233,6 +247,73 @@ jobs:
 
       - name: Tear down
         if: always()
+        run: docker compose down -v
+
+  # ── WITH_ML=true: does Chronos actually come up? ────────────
+  # Separate job: the torch + chronos install is slow and adds ~2.5 GB, so it must not
+  # gate the image publish. Push-only, because it is far too slow for a PR check.
+  ml-smoke:
+    name: WITH_ML=true (Chronos available)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Build the simulator with the Chronos extras
+        env:
+          WITH_ML: 'true'
+          SIMULATOR_MEMORY_LIMIT: 3g
+        run: docker compose build --progress plain simulator
+
+      - name: Image size with ML
+        run: |
+          size=$(docker image inspect aurora-simulator:local --format '{{.Size}}')
+          {
+            echo '### Image size (amd64, WITH_ML=true)'
+            echo
+            echo '| Image | Size |'
+            echo '|---|---|'
+            printf '| aurora-simulator:local (ML) | %s |\n' "$(numfmt --to=iec --suffix=B "$size")"
+          } >> "$GITHUB_STEP_SUMMARY"
+          docker images aurora-simulator
+
+      - name: Start the stack and confirm Chronos reports available
+        env:
+          WITH_ML: 'true'
+          SIMULATOR_MEMORY_LIMIT: 3g
+        run: |
+          docker compose up -d
+          for i in $(seq 1 60); do
+            unhealthy=$(docker compose ps --format '{{.Service}} {{.Health}}' \
+              | awk '$2 != "healthy" { print $1 }')
+            [ -z "$unhealthy" ] && break
+            sleep 5
+          done
+          test -z "$unhealthy" || {
+            echo "::error::the ML stack never became healthy"
+            docker compose logs --tail=120
+            exit 1
+          }
+          curl -fsS http://localhost/api/health | tee /tmp/ml-health.json
+          python3 -c "
+          import json; h = json.load(open('/tmp/ml-health.json'))
+          c = h['chronos']
+          assert c['available'] is True, f'Chronos not available with WITH_ML=true: {c}'
+          print('chronos:', c)
+          "
+          # The simulator must not be OOM-killed under the 3g limit.
+          test "$(docker inspect --format '{{.State.OOMKilled}}' "$(docker compose ps -q simulator)")" = "false"
+
+      - if: failure()
+        run: docker compose logs --tail=200
+
+      - if: always()
         run: docker compose down -v
 
   # ── Multi-arch images -> GHCR ───────────────────────────────
