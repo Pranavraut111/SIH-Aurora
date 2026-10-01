@@ -77,6 +77,12 @@ services:
       # not cover WS), so this MUST list the origin the browser actually uses. Get it
       # wrong and the UI silently falls back to browser-demo mode.
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      # Write protection and the production gate come straight from .env. With
+      # APP_ENV=production the backend refuses to start if ADMIN_TOKEN is empty or
+      # ALLOWED_ORIGINS still mentions localhost.
+      APP_ENV: ${APP_ENV:-development}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      GROQ_MAX_CALLS_PER_HOUR: ${GROQ_MAX_CALLS_PER_HOUR:-60}
     expose:
       - "8080"
     volumes:
@@ -107,6 +113,10 @@ services:
       SIMULATOR_URL: http://simulator:8001
       DB_PATH: /data/antarctic_observations.db
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      # The simulator authenticates its telemetry POSTs with the same token.
+      APP_ENV: ${APP_ENV:-development}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      GROQ_MAX_CALLS_PER_HOUR: ${GROQ_MAX_CALLS_PER_HOUR:-60}
       HF_HOME: /hf-cache
     # The backend owns init_db(), which applies the migrations, so the simulator must
     # not touch the database until the backend reports healthy.

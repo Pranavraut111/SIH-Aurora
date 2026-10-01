@@ -146,7 +146,8 @@ flowchart TB
 | | Remote command dispatch | 🟡 **Simulated** lifecycle only — nothing is actuated |
 | **Logistics** | Operator-entered inventory ledger with an audit log | 🟢 Working |
 | **Operations** | Single-command Docker deploy, multi-arch images, HTTPS overlay, works offline | 🟢 Working |
-| | Authentication / RBAC | 🔴 **Not implemented.** The user list in System Admin is labelled HARDCODED-DEMO |
+| | Write protection for a public deployment | 🟡 Demo-grade: one shared `ADMIN_TOKEN` on every write, nginx rate limits, an LLM spend cap |
+| | User accounts / RBAC | 🔴 **Not implemented.** The user list in System Admin is labelled HARDCODED-DEMO |
 
 ---
 
@@ -182,6 +183,9 @@ in `simulator/` that touches `os.environ`); the frontend reads only `VITE_*`, th
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `APP_ENV` | `development` | `production` makes the backend refuse to start on a development-grade config (no `ADMIN_TOKEN`, localhost origins) |
+| `ADMIN_TOKEN` | empty | When set, every state-changing endpoint needs `X-Admin-Token`. Reads stay public — see [Write protection](#write-protection). Generate with `openssl rand -hex 32` |
+| `GROQ_MAX_CALLS_PER_HOUR` | `60` | Hard cap on outbound LLM calls per rolling hour; past it the explain routes serve the offline summary |
 | `ALLOWED_ORIGINS` | `http://localhost:5173` | Origins allowed by CORS **and** the `/ws/station` check. **Must** match how the browser reaches the UI. `*` is rejected |
 | `HOST` / `API_PORT` / `SIM_PORT` | `127.0.0.1` / `8080` / `8001` | Bind address and ports (containers override `HOST` to `0.0.0.0`) |
 | `BACKEND_URL` / `SIMULATOR_URL` | localhost | Service-to-service addresses |
@@ -204,6 +208,27 @@ in `simulator/` that touches `os.environ`); the frontend reads only `VITE_*`, th
 | `VITE_ENABLE_FIREBASE` | `false` | Firebase is **off** (it had public read/write rules). The SDK is a dynamic import, so a default build does not even ship it |
 
 ---
+
+## Write protection
+
+A deployment is meant to be *viewable* by anyone and *changeable* by nobody without a
+token. Set `ADMIN_TOKEN` and every state-changing endpoint requires
+`X-Admin-Token` — thresholds, logistics edits, alert acknowledge, remote dispatch,
+simulator inject/reset/mode, NCPOR ingest and telemetry ingest. Reads and the WebSocket
+stay public, and the two POSTs that change nothing (what-if, explain) stay public too and
+are rate-limited instead.
+
+In the UI a **READ-ONLY** pill in the top bar opens an operator login; the token is held in
+memory only, so refreshing signs you out. Without a login the dashboard is fully usable and
+write controls are disabled with the reason in their tooltip. With no `ADMIN_TOKEN`
+configured the pill is not shown at all, so local development is unchanged.
+
+nginx adds per-address rate limits (10 r/s on `/api`, 5 r/min on the explain routes,
+64 concurrent connections) and a 64 kB body cap, returning `429`/`413` with a readable
+message. `GROQ_MAX_CALLS_PER_HOUR` bounds LLM spend regardless.
+
+This is demo-grade: one shared token, **no user accounts and no roles** — see
+[Known limitations](#known-limitations) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Testing
 
@@ -274,9 +299,9 @@ CLAUDE.md               Working rules and architecture decisions
 - **The forecast arena's physics leg is a noise-based approximation**, not a true forward
   run — the number is not a fair comparison.
 - **Remote commands are simulated.** Nothing is actuated.
-- **No authentication or RBAC.** Anyone who can reach the UI can change thresholds and
-  the inventory ledger. Do not expose a deployment to the public internet without putting
-  authentication in front of it.
+- **No user accounts or RBAC.** `ADMIN_TOKEN` gates all writes behind one shared secret;
+  there are no identities, no roles, and the operator name on an audit record is
+  self-declared. Anyone holding the token can change anything.
 - **Thresholds are prototypes**, not certified safety limits.
 - **Firebase is disabled** and should stay disabled until scoped rules and auth exist.
 

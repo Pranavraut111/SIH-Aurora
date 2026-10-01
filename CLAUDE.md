@@ -65,6 +65,20 @@
   (optional Chronos), `requirements-dev.txt` (pytest/httpx/ruff). `scikit-learn` must stay
   at 1.7.2 to match the pickled models.
 
+## Write protection (public demo)
+- `ADMIN_TOKEN` set → every **state-changing** route needs `X-Admin-Token`, enforced by the
+  one `require_admin` dependency in `unified_backend.py`. Add it to any new POST/PUT/DELETE.
+- Reads and `/ws/station` stay public. The only unprotected POSTs are the ones that change
+  nothing — `/api/simulation/whatif` and the explain routes — which nginx rate-limits instead.
+- `simulator.py` authenticates its `/api/sensors/batch` POSTs with the same token.
+- The frontend keeps the token in **memory only** (`src/services/adminToken.js`); never
+  localStorage. `GET /api/admin/session` tells the UI whether protection is on and whether a
+  token is accepted, so with `ADMIN_TOKEN` unset local dev keeps every control enabled.
+- `APP_ENV=production` → the backend refuses to start if `ADMIN_TOKEN` is empty or
+  `ALLOWED_ORIGINS` still mentions localhost (`config.check_production_config()`).
+- Limits live in `docker/nginx.conf` (10 r/s on `/api`, 5 r/min on explain, 64 kB bodies)
+  and `GROQ_MAX_CALLS_PER_HOUR` in `simulator.py`.
+
 ## Honesty / provenance
 - Never present fabricated or mock data as real.
 - Every value shown in the UI carries provenance, one of:

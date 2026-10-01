@@ -53,12 +53,10 @@ docker --version && docker compose version
 Either pull the published images (recommended on a small VM — no Node toolchain, no
 build, ~400 MB of pulls):
 
-> **One-time step after the first CI publish:** packages pushed to GHCR start out
-> private. Make each of `sih2026a-frontend`, `sih2026a-backend` and `sih2026a-simulator`
-> public once (GitHub → your profile → Packages → the package → *Package settings* →
-> *Change visibility*), or log in on the server with
-> `echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin` using a token that
-> has `read:packages`.
+> The three packages are public, so `docker pull` needs no login. If you ever make them
+> private, authenticate on the server with
+> `echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin` using a token that has
+> `read:packages`.
 
 ```bash
 git clone https://github.com/Saeesh-Vele/SIH2026A.git aurora
@@ -77,17 +75,30 @@ cp .env.example .env
 
 ### Configure `.env`
 
-`.env.example` documents every variable; the defaults work. **One variable must be
-changed for any server that is not reached as `localhost`:**
+`.env.example` documents every variable. **Three are required for a public deployment**,
+and with `APP_ENV=production` the backend refuses to start without them:
+
+```bash
+# .env — the minimum for a public host
+APP_ENV=production
+ALLOWED_ORIGINS=http://203.0.113.10          # or https://aurora.example.org
+ADMIN_TOKEN=$(openssl rand -hex 32)          # paste the generated value
+```
+
+Generate the token with `openssl rand -hex 32` and keep it out of version control — `.env`
+is gitignored.
 
 | Variable | Required? | What it does |
 |---|---|---|
-| `ALLOWED_ORIGINS` | **yes, unless you browse via localhost** | Origins allowed by CORS *and* by the `/ws/station` WebSocket check. Set it to exactly how people reach the UI: `http://203.0.113.10`, or `https://aurora.example.org`. Comma-separate several. |
+| `APP_ENV` | **yes for production** | `production` turns the startup warnings below into a refusal to start. Default `development`. |
+| `ALLOWED_ORIGINS` | **yes** unless you browse via localhost | Origins allowed by CORS *and* by the `/ws/station` WebSocket check. Set it to exactly how people reach the UI: `http://203.0.113.10`, or `https://aurora.example.org`. Comma-separate several. |
+| `ADMIN_TOKEN` | **yes for a public host** | Required by every state-changing endpoint as `X-Admin-Token`. Without it anyone who can load the page can change thresholds, edit the inventory ledger and drive the simulator. |
+| `GROQ_API_KEY` | optional | Enables LLM-written explanations. Without it the AI panels use the offline explainer and say so. |
+| `GROQ_MAX_CALLS_PER_HOUR` | no (60) | Hard cap on outbound Groq calls per rolling hour. Past it the explain endpoints serve the offline summary. |
 | `HTTP_PORT` | no (80) | Host port for the UI. |
 | `WITH_ML` | no (`false`) | Build the simulator with torch + Chronos. Also raise `SIMULATOR_MEMORY_LIMIT` to `3g`. |
 | `SIMULATOR_MEMORY_LIMIT` | no (`768M`) | Memory ceiling for the simulator container. |
 | `DOMAIN`, `ACME_EMAIL` | only for HTTPS | Hostname Caddy gets a certificate for, and the ACME contact address. |
-| `GROQ_API_KEY` | no | Enables LLM-written explanations. Without it the AI panels use the offline explainer and say so. |
 | `AURORA_MODE`, `AURORA_SPEED`, `AURORA_DATE` | no | Replay mode, speed (simulated seconds per real second) and ERA5 start date. |
 | `TICK_INTERVAL_S`, `ALERT_RESOLVE_TICKS`, `SIM_BATCH_FRESH_S` | no | Tick cadence, alert hysteresis, telemetry freshness window. |
 
@@ -249,6 +260,61 @@ include the extras, so this needs a local build.
 
 ---
 
+## What a public deployment is protected against
+
+This is demo-grade hardening: enough to put the dashboard on the internet, not a
+substitute for real authentication.
+
+**Write protection.** With `ADMIN_TOKEN` set, every state-changing endpoint requires the
+`X-Admin-Token` header and returns 401 without it — thresholds, logistics edits, alert
+acknowledge, remote dispatch, simulator inject/reset/mode, NCPOR ingest, and telemetry
+ingest. Reads and the WebSocket stay public, so anyone can view the whole dashboard. The
+UI shows a **READ-ONLY** pill in the top bar; clicking it asks for the token and turns it
+into **OPERATOR**. The token is kept in memory only, so a page refresh signs you out.
+
+Two POSTs stay public because they change nothing: `/api/simulation/whatif` (read-only
+against the published snapshot) and the explain routes. They are rate-limited instead.
+
+**Rate limiting** (nginx, per client address):
+
+| Scope | Limit |
+|---|---|
+| `/api/*` | 10 req/s, burst 20 |
+| the AI explain routes | 5 req/min, burst 2 |
+| concurrent connections | 64 |
+| request body | 64 kB (`413` beyond) |
+
+Exceeding a limit returns `429` with a JSON `detail` the UI displays; normal dashboard use
+is nowhere near these numbers.
+
+**Cost control.** `GROQ_MAX_CALLS_PER_HOUR` (default 60) caps outbound LLM calls for the
+whole process. Past the cap nothing is sent upstream and the explain endpoints return the
+deterministic offline summary, labelled as such.
+
+**What is still missing.** There are no user accounts, no roles and no audit of *who*
+signed in — one shared token gates all writes, and the operator name on an audit record is
+self-declared. Treat `ADMIN_TOKEN` like a password: anyone holding it can change anything.
+
+### Checking the protection on a live host
+
+```bash
+# Reads work with no token
+curl -fsS http://localhost/api/health > /dev/null && echo "read ok"
+
+# Writes are refused without it, and accepted with it
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  "http://localhost/api/sim/reset?stationId=maitri"                    # expect 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  "http://localhost/api/sim/reset?stationId=maitri"                     # expect 200
+
+# The rate limit trips, with a readable message
+for i in $(seq 1 15); do
+  curl -s -o /dev/null -w '%{http_code} ' -X POST -H 'Content-Type: application/json' \
+    -d '{"stationId":"maitri","question":"status"}' http://localhost/api/aurora-explain
+done; echo                                                             # expect 429s
+```
+
 ## Running offline
 
 The stack is designed to work on a server with no route to the internet. Open-Meteo,
@@ -338,8 +404,19 @@ published images (`-f docker-compose.prod.yml`) instead of building.
 **ARM: "no matching manifest".** The published images are multi-arch; make sure you are
 not pinning a digest or an old tag built before arm64 support.
 
-**`denied` or `unauthorized` when pulling from ghcr.io.** The packages are still private
-— see the note in [Get Aurora](#get-aurora), or build from source instead.
+**`denied` or `unauthorized` when pulling from ghcr.io.** The packages have been made
+private — `docker login ghcr.io` with a `read:packages` token, or build from source.
+
+**The UI loads but every control is greyed out with "Operator login required".** That is
+`ADMIN_TOKEN` working. Click the **READ-ONLY** pill in the top bar and enter the token.
+
+**`429 Too many requests`.** The nginx rate limit. Normal use does not reach it; if a demo
+genuinely needs more, raise the `rate=` values in `docker/nginx.conf` and rebuild the
+frontend image.
+
+**The backend exits immediately with "Refusing to start with APP_ENV=production".** It is
+telling you which variable is still at a development value — set `ADMIN_TOKEN` and point
+`ALLOWED_ORIGINS` at your real origin, or drop `APP_ENV` back to `development`.
 
 **The simulator keeps restarting with WITH_ML=true.** It is being OOM-killed. Raise
 `SIMULATOR_MEMORY_LIMIT` to `3g` and use a host with 4 GB+.
