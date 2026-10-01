@@ -11,11 +11,13 @@ import {
 } from 'react-icons/lu';
 import './RemoteControlPanel.css';
 import { apiGet, apiPost, describeApiError } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 import { getOperatorName } from '../services/operator';
 import { usePolling } from '../hooks/usePolling';
 import { stationMeta } from '../data/stationConfig';
 
 export default function RemoteControlPanel({ activeStation = 'maitri', onAcknowledgeAlert }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [commands, setCommands] = useState([]);
   const [activeAlerts, setActiveAlerts] = useState([]);
   const [dispatching, setDispatching] = useState(false);
@@ -126,14 +128,16 @@ export default function RemoteControlPanel({ activeStation = 'maitri', onAcknowl
               <button
                 className={`btn-actuator ${genset2State === 'RUNNING' ? 'active green' : ''}`}
                 onClick={() => { setGenset2State('RUNNING'); handleDispatch('Power Grid', 'ENGAGE_BACKUP_GENSET_RUN'); }}
-                disabled={dispatching}
+                disabled={dispatching || !canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 Request start
               </button>
               <button
                 className={`btn-actuator ${genset2State === 'STANDBY' ? 'active yellow' : ''}`}
                 onClick={() => { setGenset2State('STANDBY'); handleDispatch('Power Grid', 'SET_GENSET_STANDBY_HOT'); }}
-                disabled={dispatching}
+                disabled={dispatching || !canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 Request hot-standby
               </button>
@@ -159,7 +163,8 @@ export default function RemoteControlPanel({ activeStation = 'maitri', onAcknowl
                   setAuxHeatingState(next);
                   handleDispatch('Thermal Grid', next ? 'ENABLE_ZONE_B_HEATING' : 'DISABLE_ZONE_B_HEATING');
                 }}
-                disabled={dispatching}
+                disabled={dispatching || !canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 {auxHeatingState ? 'Request disable' : 'Request enable'}
               </button>
@@ -185,7 +190,8 @@ export default function RemoteControlPanel({ activeStation = 'maitri', onAcknowl
                   setSnowMeltState(next);
                   handleDispatch('Water Treatment', next ? 'ENABLE_SNOWMELT_TRACER' : 'DISABLE_SNOWMELT_TRACER');
                 }}
-                disabled={dispatching}
+                disabled={dispatching || !canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 {snowMeltState ? 'Request disable' : 'Request enable'}
               </button>
@@ -207,14 +213,16 @@ export default function RemoteControlPanel({ activeStation = 'maitri', onAcknowl
               <button
                 className={`btn-actuator ${antennaGainState === 'AUTO' ? 'active' : ''}`}
                 onClick={() => { setAntennaGainState('AUTO'); handleDispatch('Comms Tower', 'SET_RADOME_TRACKING_AUTO'); }}
-                disabled={dispatching}
+                disabled={dispatching || !canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 Request auto-track
               </button>
               <button
                 className={`btn-actuator ${antennaGainState === 'STOWED' ? 'active yellow' : ''}`}
                 onClick={() => { setAntennaGainState('STOWED'); handleDispatch('Comms Tower', 'STOW_DISH_BLIZZARD_MODE'); }}
-                disabled={dispatching}
+                disabled={dispatching || !canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 Request stow
               </button>

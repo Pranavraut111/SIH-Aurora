@@ -11,11 +11,13 @@ import {
 } from 'react-icons/lu';
 import './AdminPanel.css';
 import { apiGet, apiPost, describeApiError } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 import { getOperatorName, setOperatorName as persistOperatorName, OPERATOR_NAME_RE } from '../services/operator';
 import { STATION_IDS, stationMeta, stationMetaDetailed } from '../data/stationConfig';
 
 
 export default function AdminPanel({ activeStation = 'maitri' }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [config, setConfig] = useState(null);
   const [activeTab, setActiveTab] = useState('datasources'); // 'datasources' | 'users' | 'thresholds' | 'system'
   // Effective alert thresholds for the active station (station_config defaults + SQLite overrides).
@@ -189,14 +191,16 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
                 <button
                   className="btn-sync-source"
                   onClick={() => handleTriggerIngest('maitri')}
-                  disabled={ingesting}
+                  disabled={ingesting || !canWrite}
+                  title={writeBlockedTitle || 'Fetch the latest NCPOR observations for Maitri'}
                 >
                   <LuRefreshCw size={13} className={ingesting ? 'spin-icon' : ''} /> Sync Maitri
                 </button>
                 <button
                   className="btn-sync-source"
                   onClick={() => handleTriggerIngest('bharati')}
-                  disabled={ingesting}
+                  disabled={ingesting || !canWrite}
+                  title={writeBlockedTitle || 'Fetch the latest NCPOR observations for Bharati'}
                 >
                   <LuRefreshCw size={13} className={ingesting ? 'spin-icon' : ''} /> Sync Bharati
                 </button>
@@ -259,7 +263,13 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
                       )))}
                       <td>
                         {isOverridden(sensor) && (
-                          <button type="button" className="btn-sync-source" onClick={() => handleReset(sensor)}>Reset</button>
+                          <button
+                            type="button"
+                            className="btn-sync-source"
+                            onClick={() => handleReset(sensor)}
+                            disabled={!canWrite}
+                            title={writeBlockedTitle || 'Reset this threshold to the station default'}
+                          >Reset</button>
                         )}
                       </td>
                     </tr>
@@ -267,7 +277,12 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
                 </tbody>
               </table>
             )}
-            <button type="submit" className="btn-save-admin" disabled={!effective || saving}>
+            <button
+              type="submit"
+              className="btn-save-admin"
+              disabled={!effective || saving || !canWrite}
+              title={writeBlockedTitle || 'Save the edited alert thresholds'}
+            >
               {saving ? 'Saving…' : 'Save Alert Thresholds'}
             </button>
           </form>

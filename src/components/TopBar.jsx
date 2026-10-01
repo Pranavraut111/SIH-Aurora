@@ -9,6 +9,8 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { STATION_IDS, stationMeta, formatCoords } from '../data/stationConfig';
+import OperatorLogin from './OperatorLogin';
+import { useAdminToken } from '../hooks/useAdminToken';
 import {
   LuChevronDown,
   LuMapPin,
@@ -127,6 +129,7 @@ export default function TopBar({
   onTimelineToggle,
   showTimeline,
 }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [showStationMenu, setShowStationMenu] = useState(false);
   const currentMeta = MODULE_META[activeModule] || MODULE_META.overview;
 
@@ -243,6 +246,9 @@ export default function TopBar({
           {alertCount > 0 && <span className="alert-pulse-dot" />}
         </button>
 
+        {/* Operator login — only rendered when the server protects writes */}
+        <OperatorLogin />
+
         {/* Satellite Link Status Pill */}
         <button
           className={`status-pill connection ${isConnected ? 'connected' : 'disconnected'}`}
@@ -260,7 +266,8 @@ export default function TopBar({
         <button
           className={`topbar-icon-btn ${isConnected ? 'btn-link-active' : 'btn-link-offline'}`}
           onClick={onToggleConnection}
-          title={isConnected ? 'Simulate Satellite Link Loss' : 'Restore Satellite Link'}
+          disabled={!canWrite}
+          title={writeBlockedTitle || (isConnected ? 'Simulate Satellite Link Loss' : 'Restore Satellite Link')}
         >
           {isConnected ? <LuPlug size={14} /> : <LuUnplug size={14} />}
         </button>

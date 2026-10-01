@@ -1,8 +1,9 @@
 /* src/services/api.js — the one fetch wrapper. It must throw a typed ApiError and
    never hand callers fake data (CLAUDE.md: honesty / provenance). */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiGet, apiPost, describeApiError, request } from './api';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, apiGet, apiPost, describeApiError, isAuthError, isRateLimited, request } from './api';
 import { API_PREFIX } from '../config';
+import { clearToken, getToken, setToken } from './adminToken';
 
 const URL = 'http://backend.test/api/health';
 
@@ -148,5 +149,88 @@ describe('describeApiError', () => {
     expect(describeApiError(new ApiError('x', { kind: 'timeout' }))).toBe('request timed out');
     expect(describeApiError(new ApiError('x', { kind: 'network' }))).toBe('backend unreachable');
     expect(describeApiError(null)).toBe('');
+  });
+});
+
+
+// ── Operator token ──────────────────────────────────────────────────────────
+describe('the operator token', () => {
+  afterEach(() => clearToken());
+
+  it('is not sent when nobody is logged in', async () => {
+    fetch.mockResolvedValue(jsonResponse({}));
+    await apiPost('/sim/reset', {});
+    expect(fetch.mock.calls[0][1].headers['X-Admin-Token']).toBeUndefined();
+  });
+
+  it('is sent on writes once set', async () => {
+    setToken('tok-123');
+    fetch.mockResolvedValue(jsonResponse({}));
+    await apiPost('/sim/reset', {});
+    expect(fetch.mock.calls[0][1].headers['X-Admin-Token']).toBe('tok-123');
+  });
+
+  it('is sent on reads too, which is what the session probe relies on', async () => {
+    setToken('tok-123');
+    fetch.mockResolvedValue(jsonResponse({}));
+    await apiGet('/admin/session');
+    expect(fetch.mock.calls[0][1].headers['X-Admin-Token']).toBe('tok-123');
+  });
+
+  it('does not override a token passed explicitly for one call', async () => {
+    setToken('tok-123');
+    fetch.mockResolvedValue(jsonResponse({}));
+    await apiGet('/admin/session', { headers: { 'X-Admin-Token': 'candidate' } });
+    expect(fetch.mock.calls[0][1].headers['X-Admin-Token']).toBe('candidate');
+  });
+
+  it('is dropped when the server answers 401, so the UI stops claiming to be logged in', async () => {
+    setToken('stale');
+    fetch.mockResolvedValue(jsonResponse({ detail: 'Operator login required' }, { status: 401 }));
+    const err = await apiPost('/sim/reset', {}).catch((e) => e);
+    expect(isAuthError(err)).toBe(true);
+    expect(getToken()).toBeNull();
+  });
+
+  it('is kept on other failures — a 503 is not a bad token', async () => {
+    setToken('good');
+    fetch.mockResolvedValue(jsonResponse({ detail: 'Simulator offline' }, { status: 503 }));
+    await expect(apiPost('/sim/reset', {})).rejects.toBeInstanceOf(ApiError);
+    expect(getToken()).toBe('good');
+  });
+});
+
+describe('401 / 429 / 413 messages', () => {
+  it('names the login requirement on 401', () => {
+    const err = new ApiError('x', { kind: 'http', status: 401, body: { detail: 'nope' } });
+    expect(isAuthError(err)).toBe(true);
+    expect(describeApiError(err)).toBe('Operator login required for this action');
+  });
+
+  it('passes nginx\'s friendly 429 message through', () => {
+    const err = new ApiError('x', {
+      kind: 'http', status: 429,
+      body: { detail: 'Too many requests — please slow down and try again in a few seconds.' },
+    });
+    expect(isRateLimited(err)).toBe(true);
+    expect(describeApiError(err)).toContain('slow down');
+  });
+
+  it('falls back to a readable message when a 429 has no body', () => {
+    const err = new ApiError('x', { kind: 'http', status: 429, body: null });
+    expect(describeApiError(err)).toContain('Too many requests');
+  });
+
+  it('explains a 413', () => {
+    const err = new ApiError('x', { kind: 'http', status: 413, body: { detail: 'Request body too large (limit 64 kB).' } });
+    expect(describeApiError(err)).toContain('too large');
+  });
+
+  it('does not mistake other statuses for auth or rate-limit errors', () => {
+    const err = new ApiError('x', { kind: 'http', status: 500, body: null });
+    expect(isAuthError(err)).toBe(false);
+    expect(isRateLimited(err)).toBe(false);
+    expect(isAuthError(null)).toBe(false);
+    expect(isRateLimited(new ApiError('x', { kind: 'timeout' }))).toBe(false);
   });
 });

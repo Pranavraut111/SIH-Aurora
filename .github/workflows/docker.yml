@@ -278,6 +278,12 @@ jobs:
           print('simulator still ingesting with the token set')
           "
 
+      - name: Browser smoke test with write protection on
+        env:
+          E2E_BASE_URL: http://localhost
+          ADMIN_TOKEN: ci-operator-token
+        run: npm run test:e2e
+
       - name: Oversized request bodies are rejected by nginx
         run: |
           python3 -c "print('x' * 200000)" > /tmp/big.json
@@ -355,13 +361,15 @@ jobs:
           echo "nginx -> backend over the aurora network: ok"
           exit $fail
 
-      - name: Browser smoke test through nginx
-        env:
-          E2E_BASE_URL: http://localhost
+      - name: Install the browser test toolchain
         run: |
           npm ci
           npx playwright install --with-deps chromium
-          npm run test:e2e
+
+      - name: Browser smoke test through nginx
+        env:
+          E2E_BASE_URL: http://localhost
+        run: npm run test:e2e
 
       - name: Data survives a restart
         run: |

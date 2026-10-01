@@ -471,7 +471,10 @@ app.add_middleware(
     allow_origins=app_config.ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    # X-Admin-Token is needed for the operator login. In Docker everything is same-origin
+    # behind nginx so no preflight happens, but local dev is Vite:5173 -> backend:8080,
+    # and a custom header there triggers one.
+    allow_headers=["Content-Type", "X-Admin-Token"],
 )
 
 
@@ -1236,6 +1239,23 @@ def get_alerts(sid: str = Depends(station_param)):
 # ═══════════════════════════════════════════════════════════════
 #  Admin & Configuration APIs
 # ═══════════════════════════════════════════════════════════════
+
+@app.get("/api/admin/session")
+def admin_session(x_admin_token: str | None = Header(None, alias="X-Admin-Token")) -> dict:
+    """Whether writes need a token, and whether the one presented works.
+
+    Public on purpose, and it leaks nothing: it reports only that protection is on, never
+    the token. The UI needs both answers — `writeProtected` to decide whether to disable
+    the write controls at all (with ADMIN_TOKEN unset, local development must keep
+    working), and `authenticated` to verify a token at login instead of discovering it was
+    wrong on the operator's first real write.
+    """
+    expected = app_config.ADMIN_TOKEN
+    if not expected:
+        return {"writeProtected": False, "authenticated": True}
+    ok = bool(x_admin_token) and secrets.compare_digest(x_admin_token, expected)
+    return {"writeProtected": True, "authenticated": ok}
+
 
 @app.get("/api/admin/config")
 def get_admin_config(sid: str = Depends(station_param)):

@@ -15,6 +15,11 @@ import { expect, test } from '@playwright/test';
 // locally Playwright starts the backend on its own port.
 const API = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.API_PORT || '8080'}`;
 
+// Set when the stack enforces write protection, so the spec signs in before writing.
+// Empty means ADMIN_TOKEN is unset server-side and every control is already enabled.
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const WRITE_HEADERS = ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {};
+
 const MODULES = [
   'Mission Overview',
   'Weather Observations',
@@ -52,6 +57,20 @@ function watchForProblems(page) {
   });
 
   return { consoleErrors, failedRequests };
+}
+
+/**
+ * Sign in through the TopBar so the write controls become enabled. A no-op when the
+ * server does not protect writes (the pill is not rendered at all then).
+ */
+async function operatorLogin(page) {
+  const pill = page.getByTestId('operator-login');
+  if (!(await pill.count())) return false;          // writes are unprotected
+  await pill.click();
+  await page.getByTestId('operator-token-input').fill(ADMIN_TOKEN);
+  await page.getByTestId('operator-submit').click();
+  await expect(page.getByTestId('operator-logout')).toBeVisible();
+  return true;
 }
 
 async function openStation(page, stationId) {
@@ -118,11 +137,21 @@ test('an injected generator failure on bharati shows up as a bharati alert', asy
 
   await page.goto('/');
   await expect(page.locator('.overview-stage')).toBeVisible();
+
+  // Sign in as operator so the UI's write controls are live (and to prove the login
+  // flow works end to end). Skipped when the stack has no ADMIN_TOKEN set.
+  const loggedIn = await operatorLogin(page);
   await openStation(page, 'bharati');
 
-  // Inject through the API, exactly as Demo Control does.
-  const inject = await request.post(`${API}/api/sim/inject/generator_failure?stationId=bharati`);
+  // Inject through the API, exactly as Demo Control does — with the token when the
+  // stack requires one.
+  const inject = await request.post(`${API}/api/sim/inject/generator_failure?stationId=bharati`,
+                                    { headers: WRITE_HEADERS });
   expect(inject.ok(), await inject.text()).toBeTruthy();
+  if (loggedIn) {
+    // The acknowledge button is only enabled for a signed-in operator.
+    expect(ADMIN_TOKEN).not.toBe('');
+  }
 
   // The backend tick (2 s) evaluates thresholds and pushes the alert over the WebSocket.
   const pill = page.getByTestId('alerts-pill');
@@ -138,7 +167,54 @@ test('an injected generator failure on bharati shows up as a bharati alert', asy
   await page.getByTestId('alerts-pill').click();
   await expect(page.getByTestId('alert-drawer')).toBeVisible();
 
-  await request.post(`${API}/api/sim/reset?stationId=bharati`);
+  await request.post(`${API}/api/sim/reset?stationId=bharati`, { headers: WRITE_HEADERS });
   expect(consoleErrors, 'console errors during alert injection').toEqual([]);
   expect(failedRequests, 'failed requests during alert injection').toEqual([]);
+});
+
+test('viewing needs no login, and writes are refused without one', async ({ page, request }) => {
+  test.skip(!ADMIN_TOKEN, 'ADMIN_TOKEN is not set for this stack, so writes are unprotected');
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+
+  await page.goto('/');
+  await expect(page.locator('.overview-stage')).toBeVisible();
+
+  // The whole dashboard is viewable while signed out, and says so.
+  await expect(page.getByTestId('operator-login')).toHaveText(/READ-ONLY/);
+  await expect(page.getByTestId('data-source-badge')).toBeVisible();
+  for (const label of ['Weather Observations', 'Logistics & Supply', 'System Admin']) {
+    await page.locator('.sidebar-item', { hasText: label }).click();
+    await expect(page.locator('.module-content-scroll')).toBeVisible();
+  }
+
+  // A write control is disabled, with the reason in its tooltip. The thresholds form
+  // lives behind the "Alert Threshold Rules" tab of System Admin.
+  await page.locator('.sidebar-item', { hasText: 'System Admin' }).click();
+  await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
+  const save = page.locator('button.btn-save-admin');
+  await expect(save).toBeVisible();
+  await expect(save).toBeDisabled();
+  await expect(save).toHaveAttribute('title', 'Operator login required');
+
+  // ...and so is the ingest button on the Data Sources tab.
+  await page.locator('.admin-tab', { hasText: 'Data Sources' }).click();
+  const sync = page.locator('button.btn-sync-source').first();
+  await expect(sync).toBeDisabled();
+  await expect(sync).toHaveAttribute('title', 'Operator login required');
+
+  // The API agrees: the same write is a 401 unauthenticated and a 200 with the token.
+  const denied = await request.post(`${API}/api/sim/reset?stationId=maitri`);
+  expect(denied.status()).toBe(401);
+  const allowed = await request.post(`${API}/api/sim/reset?stationId=maitri`,
+                                     { headers: WRITE_HEADERS });
+  expect(allowed.status()).toBe(200);
+
+  // Signing in enables the controls again.
+  await operatorLogin(page);
+  await expect(sync).toBeEnabled();
+  await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
+  await expect(save).toBeEnabled();
+
+  expect(consoleErrors, 'console errors while signed out').toEqual([]);
+  expect(failedRequests.filter((f) => !f.startsWith('401')), 'unexpected failed requests').toEqual([]);
 });

@@ -18,8 +18,10 @@ import {
 } from 'recharts';
 import './EnvironmentalPanel.css';
 import { apiGet, apiPost } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 
 export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'maitri', provenance }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [fetchError, setFetchError] = useState(null);
   const [plotType, setPlotType] = useState('timeseries'); // 'timeseries' | 'anomaly' | 'forecast' | 'correlation' | 'seasonal' | 'risk'
   const [selectedParam, setSelectedParam] = useState('temperature');
@@ -136,7 +138,8 @@ export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'm
         <button
           className={`btn-ingest-ncpor ${ingesting ? 'loading' : ''}`}
           onClick={handleTriggerIngest}
-          disabled={ingesting}
+          disabled={ingesting || !canWrite}
+          title={writeBlockedTitle || 'Fetch the latest NCPOR observations'}
         >
           <LuRefreshCw size={15} className={ingesting ? 'spin-icon' : ''} />
           {ingesting ? 'Ingesting...' : 'Ingest NCPOR Live Data'}

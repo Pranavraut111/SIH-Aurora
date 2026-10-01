@@ -1,0 +1,87 @@
+.operator-login-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.status-pill.operator-pill {
+  cursor: pointer;
+  gap: 0.35rem;
+}
+
+.status-pill.operator-pill.logged-in {
+  border-color: rgba(74, 222, 128, 0.45);
+  color: #4ade80;
+}
+
+.operator-login-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 60;
+  width: 19rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.85rem;
+  border-radius: 0.6rem;
+  background: var(--panel-bg, #11161f);
+  border: 1px solid var(--panel-border, rgba(148, 163, 184, 0.25));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.operator-login-panel label {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted, #8b949e);
+}
+
+.operator-login-panel input {
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--panel-border, rgba(148, 163, 184, 0.3));
+  background: rgba(2, 6, 23, 0.6);
+  color: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+}
+
+.operator-login-note {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text-muted, #8b949e);
+}
+
+.operator-login-error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #f87171;
+}
+
+.operator-login-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+
+.operator-login-actions button {
+  padding: 0.35rem 0.7rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--panel-border, rgba(148, 163, 184, 0.3));
+  background: transparent;
+  color: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.operator-login-actions button[type='submit'] {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+}
+
+.operator-login-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

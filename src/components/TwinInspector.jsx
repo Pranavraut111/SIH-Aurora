@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import './TwinInspector.css';
 import { apiGet, apiPost } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 import { usePolling } from '../hooks/usePolling';
 
 /**
@@ -18,6 +19,7 @@ const BASIS_COLORS = {
 };
 
 export default function TwinInspector({ activeStation, isOpen, onClose }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState('chain'); // 'chain' | 'assumptions' | 'replay'
@@ -390,7 +392,12 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
                 </div>
               </div>
 
-              <button className="ti-replay-btn" onClick={handleReplay}>
+              <button
+                className="ti-replay-btn"
+                onClick={handleReplay}
+                disabled={!canWrite}
+                title={writeBlockedTitle || 'Switch the simulator to this replay window'}
+              >
                 ▶ Start Replay
               </button>
 
@@ -404,10 +411,20 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
             <div className="ti-section">
               <div className="ti-section-header"><span>MODE SWITCH</span></div>
               <div className="ti-mode-btns">
-                <button className="ti-mode-btn era5" onClick={handleReplay}>
+                <button
+                  className="ti-mode-btn era5"
+                  onClick={handleReplay}
+                  disabled={!canWrite}
+                  title={writeBlockedTitle || 'Switch the simulator to ERA5 reanalysis replay'}
+                >
                   🟢 ERA5 Reanalysis
                 </button>
-                <button className="ti-mode-btn sim" onClick={handleSwitchToSim}>
+                <button
+                  className="ti-mode-btn sim"
+                  onClick={handleSwitchToSim}
+                  disabled={!canWrite}
+                  title={writeBlockedTitle || 'Switch the simulator to random-walk simulation mode'}
+                >
                   🔵 Developer/Test Mode
                 </button>
               </div>

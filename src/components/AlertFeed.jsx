@@ -14,6 +14,7 @@ import {
   LuActivity,
 } from 'react-icons/lu';
 import { apiGet, describeApiError } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 import './AlertFeed.css';
 
 function relTime(ts) {
@@ -33,6 +34,7 @@ export default function AlertFeed({
   activeStation = 'maitri',
   canAcknowledge = true,
 }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [tab, setTab] = useState('active');
   const [history, setHistory] = useState({ station: null, rows: [], error: null });
   const [ackState, setAckState] = useState({});   // alertId → 'pending' | error text
@@ -189,7 +191,8 @@ export default function AlertFeed({
                           type="button"
                           className="alert-ack-btn"
                           onClick={(e) => acknowledge(e, alert.id)}
-                          disabled={ackState[alert.id] === 'pending'}
+                          disabled={ackState[alert.id] === 'pending' || !canWrite}
+                          title={writeBlockedTitle || 'Record that an operator has seen this alert'}
                           data-testid="alert-ack-btn"
                         >
                           {ackState[alert.id] === 'pending' ? 'Acknowledging…' : 'Acknowledge'}

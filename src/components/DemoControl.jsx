@@ -12,6 +12,7 @@ import {
 } from 'react-icons/lu';
 import './DemoControl.css';
 import { apiGet, apiPost } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 import { usePolling } from '../hooks/usePolling';
 
 
@@ -32,6 +33,7 @@ const SCENARIO_COLORS = {
 };
 
 export default function DemoControl({ activeStation = 'maitri' }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [isOpen, setIsOpen] = useState(false);
   const [scenarios, setScenarios] = useState({});
   const [activeScenario, setActiveScenario] = useState(null);
@@ -161,7 +163,8 @@ export default function DemoControl({ activeStation = 'maitri' }) {
                     key={id}
                     className={`demo-scenario-btn ${activeScenario === id ? 'active' : ''} ${injecting === id ? 'injecting' : ''}`}
                     onClick={() => triggerScenario(id)}
-                    disabled={activeScenario === id}
+                    disabled={activeScenario === id || !canWrite}
+                    title={writeBlockedTitle || `Inject ${scenario.name} on this station`}
                     style={{ '--scenario-color': SCENARIO_COLORS[id] || '#f87171' }}
                   >
                     <span className="demo-scenario-icon" style={{ color: SCENARIO_COLORS[id] }}>
@@ -180,7 +183,12 @@ export default function DemoControl({ activeStation = 'maitri' }) {
             </div>
 
             {/* Reset button */}
-            <button className="demo-reset-btn btn-secondary" onClick={resetAll}>
+            <button
+              className="demo-reset-btn btn-secondary"
+              onClick={resetAll}
+              disabled={!canWrite}
+              title={writeBlockedTitle || 'Clear every injected scenario'}
+            >
               <LuRotateCcw size={14} strokeWidth={1.5} /> Reset All to Normal
             </button>
           </motion.div>

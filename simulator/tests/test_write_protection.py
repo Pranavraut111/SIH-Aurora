@@ -198,3 +198,42 @@ def test_acknowledge_is_rejected_without_a_token(protected):
     # The acknowledgement is in the persisted history, attributed to the operator.
     history = protected.get("/api/alerts/history?stationId=bharati&limit=50").json()["alerts"]
     assert any(h["id"] == alert_id and h["acknowledgedBy"] == "operator" for h in history)
+
+
+# ── The session probe the UI logs in with ───────────────────────────────────
+def test_session_reports_protection_on_and_a_valid_token(protected):
+    body = protected.get("/api/admin/session").json()
+    assert body == {"writeProtected": True, "authenticated": False}
+
+    ok = protected.get("/api/admin/session", headers={"X-Admin-Token": TOKEN}).json()
+    assert ok == {"writeProtected": True, "authenticated": True}
+
+    bad = protected.get("/api/admin/session", headers={"X-Admin-Token": WRONG}).json()
+    assert bad == {"writeProtected": True, "authenticated": False}
+
+
+def test_session_reports_no_protection_when_the_token_is_unset(unprotected):
+    assert unprotected.get("/api/admin/session").json() == {
+        "writeProtected": False, "authenticated": True}
+
+
+def test_session_never_leaks_the_token(protected):
+    for headers in ({}, {"X-Admin-Token": WRONG}, {"X-Admin-Token": TOKEN}):
+        res = protected.get("/api/admin/session", headers=headers)
+        assert TOKEN not in res.text
+
+
+def test_cors_allows_the_admin_token_header(protected):
+    """Local dev is cross-origin (Vite:5173 -> backend:8080), so a preflight must permit
+    X-Admin-Token or the operator login cannot send it."""
+    res = protected.options(
+        "/api/sim/reset",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-admin-token,content-type",
+        },
+    )
+    assert res.status_code == 200, res.text
+    allowed = res.headers["access-control-allow-headers"].lower()
+    assert "x-admin-token" in allowed

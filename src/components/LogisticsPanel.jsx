@@ -13,6 +13,7 @@ import {
 } from 'react-icons/lu';
 import './LogisticsPanel.css';
 import { apiGet, apiPost, describeApiError } from '../services/api';
+import { useAdminToken } from '../hooks/useAdminToken';
 import { stationMeta } from '../data/stationConfig';
 import { getOperatorName, setOperatorName as persistOperatorName, OPERATOR_NAME_RE } from '../services/operator';
 
@@ -25,6 +26,7 @@ const CATEGORY_ICONS = {
 };
 
 export default function LogisticsPanel({ activeStation = 'maitri' }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const [items, setItems] = useState([]);
   const [editingItem, setEditingItem] = useState(null);
   const [formCurrent, setFormCurrent] = useState('');
@@ -150,7 +152,8 @@ export default function LogisticsPanel({ activeStation = 'maitri' }) {
                 <button
                   className="btn-edit-item"
                   onClick={() => handleOpenEdit(item)}
-                  title="Update Stock Count"
+                  disabled={!canWrite}
+                  title={writeBlockedTitle || 'Update Stock Count'}
                 >
                   <LuPencil size={14} />
                 </button>
@@ -273,7 +276,12 @@ export default function LogisticsPanel({ activeStation = 'maitri' }) {
                   <button type="button" className="btn-cancel" onClick={() => setEditingItem(null)}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn-save">
+                  <button
+                    type="submit"
+                    className="btn-save"
+                    disabled={!canWrite}
+                    title={writeBlockedTitle || 'Write the new count to the station ledger'}
+                  >
                     Save to Station Database
                   </button>
                 </div>

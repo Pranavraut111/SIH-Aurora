@@ -7,6 +7,7 @@
      It NEVER returns fake/fallback data — callers decide what to show.
    ═══════════════════════════════════════════════════════════════ */
 import { API_PREFIX } from '../config';
+import { clearToken, getToken } from './adminToken';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -40,6 +41,12 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
+  // Write routes need the operator token (see src/services/adminToken.js). Sending it on
+  // reads too is harmless and keeps the session probe simple.
+  const adminToken = getToken();
+  if (adminToken && !init.headers['X-Admin-Token']) {
+    init.headers['X-Admin-Token'] = adminToken;
+  }
 
   let res;
   try {
@@ -66,6 +73,8 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
     }
   }
   if (!res.ok) {
+    // A rejected token is a stale token: drop it so the UI stops claiming to be logged in.
+    if (res.status === 401) clearToken();
     throw new ApiError(`HTTP ${res.status} from ${method} ${url}`, { kind: 'http', status: res.status, url, body: data });
   }
   return data;
@@ -75,10 +84,25 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
 export const apiGet = (path, opts) => request(joinUrl(API_PREFIX, path), { ...opts, method: 'GET' });
 export const apiPost = (path, body, opts) => request(joinUrl(API_PREFIX, path), { ...opts, method: 'POST', body });
 
+/** True when the server rejected our operator token (or we had none). */
+export function isAuthError(err) {
+  return err?.kind === 'http' && err.status === 401;
+}
+
+/** True when we were rate limited (nginx returns 429 with a `detail` message). */
+export function isRateLimited(err) {
+  return err?.kind === 'http' && err.status === 429;
+}
+
 /** Human-readable message for an ApiError (FastAPI 422 detail lists, 404/503 detail strings). */
 export function describeApiError(err) {
   if (!err) return '';
   if (err.kind === 'http') {
+    if (err.status === 401) return 'Operator login required for this action';
+    if (err.status === 429) {
+      return err.body?.detail || 'Too many requests — please slow down and try again shortly';
+    }
+    if (err.status === 413) return err.body?.detail || 'Request too large';
     const detail = err.body?.detail;
     if (Array.isArray(detail)) {
       return detail.map((d) => (typeof d === 'string' ? d : `${(d.loc || []).slice(1).join('.')}: ${d.msg}`)).join('; ');

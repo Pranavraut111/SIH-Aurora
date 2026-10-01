@@ -14,6 +14,7 @@ import {
   LuWifi,
   LuWifiOff,
 } from 'react-icons/lu';
+import { useAdminToken } from '../hooks/useAdminToken';
 import './ConnectionPanel.css';
 
 const SOURCE_LABELS = {
@@ -33,6 +34,7 @@ export default function ConnectionPanel({
   telemetryBadge = 'connecting',
   provenance,
 }) {
+  const { canWrite, writeBlockedTitle } = useAdminToken();
   const src = SOURCE_LABELS[telemetryBadge] || SOURCE_LABELS.connecting;
 
   return (
@@ -115,6 +117,8 @@ export default function ConnectionPanel({
               <button
                 className={`conn-toggle-btn ${isConnected ? 'disconnect' : 'reconnect'}`}
                 onClick={onToggleConnection}
+                disabled={!canWrite}
+                title={writeBlockedTitle || undefined}
               >
                 {isConnected ? (
                   <>
