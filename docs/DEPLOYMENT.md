@@ -284,7 +284,7 @@ against the published snapshot) and the explain routes. They are rate-limited in
 
 | Scope | Limit |
 |---|---|
-| `/api/*` | 10 req/s, burst 20 |
+| `/api/*` | 30 req/s, burst 60 (per client address — NAT'd viewers share it) |
 | the AI explain routes | 5 req/min, burst 2 |
 | concurrent connections | 64 |
 | request body | 64 kB (`413` beyond) |

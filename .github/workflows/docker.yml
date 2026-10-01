@@ -406,9 +406,10 @@ jobs:
           grep -q 'please slow down' /tmp/429.json \
             || { echo "::error::429 body is not the friendly JSON message"; exit 1; }
 
-          # The general /api zone is 10r/s with burst 20: 200 rapid requests must trip it.
+          # The general /api zone is 30r/s with burst 60; a tight sequential loop runs far
+          # faster than that, so it must trip within a few hundred requests.
           got429=0
-          for i in $(seq 1 200); do
+          for i in $(seq 1 400); do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost/api/station/maitri/state")
             if [ "$code" = "429" ]; then got429=1; echo "general zone 429 after $i requests"; break; fi
           done

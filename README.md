@@ -223,7 +223,7 @@ memory only, so refreshing signs you out. Without a login the dashboard is fully
 write controls are disabled with the reason in their tooltip. With no `ADMIN_TOKEN`
 configured the pill is not shown at all, so local development is unchanged.
 
-nginx adds per-address rate limits (10 r/s on `/api`, 5 r/min on the explain routes,
+nginx adds per-address rate limits (30 r/s on `/api`, 5 r/min on the explain routes,
 64 concurrent connections) and a 64 kB body cap, returning `429`/`413` with a readable
 message. `GROQ_MAX_CALLS_PER_HOUR` bounds LLM spend regardless.
 

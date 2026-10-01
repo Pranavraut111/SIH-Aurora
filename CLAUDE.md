@@ -76,7 +76,7 @@
   token is accepted, so with `ADMIN_TOKEN` unset local dev keeps every control enabled.
 - `APP_ENV=production` → the backend refuses to start if `ADMIN_TOKEN` is empty or
   `ALLOWED_ORIGINS` still mentions localhost (`config.check_production_config()`).
-- Limits live in `docker/nginx.conf` (10 r/s on `/api`, 5 r/min on explain, 64 kB bodies)
+- Limits live in `docker/nginx.conf` (30 r/s on `/api`, 5 r/min on explain, 64 kB bodies)
   and `GROQ_MAX_CALLS_PER_HOUR` in `simulator.py`.
 
 ## Honesty / provenance

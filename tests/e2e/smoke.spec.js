@@ -20,17 +20,24 @@ const API = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.API_PORT
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const WRITE_HEADERS = ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {};
 
+// Sidebar label -> text that only THAT module's panel renders. These are the panels'
+// own headings, which differ from the sidebar labels (the weather module is labelled
+// "Weather Observations" but its heading reads "Meteorological & AWS Observations").
+// The tour asserts the marker so it catches "the sidebar switched but the panel did not"
+// rather than merely "something is on screen" — a real bug hid there: Suspense inside
+// AnimatePresence mode="wait" left the previous panel mounted while the next module's
+// chunk loaded.
 const MODULES = [
-  'Mission Overview',
-  'Weather Observations',
-  'Infrastructure',
-  'Energy Grid',
-  'Logistics & Supply',
-  'Remote C&C',
-  'What-If Sim',
-  'AI Diagnostics',
-  'Station Reports',
-  'System Admin',
+  ['Mission Overview', null],
+  ['Weather Observations', /Meteorological & AWS Observations/i],
+  ['Infrastructure', /Station Infrastructure & Subsystems/i],
+  ['Energy Grid', /Microgrid & Power/i],
+  ['Logistics & Supply', /Logistics & Critical Supplies/i],
+  ['Remote C&C', /Remote Commands/i],
+  ['What-If Sim', /Digital Twin/i],
+  ['AI Diagnostics', /Anomaly detection/i],
+  ['Station Reports', /Station Operations Report Generator/i],
+  ['System Admin', /System Administration & Ingestion Pipeline/i],
 ];
 
 /** Vite's dev client and source maps are not the app under test. */
@@ -118,7 +125,7 @@ test('every module opens cleanly', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.overview-stage')).toBeVisible();
 
-  for (const label of MODULES) {
+  for (const [label, marker] of MODULES) {
     await page.locator('.sidebar-item', { hasText: label }).click();
     const item = page.locator('.sidebar-item.active', { hasText: label });
     await expect(item, `${label} did not become the active module`).toBeVisible();
@@ -126,6 +133,12 @@ test('every module opens cleanly', async ({ page }) => {
     // and never the ErrorBoundary fallback.
     await expect(page.locator('.overview-stage, .module-content-scroll')).toBeVisible();
     await expect(page.getByTestId('error-boundary'), `${label} crashed`).toHaveCount(0);
+    // The panel on screen must be THIS module's, and the loading placeholder must clear.
+    if (marker) {
+      await expect(page.getByTestId('panel-fallback')).toHaveCount(0);
+      await expect(page.locator('.module-content-scroll'),
+                   `${label} was selected but its panel did not render`).toContainText(marker);
+    }
   }
 
   expect(consoleErrors, 'console errors while touring the modules').toEqual([]);
@@ -203,11 +216,16 @@ test('viewing needs no login, and writes are refused without one', async ({ page
   await expect(sync).toHaveAttribute('title', 'Operator login required');
 
   // The API agrees: the same write is a 401 unauthenticated and a 200 with the token.
+  // The 401 is deterministic — require_admin rejects before the proxy is attempted.
   const denied = await request.post(`${API}/api/sim/reset?stationId=maitri`);
   expect(denied.status()).toBe(401);
-  const allowed = await request.post(`${API}/api/sim/reset?stationId=maitri`,
-                                     { headers: WRITE_HEADERS });
-  expect(allowed.status()).toBe(200);
+  // The authenticated case proxies to the simulator, whose readiness is independent of
+  // the backend's, so a momentary 503 here is startup timing rather than an auth failure.
+  await expect
+    .poll(async () => (await request.post(`${API}/api/sim/reset?stationId=maitri`,
+                                          { headers: WRITE_HEADERS })).status(),
+          { timeout: 30_000, message: 'authenticated write never succeeded' })
+    .toBe(200);
 
   // Signing in enables the controls again.
   await operatorLogin(page);
