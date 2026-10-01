@@ -266,20 +266,30 @@ jobs:
           docker compose up -d --force-recreate backend simulator
           docker compose ps
 
-      - name: Write — nginx still reaches the recreated backend
+      # Both services were just recreated, so wait for the backend to answer through
+      # nginx AND for it to see the simulator again. /api/sim/* is a proxy route: without
+      # the second wait it answers 503 (simulator still starting), not the 200 the
+      # authenticated case asserts.
+      - name: Write — nginx reaches the backend and the backend sees the simulator
         run: |
-          for i in $(seq 1 40); do
-            if curl -fsS -m 3 http://localhost/api/health > /tmp/wp-health.json 2>/dev/null; then
-              echo "backend reachable through nginx after $((i * 3))s"
-              cat /tmp/wp-health.json | head -c 300; echo
+          for i in $(seq 1 60); do
+            if curl -fsS -m 3 http://localhost/api/health > /tmp/wp-health.json 2>/dev/null \
+               && python3 -c "
+          import json,sys
+          h = json.load(open('/tmp/wp-health.json'))
+          sys.exit(0 if h['db']['ok'] and h['simulator']['reachable'] else 1)
+          " 2>/dev/null; then
+              echo "backend and simulator both back after $((i * 3))s"
+              head -c 300 /tmp/wp-health.json; echo
               exit 0
             fi
             sleep 3
           done
-          echo "::error::nginx could not reach the recreated backend"
+          echo "::error::the recreated stack never came back through nginx"
           curl -sS -o /dev/null -w 'status %{http_code}\n' http://localhost/api/health || true
+          cat /tmp/wp-health.json 2>/dev/null || true
           docker compose ps
-          docker compose logs --tail=60 frontend backend
+          docker compose logs --tail=60 frontend backend simulator
           exit 1
 
       - name: Write — the backend picked the token up
@@ -312,10 +322,15 @@ jobs:
         env:
           ADMIN_TOKEN: ci-operator-token
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+          code=$(curl -s -o /tmp/wp-write.json -w '%{http_code}' -X POST \
             -H "X-Admin-Token: ${ADMIN_TOKEN}" \
             "http://localhost/api/sim/reset?stationId=maitri")
-          test "$code" = "200" || { echo "::error::expected 200, got $code"; exit 1; }
+          cat /tmp/wp-write.json; echo
+          test "$code" = "200" || {
+            echo "::error::expected 200, got $code (503 here means the proxied simulator, not auth)"
+            docker compose logs --tail=40 simulator
+            exit 1
+          }
 
       - name: Write — reads stay public with protection on
         run: |
