@@ -1,0 +1,30 @@
+# Aurora — optional pre-commit hooks (ruff on Python, oxlint on JS/JSX).
+# NOT installed automatically. To opt in:
+#     .venv/bin/pip install pre-commit && .venv/bin/pre-commit install
+# To run it once over everything without installing the hook:
+#     .venv/bin/pre-commit run --all-files
+# `ruff format` is deliberately absent — see the note in CLAUDE.md.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9           # keep in step with requirements-dev.txt
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: local
+    hooks:
+      - id: oxlint
+        name: oxlint (staged JS/JSX)
+        language: system
+        entry: npx oxlint
+        files: ^src/.*\.(js|jsx)$
+        pass_filenames: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+        exclude: ^(simulator/(weather_cache|data_store)/|.*\.pkl$|.*\.md$)
+      - id: trailing-whitespace
+        exclude: ^(simulator/(weather_cache|data_store)/|.*\.pkl$|.*\.md$)

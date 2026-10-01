@@ -40,8 +40,10 @@
 - DB changes go through `simulator/migrations/NNN_*.py` (run by `init_db()`, idempotent, recorded in `schema_migrations`).
 
 ## Running locally
-- Python venv lives at the repo root: `python3 -m venv .venv && .venv/bin/pip install -r simulator/requirements.txt`
-  (`.venv/` is gitignored). Then `npm install` and `./start.sh` (Windows: `start.ps1`), which starts
+- `make setup` once (creates `.venv/`, installs Python + Node deps and Playwright chromium),
+  then `cp .env.example .env` and `make dev`. `make help` lists every target.
+  By hand: `python3 -m venv .venv && .venv/bin/pip install -r simulator/requirements.txt -r requirements-dev.txt`
+  (`.venv/` is gitignored), `npm install`, then `./start.sh` (Windows: `start.ps1`), which starts
   backend → waits for `/api/health` → simulator → Vite, and stops all of them on Ctrl-C.
 - **Firebase is disabled** (P0-6). It had public read/write rules and duplicated
   persistence. It only initialises with `VITE_ENABLE_FIREBASE=true` + config, and
@@ -80,9 +82,29 @@
 - Never commit `.env` files or secrets. Only `.env.example` (placeholders) is tracked.
 - Setup: copy `.mcp.json.example` to `.mcp.json` and set `cwd` to your local repo path (`.mcp.json` is gitignored).
 
+## Tests and lint
+- One command each: `make test` (pytest + Vitest), `make lint` (ruff + oxlint), `make e2e`.
+- **Python:** `pytest` from the repo root — config in `pyproject.toml` (`testpaths = simulator/tests`).
+  247 tests, offline. Two markers are deselected by default: `ml` (needs
+  `make setup-ml` for torch + chronos; `make test-ml`) and `slow` (ERA5 walk-forward;
+  `make test-slow`). Warnings raised by our own code are errors. `make coverage` reports
+  `simulator/` coverage (currently 70%).
+- **Frontend:** `npm test` (Vitest + jsdom, 56 tests). Tests live next to their module as
+  `*.test.js(x)`; `src/test/setup.js` adds the jest-dom matchers.
+- **E2E:** `npm run test:e2e` (Playwright). `playwright.config.js` starts backend → simulator
+  → Vite itself, runs chromium with software WebGL, and writes to a throwaway `DB_PATH` so the
+  committed demo database is never touched. It needs no secrets: `GROQ_API_KEY` is cleared.
+- `ruff check .` must exit 0. `ruff format` is **not** enforced — it would reflow 43 of 57 files;
+  `make format-check` shows what it would do.
+- CI (`.github/workflows/ci.yml`) runs on every push to `main` and every PR: python (ruff +
+  pytest + coverage), frontend (lint + vitest + build on Node 20 and 22), e2e (after both),
+  and a gitleaks secret scan. No secrets are configured, and none may be needed.
+- Optional: `.pre-commit-config.yaml` runs ruff + oxlint on staged files. Not installed by
+  default — `.venv/bin/pip install pre-commit && .venv/bin/pre-commit install` to opt in.
+
 ## After every change
-1. `make test` — `pytest` (repo root, 247 tests, no network) + `npm test` (Vitest)
-2. `make lint` — `ruff check .` + `npm run lint`
+1. `make test`
+2. `make lint`
 3. `npm run build`
 4. Commit with a conventional commit message (`fix:`, `chore:`, `refactor:`, `docs:` …)
    and `git push`.

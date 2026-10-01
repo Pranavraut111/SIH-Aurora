@@ -1,5 +1,7 @@
 # AURORA — Antarctic Research Station Digital Twin
 
+[![CI](https://github.com/Saeesh-Vele/SIH2026A/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Saeesh-Vele/SIH2026A/actions/workflows/ci.yml)
+
 A physics-informed, AI-assisted digital twin for monitoring, predicting, diagnosing, and supporting operational decisions in remote Antarctic research stations.
 
 ---
