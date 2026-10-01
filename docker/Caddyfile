@@ -1,0 +1,41 @@
+# ═══════════════════════════════════════════════════════════════
+#  Aurora — Caddy (used only by docker-compose.https.yml).
+#  Caddy requests and renews the certificate itself; HTTP->HTTPS redirect and
+#  HSTS are on by default for a site with a real hostname.
+# ═══════════════════════════════════════════════════════════════
+
+{
+	# ACME_EMAIL is required by the compose overlay, so this is never empty.
+	email {$ACME_EMAIL}
+	# Uncomment to use the staging CA while testing, so a mistake does not burn through
+	# the production rate limit:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# One upstream for everything: nginx already splits the static bundle from /api
+	# and /ws, and Caddy's reverse_proxy handles the WebSocket upgrade transparently.
+	reverse_proxy frontend:80 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		# The telemetry stream is long-lived and only pushes on each backend tick.
+		transport http {
+			read_timeout 3600s
+			write_timeout 3600s
+		}
+	}
+
+	# nginx sets the application security headers (CSP et al.); add the one that only
+	# makes sense once TLS is terminated.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}

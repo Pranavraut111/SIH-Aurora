@@ -1,0 +1,28 @@
+# ═══════════════════════════════════════════════════════════════
+#  Aurora — offline overlay. Proves the stack works on a server with no route to the
+#  internet: Open-Meteo, the NCPOR page, Groq and HuggingFace are all optional and must
+#  degrade honestly (CLAUDE.md: never present fabricated data as real).
+#
+#      docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d
+#
+#  The Python services join only `aurora-internal`, a network Docker gives no external
+#  route. nginx stays on both, so the UI is still published on HTTP_PORT while it reaches
+#  the backend over the internal network.
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  frontend:
+    networks: [aurora, aurora-internal]
+
+  backend:
+    networks: !reset
+      - aurora-internal
+
+  simulator:
+    networks: !reset
+      - aurora-internal
+
+networks:
+  aurora-internal:
+    driver: bridge
+    internal: true

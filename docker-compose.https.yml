@@ -1,0 +1,71 @@
+# ═══════════════════════════════════════════════════════════════
+#  Aurora — HTTPS overlay (optional). Puts Caddy in front of nginx: it obtains and
+#  renews a Let's Encrypt certificate automatically, redirects HTTP to HTTPS and
+#  proxies the WebSocket.
+#
+#      # in .env:  DOMAIN=aurora.example.org   ACME_EMAIL=you@example.org
+#      #           ALLOWED_ORIGINS=https://aurora.example.org
+#
+#  Needs Docker Compose v2.24+ for the `!reset` tag used below.
+#      docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+#  DOMAIN must already resolve to this server's public IP, and ports 80 and 443 must
+#  be open (80 is required for the ACME HTTP-01 challenge, and carries the redirect).
+#  Without a domain, use docker-compose.yml on its own over plain HTTP.
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  # The UI is no longer published directly: Caddy terminates TLS and forwards to it
+  # over the internal network. `ports: !reset []` drops the base file's mapping
+  # instead of merging with it.
+  frontend:
+    ports: !reset []
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      frontend:
+        condition: service_healthy
+    environment:
+      # Caddy fails fast with a clear message if DOMAIN is unset.
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env to the hostname this server answers on}
+      # Required: Caddy's ACME account needs a contact address, and an empty `email`
+      # in the Caddyfile is a config error. Let's Encrypt uses it for expiry warnings.
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env to a contact address for Let's Encrypt}
+    ports:
+      - "${HTTPS_REDIRECT_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"   # HTTP/3
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account keys. Losing this volume means re-issuing, and
+      # Let's Encrypt rate-limits that, so keep it.
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [aurora]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # The browser's origin is now https://DOMAIN, and the backend enforces that list on
+  # WebSocket upgrades — so override it here rather than making the operator remember.
+  backend:
+    environment:
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${DOMAIN}}
+
+  simulator:
+    environment:
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://${DOMAIN}}
+
+volumes:
+  caddy-data:
+  caddy-config:
