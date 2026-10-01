@@ -492,7 +492,7 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 | Equipment anomaly detection (IsolationForest) | Infra | ❌ | `anomaly_engine.py`, `/api/anomaly` :8001 | Continuous false positives (VERIFIED); **not shown in UI** |
 | Decision engine / risk rules | All | ⚠️ | `decision_engine.py` | Works, but driven by the broken anomaly input; **not shown in UI** |
 | Groq LLM explanation | All | ⚠️ | `simulator.py:1003-1069` | Works on :8001 with key; **UI calls :8080 instead**, which returns a fixed template that ignores the question (VERIFIED) |
-| Voice assistant ("JARVIS") | All | 🧪 | `OverviewHUD.jsx:42-160`, `AiPanel.jsx:104-154` | Speech in/out works in browser; backend ignores `freeText`, so every answer is the same briefing |
+| Voice assistant | All | 🧪 | `OverviewHUD.jsx:42-160`, `AiPanel.jsx:104-154` | Speech in/out works in browser; backend ignores `freeText`, so every answer is the same briefing |
 | AI Diagnostics table | Infra | 🧪 | `AiPanel.jsx`, `unified_backend.py:361-386` | `predicted = actual × 0.98`; labelled "LSTM residual engine", "Neural Models"; mock fallbacks |
 | Threshold alerts (Java) | All | ✅ | `StationService.java:48-62,138-150` | Thresholds tuned for random-walk nominals, so false warnings in physics mode (VERIFIED) |
 | Threshold alerts (unified) | All | ⚠️ | `unified_backend.py:203-255` | Only gen_temp + wind; ignores admin thresholds |

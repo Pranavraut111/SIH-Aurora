@@ -294,7 +294,7 @@
   margin-bottom: 20px;
 }
 
-.btn-hud-jarvis {
+.btn-hud-voice {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -312,13 +312,13 @@
   transition: all 0.2s ease;
 }
 
-.btn-hud-jarvis:hover {
+.btn-hud-voice:hover {
   background: rgba(236, 72, 153, 0.2);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(236, 72, 153, 0.2);
 }
 
-.btn-hud-jarvis.speaking {
+.btn-hud-voice.speaking {
   background: rgba(236, 72, 153, 0.25);
   animation: borderPulsePink 1.5s infinite;
 }

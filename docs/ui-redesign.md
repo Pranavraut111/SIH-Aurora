@@ -1,5 +1,10 @@
 # UI redesign — Phase 1 proposal
 
+**Naming.** *Phase 1* is the UI/UX rework of everything except the 3D scene. It ships in two
+steps: **1A** — this audit, proposal and prototype (app shell + Energy grid) — and **1B**,
+the rollout of the remaining modules and overlays. *Phase 2* is reserved for the later
+rebuild of the 3D scene.
+
 Scope: everything except the 3D scene. `StationScene.jsx` (three.js scene, aurora, snow,
 mountains) is untouched; only the container around it changes. Evidence for every problem
 named here is in [ui-audit/README.md](ui-audit/README.md); the prototype (app shell +
@@ -20,7 +25,7 @@ its place by carrying information; nothing moves unless state changed.
 `box-shadow`s, gradient text and gradient fills, the ambient blobs and noise overlay, the
 per-module accent colours, emojis used as status or decoration, decorative icons on
 headings/cards/tabs, monospace used for labels, uppercase badges next to titles, marketing
-copy ("POLAR DIGITAL TWIN MATRIX", "JARVIS MODE"), spring and hover-lift animation,
+copy ("POLAR DIGITAL TWIN MATRIX"), spring and hover-lift animation,
 animated counters, staggered entrances and infinite pulse animations.
 
 ---
@@ -161,7 +166,7 @@ colour can never be mistaken for a status.
     the last legacy panel is rebuilt.
   - **Measured on the prototype:** entry chunk 302 kB; *all* JavaScript loaded at startup
     497 kB raw / 158 kB gzip (main: 448 / 133). Budget: startup JS < 500 kB raw.
-    Phase 2 should come in lower as framer-motion, react-icons and the Space Grotesk /
+    1B should come in lower as framer-motion, react-icons and the Space Grotesk /
     Inter / JetBrains Mono fonts go.
 
 ---
@@ -200,9 +205,15 @@ colour can never be mistaken for a status.
 
   Plain labels ("Remote commands", not "Remote C&C"). It collapses to 64 px of icons with
   tooltips (sections become dividers) and becomes a temporary drawer below 900 px. The
-  current page has `aria-current="page"`. *Proposed for Phase 2:* the module and station
-  in the URL (`?module=energy&station=maitri`, History API, no router dependency), so a
-  refresh keeps your place and a page can be linked.
+  current page has `aria-current="page"`. **URL state (approved, in 1B):** the module and
+  station live in the query string (`?module=energy&station=maitri`) through the History
+  API, no router dependency. `pushState` on navigation, `popstate` restores, unknown values
+  fall back to `overview` / `maitri`, so a refresh keeps your place, Back works and a page
+  can be linked.
+- **Overview page** — the 3D scene is dark in both colour schemes, and so are the
+  overlays on it (station card, HUD tiles, Demo Control): they sit on the scene, not on the
+  page, so they use the dark tokens even when the shell is light (`data-color-scheme="dark"`
+  on the overview stage).
 - **Station switcher** — a segmented control in the app bar showing both stations at all
   times; the tooltip gives the full name, region and coordinates from
   `station_config.json`. Switching shows a toast ("Showing Bharati") and resets
@@ -216,7 +227,7 @@ colour can never be mistaken for a status.
   - telemetry time in IST + age
 
   On phones, low-priority labels collapse to icons and the strip scrolls horizontally.
-- **Alert centre** (Phase 2, replaces `AlertFeed`) — a right drawer with tabs **Active ·
+- **Alert centre** (1B, replaces `AlertFeed`) — a right drawer with tabs **Active ·
   Acknowledged · History**, sorted by severity then age. Each row shows: building, sensor,
   value vs threshold, raised time (IST + relative), Acknowledge (operator only, with
   confirmation and the `acknowledgedBy` name) and a "Show on twin" link that selects the
@@ -303,7 +314,10 @@ Current header (`docker/nginx-security-headers.conf`): `script-src 'self'; style
 'self' 'unsafe-inline'`. Emotion's injected `<style>` tags are therefore **already
 allowed** — the prototype needs no CSP change, and `script-src` is untouched.
 
-The redesign is a chance to *tighten* styles without touching scripts:
+**Decision: keep the current `style-src 'self' 'unsafe-inline'`.** The nonce scheme below
+was considered and declined; it is kept here for reference only.
+
+The option that was considered — tightening styles without touching scripts:
 
 ```
 style-src      'self';
@@ -320,8 +334,7 @@ style-src-attr 'unsafe-inline';
   and three.js set style *attributes*; nonces cannot cover attributes. Injected `<style>`
   elements — the meaningful injection vector — then require the nonce.
 - Browsers without CSP3 split directives (Safari < 15.4) fall back to `style-src 'self'`
-  and would drop inline styles, so this ships behind a flag after a browser check — or we
-  keep the current `style-src` and accept it (decision for you, §9).
+  and would drop inline styles — one reason it was declined.
 
 ### e2e
 `tests/e2e/smoke.spec.js` is already updated on the branch and passes (4/4 against the
@@ -332,12 +345,12 @@ local stack with write protection on):
 - Every module page is one `data-testid="module-panel"` with `data-module`; the tour
   asserts **exactly one** is mounted — this is what catches audit F1.
 - Markers: legacy panels keep their heading markers; migrated modules match their page
-  title (`data-testid="page-title"`). Each Phase 2 migration updates one marker.
+  title (`data-testid="page-title"`). Each 1B migration updates one marker.
 - Read-only text matched case-insensitively; all existing test ids kept
   (`data-source-badge`, `alerts-pill`, `operator-login`, `operator-token-input`,
   `operator-submit`, `operator-logout`, `alert-drawer`, `error-boundary`,
   `panel-fallback`, `station-2d-fallback`).
-- To add in Phase 2: a 390-px project (phone layout, drawer nav), a light-mode run, and
+- To add in 1B: a 390-px project (phone layout, drawer nav), a light-mode run, and
   an axe pass on each migrated page (the prototype's shell + Energy page has **0** axe
   violations in both modes at both widths).
 
@@ -352,7 +365,7 @@ restyled operator login, and **Energy grid** fully rebuilt. Fixed on the way: F1
 pages stacking) and F3 (invisible Read-only control). Removed: old TopBar/SidebarNav,
 ambient blobs, noise overlay.
 
-Not yet (Phase 2): the other nine modules and the overlays (alert centre, link drawer,
+Not yet (1B): the other nine modules and the overlays (alert centre, link drawer,
 building panel, timeline, Twin Inspector, Demo Control) still render in their legacy
 style inside `LegacySurface` (always dark, also in light mode); command palette, tour,
 toasts, confirmation dialogs, URL state; F2 (building panel readings) and F4 (old
@@ -364,18 +377,43 @@ Screenshots: `docs/ui-redesign/{dark,light}-{desktop,mobile}-energy[-full].png`,
 
 ---
 
-## 9. Open questions
+## 9. Decisions (2026-10-02)
 
-1. **Number grouping:** international `1,00,000 → 100,000` (prototype) or Indian
-   `1,00,000` (en-IN)? Operators are Indian; scientific convention is international.
-2. **CSP:** tighten to the nonce scheme in §7 (drops Safari < 15.4), or keep the current
-   `style-src 'self' 'unsafe-inline'`?
-3. **URL state:** add `?module=&station=` so pages can be linked and survive refresh?
-   (Small, no new dependency, but it is new behaviour.)
-4. **F1 on production:** hotfix `main` now (restore single-panel rendering, plus the e2e
-   assertion), or wait for the redesign to land?
-5. **"JARVIS MODE" and "Voice"** buttons: keep (relabelled "Voice assistant"), or drop?
-6. **Light mode for the 3D overview:** the scene stays dark in both modes (out of scope);
-   OK, or should the light shell switch to dark on the overview page?
-7. **Fonts:** IBM Plex Sans + Plex Mono acceptable, or is there an NCPOR / MoES typeface
-   to match?
+| # | Question | Decision |
+|---|---|---|
+| 1 | F1 on production | Hotfixed on `main` (`568c866`, single-panel rendering + e2e assertion), deployed. |
+| 2 | Number grouping | International (`100,000`). |
+| 3 | CSP | Keep `style-src 'self' 'unsafe-inline'`; no nonce scheme. |
+| 4 | URL state | Yes — `?module=&station=` via the History API, in 1B. |
+| 5 | Voice button | Renamed "Voice assistant"; the old codename is removed from UI, code and docs. |
+| 6 | 3D overview in light mode | The scene and the overlays on the overview page stay dark in both modes. |
+| 7 | Fonts | IBM Plex Sans + IBM Plex Mono approved. |
+
+## 10. Polar identity for 1B (proposal)
+
+Restraint without blandness: identity comes from real station facts drawn precisely, not
+from effects. No glow, no gradients, no new colours.
+
+- **Station identity block** in the overview and in every page header's meta area: station
+  name set large (Plex Sans 600), region, coordinates in Plex Mono (`70.77° S 11.73° E`),
+  elevation and winter crew — all from `station_config.json`, each with its confidence note
+  in a tooltip. A thin hairline rule and generous whitespace do the framing.
+- **Map locator:** a small (≈120 px) south-polar stereographic outline of Antarctica,
+  pre-projected from Natural Earth 1:110m (public domain) into one inline SVG path
+  (~4 kB, self-hosted, no tiles, offline/CSP-safe). Both stations are plotted; the selected
+  one is a filled accent dot with its name, the other a hollow neutral dot that switches
+  station on click. 1-px strokes in the divider colour, graticule rings at 60°/70°/80° S.
+- **Polar day / night state**, computed rather than invented: solar elevation from the
+  NOAA solar-position algorithm for the station's coordinates at the time the data refers to
+  (the ERA5 replay clock while replaying, wall-clock otherwise), shown as *Polar night ·
+  sun 4.2° below horizon all day*, *Twilight*, *Day · sunset 18:42 IST* or *Polar day ·
+  midnight sun*, with a small sun-path arc (a 24-h elevation curve against the horizon line)
+  and labelled MODEL-DERIVED. Cross-checkable against ERA5 shortwave radiation
+  (`solar_radiation`, already read in `weather_data.py`) if we expose it through the API.
+- **Headline figures with real typographic contrast:** one hero figure per page in Plex
+  Mono 40–48 px / weight 500 (outside temperature on the overview, generation on Energy,
+  autonomy on Logistics) beside 12–13 px labels, so the page has an obvious first read; the
+  remaining KPIs stay at 28 px. Units in secondary colour at 40 % of the figure's size.
+- **Small cold details, all functional:** coordinates and UTC offset in the station block,
+  wind chill shown next to temperature where both exist, and the replay date as a quiet
+  caption ("ERA5 replay · 3 Sep 2026") so a reader always knows which day the twin shows.

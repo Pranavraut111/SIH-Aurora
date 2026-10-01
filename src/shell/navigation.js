@@ -4,7 +4,7 @@
    (later) command palette and product tour all read from here.
 
    `migrated: true` marks modules already rebuilt on the new design system;
-   the rest render their legacy panel inside <LegacySurface> until Phase 2.
+   the rest render their legacy panel inside <LegacySurface> until rollout 1B.
    ═══════════════════════════════════════════════════════════════ */
 import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined';
 import ApartmentOutlined from '@mui/icons-material/ApartmentOutlined';

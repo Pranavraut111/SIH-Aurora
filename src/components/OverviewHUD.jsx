@@ -41,7 +41,7 @@ export default function OverviewHUD({
   const wind = num(envData.env_wind);
   const power = num(genData.gen_power);
   
-  const [isJarvisMode, setIsJarvisMode] = useState(false);
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   
   // We need a ref to hold the recognition instance so we can stop/start it
@@ -59,7 +59,7 @@ export default function OverviewHUD({
         || voices.find(v => v.lang === 'en-GB' || v.lang === 'en-US');
       if (preferredVoice) utterance.voice = preferredVoice;
       
-      utterance.rate = 1.1; // JARVIS is brisk
+      utterance.rate = 1.1; // slightly brisk, still clear
       utterance.pitch = 0.9;
       
       utterance.onend = () => {
@@ -95,15 +95,15 @@ export default function OverviewHUD({
     }
   };
 
-  const toggleJarvisMode = () => {
-    if (isJarvisMode) {
+  const toggleVoiceMode = () => {
+    if (isVoiceMode) {
       // Turn OFF
       if (recognition) {
         recognition.onend = null;
         recognition.stop();
       }
       window.speechSynthesis.cancel();
-      setIsJarvisMode(false);
+      setIsVoiceMode(false);
       setIsSpeaking(false);
     } else {
       // Turn ON
@@ -121,25 +121,25 @@ export default function OverviewHUD({
         const last = event.results.length - 1;
         if (event.results[last].isFinal) {
           const transcript = event.results[last][0].transcript.trim();
-          console.log("[JARVIS Hears]:", transcript);
+          console.log("[Voice] heard:", transcript);
           
-          // Wake word logic or general conversational mode. If JARVIS mode is on, we process everything.
+          // Conversational mode: while the voice assistant is on, every utterance is processed.
           // Pause recognition while speaking so it doesn't hear itself
           rec.stop();
           await processQuery(transcript);
           
-          // Restart listening after speaking if still in JARVIS mode
+          // Restart listening after speaking if the voice assistant is still on
           // Note: state might be stale here, but rec.onend will handle restart
         }
       };
       
-      rec.onerror = (e) => console.log('JARVIS Mic Error:', e.error);
+      rec.onerror = (e) => console.warn('[Voice] microphone error:', e.error);
       
       rec.onend = () => {
         // If mode is still true, restart listening (continuous mode often stops on silence)
         // We use a small timeout to avoid thrashing
         setTimeout(() => {
-          if (document.querySelector('.btn-hud-jarvis.listening') && !document.querySelector('.btn-hud-jarvis .pulse-icon.speaking')) {
+          if (document.querySelector('.btn-hud-voice.listening') && !document.querySelector('.btn-hud-voice .pulse-icon.speaking')) {
             try { rec.start(); } catch (e) { console.warn('[Voice] could not restart recognition', e); }
           }
         }, 300);
@@ -147,8 +147,8 @@ export default function OverviewHUD({
       
       setRecognition(rec);
       rec.start();
-      setIsJarvisMode(true);
-      speak("JARVIS voice interface initialized. Say 'Hello Aurora' or ask your question directly.");
+      setIsVoiceMode(true);
+      speak("Voice assistant on. Say 'Hello Aurora' or ask your question directly.");
     }
   };
 
@@ -241,12 +241,12 @@ export default function OverviewHUD({
             </button>
           )}
           <button
-            className={`btn-hud-jarvis ${isJarvisMode ? 'listening' : ''}`}
-            onClick={toggleJarvisMode}
-            title="Toggle Continuous JARVIS Voice Assistant"
+            className={`btn-hud-voice ${isVoiceMode ? 'listening' : ''}`}
+            onClick={toggleVoiceMode}
+            title="Turn the voice assistant on or off (continuous listening)"
           >
-            <LuMic size={15} className={isJarvisMode ? 'pulse-icon' : ''} />
-            <span>{isJarvisMode ? (isSpeaking ? 'JARVIS SPEAKING...' : 'JARVIS LISTENING...') : 'JARVIS MODE'}</span>
+            <LuMic size={15} className={isVoiceMode ? 'pulse-icon' : ''} />
+            <span>{isVoiceMode ? (isSpeaking ? 'Speaking…' : 'Listening…') : 'Voice assistant'}</span>
           </button>
         </div>
 

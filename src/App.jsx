@@ -241,7 +241,7 @@ export default function App() {
         <main className="main-stage" id="main">
           {activeModule === 'overview' ? (
             <LegacySurface className="overview-stage" data-tour="overview">
-              {/* 3D Twin Scene — unchanged in Phase 1 */}
+              {/* 3D Twin Scene — unchanged until the Phase 2 rebuild */}
               <div className="scene-container">
                 <ErrorBoundary name="3D station view">
                   <Suspense fallback={<PanelFallback name="3D station view" />}>
@@ -271,7 +271,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* ── Overlays (legacy styling until Phase 2) ── */}
+      {/* ── Overlays (legacy styling until rollout 1B) ── */}
       <LegacySurface sx={{ display: 'contents' }}>
         <Suspense fallback={null}>
           {mounted.link && (

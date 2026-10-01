@@ -59,7 +59,7 @@
   padding: 24px 32px 48px;
 }
 
-/* Legacy panels keep their own spacing until they are rebuilt (Phase 2). */
+/* Legacy panels keep their own spacing until they are rebuilt (rollout 1B). */
 .module-content-scroll.legacy {
   padding: 24px;
 }

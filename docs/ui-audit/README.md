@@ -70,7 +70,7 @@ What that looks like on screen:
 - **V5 Decorative icons and emojis.** An icon on every heading, card and tab; emojis as
   status (`🟢 REANALYSIS`, `🟡 MODEL`, `🔵 SIMULATED`, `⚡ Digital Twin Inspector`,
   `📄 📐 ⚙️` in `TwinInspector.jsx`; `⚡` bullets in What-If).
-- **V6 Marketing copy and gimmicks.** "POLAR DIGITAL TWIN MATRIX", "JARVIS MODE", "Cascading
+- **V6 Marketing copy and gimmicks.** "POLAR DIGITAL TWIN MATRIX", "Cascading
   Dependency & AI Risk Topology", "Mission Navigation · LIVE"; a monospace uppercase badge
   next to most titles.
 - **V7 Typography soup.** Mono used for labels and pills as decoration (105 `font-mono`
@@ -134,7 +134,7 @@ What that looks like on screen:
   title. The link-loss toggle is a destructive action with no confirmation.
 
 ### Mission Overview — `desktop-01-overview.jpg`
-- Visual: station card with "JARVIS MODE" pink outline button; four HUD tiles with coloured
+- Visual: station card with a pink outline voice-assistant button (since renamed "Voice assistant"); four HUD tiles with coloured
   icon boxes; "8/8 OK" tile in green regardless of what was evaluated; Demo Control gear
   FAB overlaps the last HUD tile.
 - UX: the HUD repeats values already in the top bar (alerts) and Weather; "Mean Winter: not
