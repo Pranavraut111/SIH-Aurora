@@ -19,7 +19,7 @@ import logging
 import time
 import math
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from units import cache_wind_unit, wind_factor_to_kmh
 import station_config
@@ -74,7 +74,7 @@ class WeatherDataLayer:
             self.target_date = date
         else:
             # Default: 30 days ago (safe window for ERA5 availability)
-            self.target_date = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+            self.target_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 
     def fetch_and_cache(self):
         """Download weather data and save to local cache file."""
@@ -86,7 +86,7 @@ class WeatherDataLayer:
         cache_file = CACHE_DIR / f"{self.station_id}_{start_date}_{end_date}.json"
 
         if cache_file.exists():
-            print(f"  [{self.station_id}] Weather cache hit: {cache_file.name}")
+            log.info(f"[{self.station_id}] Weather cache hit: {cache_file.name}")
             with open(cache_file) as f:
                 cached = json.load(f)
             self.data = cached["hourly"]
@@ -116,7 +116,7 @@ class WeatherDataLayer:
             "timezone": "auto",
         }
 
-        print(f"  [{self.station_id}] Downloading ERA5 weather: {start_date} → {end_date}...")
+        log.info(f"[{self.station_id}] Downloading ERA5 weather: {start_date} → {end_date}...")
         try:
             resp = requests.get(OPEN_METEO_URL, params=params, timeout=15)
             resp.raise_for_status()
@@ -130,7 +130,7 @@ class WeatherDataLayer:
                     "sourceType": "reanalysis",
                     "stationId": self.station_id,
                     "coordinates": self.coords,
-                    "fetchedAt": datetime.utcnow().isoformat() + "Z",
+                    "fetchedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "dateRange": f"{start_date} to {end_date}",
                     "note": "ERA5 reanalysis values, NOT direct station sensor measurements",
                 },
@@ -150,11 +150,11 @@ class WeatherDataLayer:
             self.start_time = time.time()
 
             n_points = len(self.data["time"])
-            print(f"  [{self.station_id}] ✓ Cached {n_points} hourly data points")
+            log.info(f"[{self.station_id}] Cached {n_points} hourly data points")
             return True
 
         except Exception as e:
-            print(f"  [{self.station_id}] ✗ Weather fetch failed: {e}")
+            log.warning(f"[{self.station_id}] Weather fetch failed: {e}")
             return False
 
     @property
@@ -221,7 +221,7 @@ class WeatherDataLayer:
         if self.data_start:
             sim_time = self.data_start + timedelta(hours=index_f)
         else:
-            sim_time = datetime.utcnow()
+            sim_time = datetime.now(timezone.utc)
 
         return {
             "env_temp": round(temp, 1) if temp is not None else None,

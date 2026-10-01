@@ -6,7 +6,7 @@ import {
   LuBatteryCharging, LuRotateCcw, LuCheck, LuActivity, LuInfo
 } from 'react-icons/lu';
 import './WhatIfSimulationPanel.css';
-import { apiPost } from '../services/api';
+import { apiPost, describeApiError } from '../services/api';
 
 const SCENARIOS = [
   {
@@ -100,8 +100,8 @@ export default function WhatIfSimulationPanel({ activeStation = 'maitri', sensor
       });
       setSimResult(d);
     } catch (e) {
-      console.warn('Simulation API error:', e);
-      setErrorMsg(`Could not connect to Simulation Engine (${e.message}). Please verify that the backend (VITE_API_URL) is running.`);
+      console.error('Simulation API error:', e);
+      setErrorMsg(`What-if simulation failed: ${describeApiError(e)}`);
     } finally {
       setSimulating(false);
     }

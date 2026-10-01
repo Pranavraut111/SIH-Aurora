@@ -179,14 +179,14 @@ class WeatherForecast:
             return None
 
         # Find the nearest data index
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         target = now + timedelta(hours=hours_from_now)
 
         times = self.data["time"]
         best_idx = 0
         best_diff = float("inf")
         for i, t_str in enumerate(times):
-            t = datetime.strptime(t_str, "%Y-%m-%dT%H:%M")
+            t = datetime.strptime(t_str, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)   # Open-Meteo times are UTC
             diff = abs((t - target).total_seconds())
             if diff < best_diff:
                 best_diff = diff
@@ -336,7 +336,7 @@ class ForecastEngine:
         return {
             "available": True,
             "stationId": self.station_id,
-            "generatedAt": datetime.utcnow().isoformat() + "Z",
+            "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "currentWeather": {
                 "env_temp": current_weather.get("env_temp"),
                 "env_wind": current_weather.get("env_wind"),

@@ -192,6 +192,7 @@ def parse_canvasjs_series(html_text):
             try:
                 parsed_points.append((int(x_str), float(y_str)))
             except ValueError:
+                log.debug("NCPOR series %r: skipped unparsable point (%r, %r)", series_name, x_str, y_str)
                 continue
         if parsed_points:
             results[series_name] = parsed_points

@@ -22,7 +22,7 @@ export function trackModuleView(moduleId, stationId) {
       module: moduleId,
       station: stationId,
     });
-  } catch (e) { /* Analytics not available */ }
+  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }
 
 /**
@@ -34,7 +34,7 @@ export function trackBuildingView(buildingId, stationId) {
       building: buildingId,
       station: stationId,
     });
-  } catch (e) { /* Analytics not available */ }
+  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }
 
 /**
@@ -47,7 +47,7 @@ export function trackAlertAction(action, buildingId, severity) {
       building: buildingId,
       severity,
     });
-  } catch (e) { /* Analytics not available */ }
+  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }
 
 /**
@@ -58,7 +58,7 @@ export function trackConnectionToggle(newState) {
     logEvent('connection_toggle', {
       state: newState ? 'connected' : 'disconnected',
     });
-  } catch (e) { /* Analytics not available */ }
+  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }
 
 /**
@@ -69,7 +69,7 @@ export function trackDemoScenario(scenarioId) {
     logEvent('demo_scenario', {
       scenario: scenarioId,
     });
-  } catch (e) { /* Analytics not available */ }
+  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }
 
 /**
@@ -81,5 +81,5 @@ export function trackStationSwitch(fromStation, toStation) {
       from: fromStation,
       to: toStation,
     });
-  } catch (e) { /* Analytics not available */ }
+  } catch (e) { console.debug("[analytics] event not sent (analytics unavailable)", e); }
 }

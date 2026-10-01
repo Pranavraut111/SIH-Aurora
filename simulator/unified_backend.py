@@ -26,7 +26,8 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Literal, Union
 
 import requests
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
@@ -396,7 +397,7 @@ async def lifespan(_app: FastAPI):
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            log.debug("Tick loop stopped on shutdown")
 
 
 app = FastAPI(title="Aurora Antarctic Digital Twin Platform", version=app_config.APP_VERSION, lifespan=lifespan)
@@ -455,7 +456,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        pass
+        log.debug("WS client disconnected (filter=%s)", station_filter)
     except Exception:
         log.warning("WS connection error", exc_info=True)
     finally:
@@ -591,6 +592,7 @@ def _probe_simulator() -> dict:
         result["chronos"] = {"available": bool(cs.get("chronos_available")),
                              "modelLoaded": bool(cs.get("model_loaded")), "source": "simulator"}
     except Exception as exc:
+        log.info("Health: simulator probe failed: %s", exc)
         result["simulator"]["error"] = str(exc)[:200]
     with _sim_probe_lock:
         _sim_probe_cache.update(at=time.monotonic(), value=result)
@@ -763,10 +765,15 @@ def get_twin_inspector(sid: str = Depends(station_param)):
 #  What-If Scenario Simulation Engine
 # ═══════════════════════════════════════════════════════════════
 
+WHATIF_SCENARIOS = ("extreme_cold", "blizzard", "gen_failure", "battery_failure", "fuel_leak",
+                    "comms_outage", "resupply_delay")
+
+
 class WhatIfRequest(BaseModel):
-    stationId: str
-    scenarioId: str # 'extreme_cold', 'blizzard', 'gen_failure', 'battery_failure', 'fuel_leak', 'comms_outage', 'resupply_delay'
-    intensity: float = 1.0 # 0.5 to 2.0 multiplier
+    model_config = ConfigDict(extra="forbid")
+    stationId: StationIdStr
+    scenarioId: Literal[WHATIF_SCENARIOS]
+    intensity: float = Field(1.0, ge=0.5, le=2.0, allow_inf_nan=False)   # multiplier
 
 @app.post("/api/simulation/whatif")
 def run_what_if_simulation(req: WhatIfRequest):
@@ -1307,7 +1314,7 @@ def sim_scenarios(sid: str = Depends(station_param)):
 @app.post("/api/sim/inject/{scenario_id}")
 def sim_inject(scenario_id: str, sid: str = Depends(station_param)):
     if not re.fullmatch(r"[a-z0-9_]{1,40}", scenario_id):
-        raise HTTPException(status_code=422, detail="invalid scenario id")
+        raise HTTPException(status_code=422, detail=["invalid scenario id"])
     return _sim_request("POST", f"/inject/{scenario_id}", params={"station": sid})
 
 
@@ -1317,9 +1324,17 @@ def sim_reset(sid: str = Depends(station_param)):
 
 
 class ModeRequest(BaseModel):
-    mode: str = Field("reanalysis", pattern=r"^(reanalysis|simulation)$")
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["reanalysis", "simulation"] = "reanalysis"
     date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
-    speed: float = Field(120.0, ge=1.0, le=3600.0)
+    speed: float = Field(120.0, ge=1.0, le=3600.0, allow_inf_nan=False)
+
+    @field_validator("date")
+    @classmethod
+    def _real_date(cls, v):
+        if v is not None:
+            datetime.strptime(v, "%Y-%m-%d")      # ValueError → 422 (e.g. 2024-02-31)
+        return v
 
 
 @app.post("/api/sim/mode")
@@ -1332,9 +1347,10 @@ def sim_mode(req: ModeRequest):
 # ═══════════════════════════════════════════════════════════════
 
 class ExplainRequest(BaseModel):
-    station: Optional[str] = Field(None, max_length=32)
-    stationId: Optional[str] = Field(None, max_length=32)
-    question: str = Field("status", max_length=32)
+    model_config = ConfigDict(extra="forbid")
+    station: Optional[StationIdStr] = None
+    stationId: Optional[StationIdStr] = None
+    question: str = Field("status", min_length=1, max_length=32, pattern=r"^[A-Za-z_]+$")
     freeText: str = Field("", max_length=2000)
 
 
@@ -1359,12 +1375,14 @@ def get_ai_explanation(req: ExplainRequest):
         reason = text or "LLM unavailable"
     except HTTPException as exc:
         reason = str(exc.detail)
+        log.info("Explain: LLM path unavailable (%s); using offline summary", reason)
 
     try:
         decision = _sim_request("GET", "/api/decision", params={"station": sid})
         if (decision.get("risk") or {}).get("level") == "unknown":
             decision = None     # simulator up but no decision computed yet
-    except HTTPException:
+    except HTTPException as exc:
+        log.info("Explain: decision unavailable (%s)", exc.detail)
         decision = None
     out = offline_explanation(decision, req.question, req.freeText, sid, store.get_published(sid))
     out.update({"station": sid, "reason": reason, "sources": ["decision_engine"] if decision else ["telemetry_snapshot"]})
@@ -1372,4 +1390,7 @@ def get_ai_explanation(req: ExplainRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=app_config.HOST, port=app_config.API_PORT)
+    # log_config=None: uvicorn's loggers propagate to the root handler configured in config.py,
+    # so every service line has the same format and honours LOG_LEVEL.
+    uvicorn.run(app, host=app_config.HOST, port=app_config.API_PORT, log_config=None,
+                log_level=app_config.LOG_LEVEL.lower())

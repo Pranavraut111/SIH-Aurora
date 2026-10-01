@@ -27,11 +27,14 @@ structured decisions with provenance.
 """
 
 import sys, os, json
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import station_config  # noqa: E402
+
+log = logging.getLogger("aurora.decision")
 
 # ═══════════════════════════════════════════════════════
 #  Dependency graph — what affects what
@@ -301,7 +304,9 @@ class DecisionEngine:
                     })
                     total_weight += rule["weight"]
             except Exception:
-                pass
+                # A rule that cannot be evaluated is skipped, never silently: it is a bug in the rule
+                # or missing context, and the audit trail would otherwise under-report risk.
+                log.warning("Risk rule %s could not be evaluated; skipped", rule["id"], exc_info=True)
 
         # Determine overall risk level
         if total_weight >= 0.5:
@@ -421,7 +426,7 @@ class DecisionEngine:
         # ── 10. Assemble final decision ──────────────────────
         return {
             "stationId": self.station_id,
-            "generatedAt": datetime.utcnow().isoformat() + "Z",
+            "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "event": {
                 "type": event_type,
                 "description": event_desc,

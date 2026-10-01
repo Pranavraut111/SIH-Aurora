@@ -39,6 +39,7 @@ try:
     ANOMALY_AVAILABLE = True
 except ImportError:
     ANOMALY_AVAILABLE = False
+    logging.getLogger("aurora.simulator").warning("Anomaly engine unavailable (import failed)", exc_info=True)
 
 # Phase 4: Forecast engine
 try:
@@ -46,6 +47,7 @@ try:
     FORECAST_AVAILABLE = True
 except ImportError:
     FORECAST_AVAILABLE = False
+    logging.getLogger("aurora.simulator").warning("Forecast engine unavailable (import failed)", exc_info=True)
 
 # Phase 5: Decision engine
 try:
@@ -53,6 +55,7 @@ try:
     DECISION_AVAILABLE = True
 except ImportError:
     DECISION_AVAILABLE = False
+    logging.getLogger("aurora.simulator").warning("Decision engine unavailable (import failed)", exc_info=True)
 from decision_scheduler import DecisionScheduler
 from twin_inspector import build_twin_inspector
 
@@ -63,6 +66,7 @@ try:
     CHRONOS_AVAILABLE = chronos_available()
 except ImportError:
     CHRONOS_AVAILABLE = False
+    logging.getLogger("aurora.simulator").info("Chronos forecaster module not importable; Chronos disabled", exc_info=True)
 if CHRONOS_AVAILABLE:
     log.info("Chronos available (torch + chronos-forecasting installed)")
 else:
@@ -338,10 +342,10 @@ class StationSimulator:
                     self.physics_model = StationPhysicsModel(station_id)
                     self.log_event("mode", f"ERA5 reanalysis mode — physics digital twin active")
                 else:
-                    print(f"  [{station_id}] ⚠ Weather data unavailable, falling back to simulation")
+                    log.warning(f"[{station_id}] Weather data unavailable, falling back to simulation")
                     self.mode = "simulation"
             except Exception as e:
-                print(f"  [{station_id}] ⚠ Weather init failed: {e}, falling back to simulation")
+                log.warning(f"[{station_id}] Weather init failed: {e}, falling back to simulation")
                 self.mode = "simulation"
 
         # ── Phase 3: Load trained anomaly model ──────────────
@@ -351,9 +355,9 @@ class StationSimulator:
                 try:
                     self.anomaly_detector = AnomalyDetector(station_id)
                     self.anomaly_detector.load(model_path)
-                    print(f"  [{station_id}] ✅ Anomaly detector loaded")
+                    log.info(f"[{station_id}] Anomaly detector loaded")
                 except Exception as e:
-                    print(f"  [{station_id}] ⚠ Anomaly model load failed: {e}")
+                    log.warning(f"[{station_id}] Anomaly model load failed: {e}")
 
         # ── Phase 4: Forecast engine ─────────────────────────
         self.forecast_engine = None
@@ -364,11 +368,11 @@ class StationSimulator:
                 # Reanalysis mode replays a PAST date → live forecast is not time-aligned
                 self.forecast_engine = ForecastEngine(station_id, replay_mode=(self.mode == "reanalysis"))
                 if self.forecast_engine.initialize():
-                    print(f"  [{station_id}] ✅ Forecast engine initialized")
+                    log.info(f"[{station_id}] Forecast engine initialized")
                 else:
-                    print(f"  [{station_id}] ⚠ Forecast weather unavailable")
+                    log.warning(f"[{station_id}] Forecast weather unavailable")
             except Exception as e:
-                print(f"  [{station_id}] ⚠ Forecast init failed: {e}")
+                log.warning(f"[{station_id}] Forecast init failed: {e}")
 
         # ── Phase 5: Decision engine ─────────────────────────
         self.decision_engine = None
@@ -378,9 +382,9 @@ class StationSimulator:
         if DECISION_AVAILABLE:
             try:
                 self.decision_engine = DecisionEngine(station_id)
-                print(f"  [{station_id}] ✅ Decision engine initialized")
+                log.info(f"[{station_id}] Decision engine initialized")
             except Exception as e:
-                print(f"  [{station_id}] ⚠ Decision engine init failed: {e}")
+                log.warning(f"[{station_id}] Decision engine init failed: {e}")
 
         # ── Phase 6: Genuine Chronos forecaster (shared instance) ─
         self._chronos_forecaster = None
@@ -390,7 +394,7 @@ class StationSimulator:
                 if not hasattr(StationSimulator, '_shared_chronos'):
                     StationSimulator._shared_chronos = GenuineChronosForecaster()
                 self._chronos_forecaster = StationSimulator._shared_chronos
-                print(f"  [{station_id}] ✅ Genuine Chronos forecaster attached")
+                log.info(f"[{station_id}] Genuine Chronos forecaster attached")
             except Exception as e:
                 log.warning("[%s] Chronos init failed: %s", station_id, e)
 
@@ -562,7 +566,7 @@ class StationSimulator:
                     "ticks_remaining": int(duration),
                 })
                 self.log_event("pattern_start", f"{pattern['name']} developing")
-                print(f"  [{self.station_id}] Weather: {pattern['name']} starting ({int(duration)} ticks)")
+                log.info(f"[{self.station_id}] Weather: {pattern['name']} starting ({int(duration)} ticks)")
 
         # 2. Clean expired injections
         expired = [k for k, v in self.active_injections.items() if self.tick_count > v[1]]
@@ -628,7 +632,7 @@ class StationSimulator:
             if self.active_patterns[i]["ticks_remaining"] <= 0:
                 name = self.active_patterns[i]["name"]
                 self.log_event("pattern_end", f"{name} subsiding")
-                print(f"  [{self.station_id}] Weather: {name} ended")
+                log.info(f"[{self.station_id}] Weather: {name} ended")
                 self.active_patterns.pop(i)
 
         return readings
@@ -646,7 +650,7 @@ class StationSimulator:
             self.active_injections[key] = (target, expiry)
 
         self.log_event("injection", f"Scenario: {scenario['name']}")
-        print(f"\n  [{self.station_id}] SCENARIO: {scenario['name']} ({scenario['duration']}s)")
+        log.info(f"[{self.station_id}] SCENARIO: {scenario['name']} ({scenario['duration']}s)")
         return {
             "scenario": scenario_id, "name": scenario["name"],
             "station": self.station_id, "duration": scenario["duration"],
@@ -712,6 +716,29 @@ control_app = Flask(__name__)
 CORS(control_app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 
+class RequestError(Exception):
+    """Client error from a control route → JSON {error, detail} with the given status."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+@control_app.errorhandler(RequestError)
+def _request_error(e: RequestError):
+    return jsonify({"error": "bad request" if e.status != 404 else "not found", "detail": e.detail}), e.status
+
+
+def _get_station(raw):
+    """Unknown station → 404 (never silently fall back to Maitri)."""
+    sid = str(raw if raw is not None else "maitri").strip().lower()
+    sim = stations.get(sid)
+    if sim is None:
+        raise RequestError(404, f"Unknown station '{raw}'. Valid stations: {', '.join(stations)}")
+    return sim
+
+
 @control_app.route("/scenarios", methods=["GET"])
 def list_scenarios():
     result = {}
@@ -722,7 +749,7 @@ def list_scenarios():
             "affectedSensors": list(s["injections"].keys()),
         }
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
+    sim = _get_station(station_id)
     return jsonify({
         "scenarios": result,
         "activeScenario": sim.active_scenario,
@@ -737,22 +764,33 @@ def list_scenarios():
 @control_app.route("/inject/<scenario_id>", methods=["POST"])
 def inject_scenario(scenario_id):
     station_id = flask_request.args.get("station", "maitri")
+    if scenario_id not in SCENARIOS:
+        raise RequestError(404, f"Unknown scenario '{scenario_id}'. Known: {', '.join(SCENARIOS)}")
     with stations_lock:
-        sim = stations.get(station_id, stations["maitri"])
+        sim = _get_station(station_id)
         result = sim.inject_scenario(scenario_id)
     return jsonify(result)
 
 
 @control_app.route("/inject-single", methods=["POST"])
 def inject_single():
-    data = flask_request.json
+    data = _json_body()
     station_id = data.get("stationId", "maitri")
+    try:
+        target = float(data.get("target", 0))
+        duration = float(data.get("duration", 20))
+    except (TypeError, ValueError):
+        raise RequestError(422, "target and duration must be numbers")
+    if not (math.isfinite(target) and 1 <= duration <= 600):
+        raise RequestError(422, "target must be finite and duration 1–600 s")
     with stations_lock:
-        sim = stations.get(station_id, stations["maitri"])
+        sim = _get_station(station_id)
         result = sim.inject_single(
-            data.get("buildingId", ""), data.get("sensorId", ""),
-            data.get("target", 0), data.get("duration", 20),
+            _clean_user_text(data.get("buildingId", ""), 40), _clean_user_text(data.get("sensorId", ""), 40),
+            target, duration,
         )
+    if "error" in result:
+        raise RequestError(404, result["error"])
     return jsonify(result)
 
 
@@ -760,7 +798,7 @@ def inject_single():
 def reset():
     station_id = flask_request.args.get("station", "maitri")
     with stations_lock:
-        sim = stations.get(station_id, stations["maitri"])
+        sim = _get_station(station_id)
         result = sim.reset()
     return jsonify(result)
 
@@ -769,7 +807,7 @@ def reset():
 def twin_inspector():
     """Digital Twin Inspector — full causal-chain breakdown (schema: twin_inspector.py)."""
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
+    sim = _get_station(station_id)
     weather = getattr(sim, '_last_weather', None)
     reanalysis = sim.mode == "reanalysis"
     return jsonify(build_twin_inspector(
@@ -791,7 +829,7 @@ def twin_inspector():
 def anomaly_status():
     """Phase 3: Anomaly detection status and evidence."""
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
+    sim = _get_station(station_id)
 
     anomaly = getattr(sim, '_last_anomaly', {"anomaly_score": 0, "is_anomaly": False, "evidence": []})
 
@@ -816,7 +854,7 @@ def anomaly_status():
 def forecast_status():
     """Phase 4: Forecast predictions, risk, and recommendation."""
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
+    sim = _get_station(station_id)
 
     forecast = getattr(sim, '_last_forecast', None)
     if forecast and forecast.get("available"):
@@ -833,7 +871,7 @@ def forecast_status():
 def decision_status():
     """Phase 5: Decision engine output with audit trail."""
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
+    sim = _get_station(station_id)
 
     decision = getattr(sim, '_last_decision', None)
     if decision:
@@ -850,7 +888,7 @@ def decision_status():
 def chronos_forecast():
     """Phase 6: Genuine Chronos time-series forecast (independent of physics)."""
     station_id = flask_request.args.get("station", "maitri")
-    sim = stations.get(station_id, stations["maitri"])
+    sim = _get_station(station_id)
 
     if not CHRONOS_AVAILABLE:
         return jsonify({
@@ -890,10 +928,22 @@ def chronos_status():
 @control_app.route("/mode", methods=["POST"])
 def set_mode():
     """Switch simulation mode at runtime."""
-    data = flask_request.json or {}
+    data = _json_body()
     new_mode = data.get("mode", "reanalysis")
     date = data.get("date", None)
-    speed = float(data.get("speed", 120))
+    if new_mode not in ("reanalysis", "simulation"):
+        raise RequestError(422, "mode must be 'reanalysis' or 'simulation'")
+    if date is not None:
+        try:
+            datetime.strptime(str(date), "%Y-%m-%d")
+        except ValueError:
+            raise RequestError(422, "date must be YYYY-MM-DD")
+    try:
+        speed = float(data.get("speed", 120))
+    except (TypeError, ValueError):
+        raise RequestError(422, "speed must be a number")
+    if not (1.0 <= speed <= 3600.0):
+        raise RequestError(422, "speed must be between 1 and 3600")
 
     # Build replacements OUTSIDE the lock (may download weather), then swap
     # atomically under the lock shared with the tick loop.
@@ -1050,7 +1100,7 @@ def aurora_explain():
     free_text = _clean_user_text(data.get("freeText", ""))
 
     # Get the latest decision for this station
-    sim = stations.get(station_id, stations.get("maitri"))
+    sim = _get_station(station_id)
     decision = getattr(sim, '_last_decision', None)
 
     if not decision:
@@ -1113,7 +1163,7 @@ def explain():
     station = _clean_user_text(data.get("station", "maitri"), 32) or "maitri"
 
     # Map to new endpoint
-    sim = stations.get(station, stations.get("maitri"))
+    sim = _get_station(station)
     decision = getattr(sim, '_last_decision', None)
 
     if not _llm_available():
@@ -1145,7 +1195,7 @@ def explain_incident():
     station = _clean_user_text(data.get("station", "maitri"), 32) or "maitri"
 
     # Include decision context if available
-    sim = stations.get(station, stations.get("maitri"))
+    sim = _get_station(station)
     decision = getattr(sim, '_last_decision', None)
     decision_str = ""
     if decision:
@@ -1181,25 +1231,21 @@ def run_control_server():
 
 # ── Main loop — ticks BOTH stations independently ────────────
 def main():
-    print("=" * 64)
-    print("  Aurora v3 — Physics-Based Digital Twin Simulator")
-    print(f"  Mode: {DEFAULT_MODE.upper()}")
+    log.info("Aurora v3 — Physics-Based Digital Twin Simulator")
+    log.info(f"Mode: {DEFAULT_MODE.upper()}")
     if DEFAULT_DATE:
-        print(f"  Replay date: {DEFAULT_DATE} (source: {app_config.AURORA_DATE_SOURCE})")
-    print(f"  Speed: {DEFAULT_SPEED}x ({sim_hours_per_real_minute(DEFAULT_SPEED):.1f} simulated hours per real minute)")
-    print(f"  Stations: {', '.join(STATION_PROFILES.keys())}")
-    print(f"  Backend: {BACKEND_URL}")
-    print(f"  Control API: http://{HOST}:{CONTROL_PORT}  (CORS: {', '.join(ALLOWED_ORIGINS)})")
+        log.info(f"Replay date: {DEFAULT_DATE} (source: {app_config.AURORA_DATE_SOURCE})")
+    log.info(f"Speed: {DEFAULT_SPEED}x ({sim_hours_per_real_minute(DEFAULT_SPEED):.1f} simulated hours per real minute)")
+    log.info(f"Stations: {', '.join(STATION_PROFILES.keys())}")
+    log.info(f"Backend: {BACKEND_URL}")
+    log.info(f"Control API: http://{HOST}:{CONTROL_PORT}  (CORS: {', '.join(ALLOWED_ORIGINS)})")
     groq_status = "configured" if GROQ_API_KEY else "NOT SET"
-    print(f"  Groq API: {groq_status}")
-    print("=" * 64)
-    print()
+    log.info(f"Groq API: {groq_status}")
 
     # Start Flask control API
     control_thread = threading.Thread(target=run_control_server, daemon=True)
     control_thread.start()
-    print(f"  Control API running on http://{HOST}:{CONTROL_PORT}")
-    print()
+    log.info(f"Control API running on http://{HOST}:{CONTROL_PORT}")
 
     consecutive_errors = 0
     max_errors = 10
@@ -1239,7 +1285,7 @@ def main():
                 except requests.exceptions.ConnectionError:
                     consecutive_errors += 1
                     if consecutive_errors == 1:
-                        print(f"  Waiting for backend at {BACKEND_URL}...")
+                        log.warning(f"Waiting for backend at {BACKEND_URL}...")
 
             # Print status (alternate stations)
             active_sid = "maitri" if current["maitri"].tick_count % 2 == 0 else "bharati"
@@ -1268,11 +1314,11 @@ def main():
                 sim_time = weather['simulated_time'][:16]
                 status += f" | T:{sim_time}"
 
-            print(status)
+            log.info(status)
 
-        except Exception as e:
+        except Exception:
             consecutive_errors += 1
-            print(f"  Error: {e}")
+            log.exception("Simulator main-loop iteration failed")
 
         if consecutive_errors >= max_errors:
             consecutive_errors = 0

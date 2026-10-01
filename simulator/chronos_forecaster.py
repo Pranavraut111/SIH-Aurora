@@ -70,8 +70,9 @@ def _check_chronos_available():
         _torch = torch
         from chronos import ChronosBoltPipeline  # noqa: F401
         _CHRONOS_AVAILABLE = True
-    except ImportError:
+    except ImportError as exc:
         _CHRONOS_AVAILABLE = False
+        log.info("Chronos optional ML extras not importable (%s)", exc)
     return _CHRONOS_AVAILABLE
 
 
@@ -96,14 +97,14 @@ def _load_pipeline():
 def _load_pipeline_locked():
     global _pipeline
     from chronos import ChronosBoltPipeline
-    print(f"  [Chronos] Loading {MODEL_NAME} ...")
+    log.info(f"[Chronos] Loading {MODEL_NAME} ...")
     start = time.time()
     _pipeline = ChronosBoltPipeline.from_pretrained(
         MODEL_NAME,
         device_map="cpu",
     )
     elapsed = time.time() - start
-    print(f"  [Chronos] Model loaded in {elapsed:.1f}s")
+    log.info(f"[Chronos] Model loaded in {elapsed:.1f}s")
     return _pipeline
 
 
@@ -287,6 +288,7 @@ class GenuineChronosForecaster:
                     "horizon_minutes": [i + 1 for i in range(pred_len)],
                 }
             except Exception as e:
+                log.warning("[Chronos] predict_quantiles failed for %s/%s (%s); trying point forecast", station_id, signal, e)
                 # Fallback: try predict() which returns point forecasts
                 try:
                     with _inference_lock:
@@ -308,6 +310,7 @@ class GenuineChronosForecaster:
                         "note": "fallback point forecast (quantiles approximated)",
                     }
                 except Exception as e2:
+                    log.warning("[Chronos] inference failed for %s/%s: %s", station_id, signal, e2)
                     forecasts[signal] = {
                         "available": False,
                         "reason": f"inference failed: {str(e2)}",
