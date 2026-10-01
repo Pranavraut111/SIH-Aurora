@@ -121,6 +121,11 @@ def test_evidence_expected_is_the_physics_prediction(detectors, converged):
     assert top["value"] == pytest.approx(obs["generator"]["gen_temp"], abs=0.01)
     assert top["expectedSource"] == "physics model prediction (same tick)"
     assert r["candidateCauses"][0]["cause"] == "cooling_degradation"
+    # per-sensor residual table shown in the AI panel
+    res = {x["sensor"]: x for x in r["residuals"]}
+    assert res["gen_temp"]["z"] == pytest.approx(8.0 / res["gen_temp"]["sigma"], abs=0.05)
+    assert res["gen_temp"]["expected"] == pytest.approx(pred["generator"]["gen_temp"], abs=0.01)
+    assert set(res["gen_temp"]) == {"sensor", "building", "observed", "expected", "residual", "sigma", "z"}
 
 
 # ── 5. train/serve skew ───────────────────────────────────────

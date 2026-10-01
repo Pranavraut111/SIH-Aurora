@@ -674,7 +674,9 @@ def get_ncpor_live(sid: str = Depends(station_param)):
             "air_pressure_hpa": weather["pressure"],
             "relative_humidity_pct": weather["humidity"],
             "source": weather["source"],
-            "dataset": "NCPOR Live Automatic Weather Station (AWS)",
+            # The actual dataset of the latest DB row (was always labelled "NCPOR Live AWS")
+            "dataset": weather.get("dataset"),
+            "provenance": _weather_provenance(weather),
             "latitude": STATION_INFO[sid]["latitude"],
             "longitude": STATION_INFO[sid]["longitude"]
         }

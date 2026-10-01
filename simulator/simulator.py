@@ -804,6 +804,7 @@ def anomaly_status():
         "candidateCauses": anomaly.get("candidateCauses", []),
         # v3: which rule fired ("isolation_forest" and/or "residual_z") + largest residual
         "triggeredBy": anomaly.get("triggeredBy", []),
+        "residuals": anomaly.get("residuals", []),
         "maxResidualSigma": anomaly.get("maxResidualSigma"),
         "residualAlarmSigma": anomaly.get("residualAlarmSigma"),
         "detectorAvailable": sim.anomaly_detector is not None if hasattr(sim, 'anomaly_detector') else False,
@@ -1024,10 +1025,10 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> s
         err_msg = str(e)
         if hasattr(e, 'read'):
             try:
-                err_msg = e.read().decode()
-            except Exception:
-                pass
-        print(f"  [Groq] Error: {err_msg}")
+                err_msg = f"{e} — {e.read().decode(errors='replace')[:500]}"
+            except Exception as read_err:
+                log.debug("[Groq] could not read error body: %s", read_err)
+        log.warning("[Groq] request failed: %s", err_msg)
         return "LLM explanation temporarily unavailable (upstream error; see server log)."
 
 

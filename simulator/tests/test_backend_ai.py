@@ -151,3 +151,12 @@ def test_remote_dispatch_is_simulated(client):
     assert body["status"] == "queued (simulated)" and body["simulated"] is True
     cmds = c.get("/api/remote/commands?stationId=maitri").json()["commands"]
     assert cmds[0]["status"] == "queued (simulated)" and cmds[0]["dispatched_at"] is None
+
+
+def test_ncpor_live_reports_actual_dataset(client):
+    c, _ = client
+    w = c.get("/api/ncpor/live?stationId=maitri").json()["weather"]
+    assert w["provenance"] in {"REAL", "REANALYSIS", "HARDCODED-DEMO"}
+    assert w["dataset"] != "NCPOR Live Automatic Weather Station (AWS)"
+    if w["provenance"] == "REAL":
+        assert w["dataset"] == "NCPOR-AWS-Live"

@@ -432,6 +432,13 @@ class AnomalyDetector:
             "is_anomaly": bool(is_anomaly),
             "evidence": evidence,
             "candidateCauses": causes,
+            # every monitored sensor: observed vs physics prediction (same tick)
+            "residuals": [
+                {"sensor": sensor, "building": d["building"], "observed": round(d["observed"], 2),
+                 "expected": round(d["expected"], 2), "residual": round(d["residual"], 2),
+                 "sigma": d["sigma"], "z": round(d["residual"] / d["sigma"], 2)}
+                for sensor, d in features.get("_details", {}).items()
+            ],
         }
 
     # ── persistence ───────────────────────────────────────────
