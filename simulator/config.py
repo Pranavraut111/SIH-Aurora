@@ -3,8 +3,8 @@ Aurora — central configuration for the Python services (P1-1).
 
 Single source of truth: the ROOT `.env` file (repo root), loaded with
 python-dotenv. Real environment variables always win over `.env` values.
-`simulator/.env` is still read as a *fallback* for backward compatibility
-(deprecated — move its values to the root `.env`).
+`simulator/.env` is NOT read any more; if it still exists, a startup warning
+asks you to move its values (e.g. GROQ_API_KEY) to the root `.env`.
 
 This is the ONLY module in simulator/ that may read os.environ.
 All file paths are resolved relative to this file, never the cwd.
@@ -24,11 +24,9 @@ REPO_ROOT = SIM_DIR.parent
 _ROOT_ENV = REPO_ROOT / ".env"
 _LEGACY_ENV = SIM_DIR / ".env"
 
-# Root .env first; legacy simulator/.env only fills vars not already set.
+# The root .env is the only env file. (simulator/.env is ignored — see warning below.)
 load_dotenv(_ROOT_ENV, override=False)
-_legacy_env_used = _LEGACY_ENV.exists()
-if _legacy_env_used:
-    load_dotenv(_LEGACY_ENV, override=False)
+_legacy_env_present = _LEGACY_ENV.exists()
 
 
 def _get(name: str, default=None):
@@ -75,10 +73,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 log = logging.getLogger("aurora.config")
-if _legacy_env_used:
+if _legacy_env_present:
     log.warning(
-        "DEPRECATED: loaded fallback env file %s — move its variables to the root .env (%s)",
-        _LEGACY_ENV, _ROOT_ENV,
+        "%s exists but is no longer read. Move its variables (e.g. GROQ_API_KEY) to the root .env (%s) "
+        "and delete it.", _LEGACY_ENV, _ROOT_ENV,
     )
 
 # ── Network ───────────────────────────────────────────────────

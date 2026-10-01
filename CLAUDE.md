@@ -50,7 +50,7 @@
 
 ## Configuration
 - **The root `.env` is the single source of configuration.** Copy `.env.example` → `.env`;
-  it documents every variable. `simulator/.env` is a deprecated fallback only.
+  it documents every variable. `simulator/.env` is **not read** (services warn at startup if it exists).
 - Python: import from `simulator/config.py` — the ONLY place in `simulator/` that reads
   `os.environ` or contains `localhost`. All file paths resolve relative to that module.
   (In `simulator.py` the module is imported as `app_config`, because `config` is a loop variable there.)

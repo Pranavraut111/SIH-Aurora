@@ -170,3 +170,19 @@ def test_no_empty_or_comment_only_catch_in_js():
         offenders += [f"{path.relative_to(SRC_DIR)} .catch(()=>{{}})"
                       for _ in re.finditer(r"\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*\{\s*\}\s*\)", text)]
     assert not offenders, offenders
+
+
+def test_legacy_simulator_env_is_not_read(monkeypatch):
+    """E: config.py loads ONLY the root .env; simulator/.env is never passed to load_dotenv."""
+    import importlib
+    import dotenv
+    import config as app_config
+    loaded = []
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda path=None, **kw: loaded.append(Path(path)) or True)
+    try:
+        importlib.reload(app_config)
+        assert loaded == [app_config.REPO_ROOT / ".env"]
+        assert app_config.SIM_DIR / ".env" not in loaded
+    finally:
+        monkeypatch.undo()
+        importlib.reload(app_config)
