@@ -163,37 +163,66 @@ jobs:
       # nginx's add_header is not inherited into a location that sets any header of its
       # own, so every location class is checked — the HTML, a hashed asset and the
       # proxied API. One missing include silently drops the CSP for that path.
-      - name: Security headers and caching come from nginx
+      # Split into one step per concern: the step name alone says what broke.
+      - name: Capture the response headers
         run: |
           asset=$(curl -fsS http://localhost/ | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -1)
-          echo "asset: $asset"
+          test -n "$asset" || { echo "::error::could not find the hashed entry asset"; exit 1; }
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+          mkdir -p /tmp/hdr
+          curl -fsSI "http://localhost/"            > /tmp/hdr/root.txt
+          curl -fsSI "http://localhost${asset}"     > /tmp/hdr/asset.txt
+          curl -fsSI "http://localhost/api/health"  > /tmp/hdr/api.txt
+          {
+            echo '### Response headers'
+            for f in root asset api; do
+              echo; echo "#### $f"; echo '```'; cat "/tmp/hdr/$f.txt"; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          head -40 /tmp/hdr/root.txt /tmp/hdr/asset.txt /tmp/hdr/api.txt
+
+      - name: Header — Content-Security-Policy on HTML, asset and API
+        run: |
+          for f in root asset api; do
+            grep -iq 'content-security-policy' "/tmp/hdr/$f.txt" \
+              || { echo "::error::$f is missing the CSP"; exit 1; }
+          done
+
+      - name: Header — nosniff, referrer-policy, frame-options, permissions-policy
+        run: |
           fail=0
-          for path in "/" "$asset" "/api/health"; do
-            headers=$(curl -fsSI "http://localhost${path}")
-            echo "--- $path ---"; echo "$headers"
-            for h in 'content-security-policy' 'x-content-type-options: nosniff' \
-                     'referrer-policy' 'x-frame-options' 'permissions-policy'; do
-              if ! echo "$headers" | grep -iq "$h"; then
-                echo "::error::$path is missing header: $h"
-                fail=1
-              fi
+          for f in root asset api; do
+            for h in 'x-content-type-options: nosniff' 'referrer-policy' \
+                     'x-frame-options' 'permissions-policy'; do
+              grep -iq "$h" "/tmp/hdr/$f.txt" || { echo "::error::$f missing: $h"; fail=1; }
             done
           done
-          # Caching: index.html must never be cached, hashed assets forever, API never.
-          curl -fsSI http://localhost/ | grep -iq 'cache-control: no-store' \
-            || { echo '::error::index.html is cacheable'; fail=1; }
-          curl -fsSI "http://localhost${asset}" | grep -iq 'immutable' \
-            || { echo '::error::hashed asset is not immutable'; fail=1; }
-          curl -fsSI http://localhost/api/health | grep -iq 'cache-control: no-store' \
-            || { echo '::error::API responses are cacheable'; fail=1; }
-          # Exactly one Cache-Control per response (`expires` plus add_header emits two).
-          for path in "/" "$asset"; do
-            n=$(curl -fsSI "http://localhost${path}" | grep -ic '^cache-control:' || true)
-            test "$n" -eq 1 || { echo "::error::$path returned $n Cache-Control headers"; fail=1; }
-          done
-          # A deep link must fall back to index.html (SPA routing).
-          curl -fsS http://localhost/some/deep/route | grep -q '<div id="root">'
           exit $fail
+
+      - name: Caching — index.html is never cached
+        run: |
+          grep -iq 'cache-control: no-store' /tmp/hdr/root.txt
+
+      - name: Caching — hashed assets are immutable
+        run: |
+          grep -iq 'immutable' /tmp/hdr/asset.txt
+
+      - name: Caching — API responses are never cached
+        run: |
+          grep -iq 'cache-control: no-store' /tmp/hdr/api.txt
+
+      - name: Caching — exactly one Cache-Control per response
+        run: |
+          fail=0
+          for f in root asset; do
+            n=$(grep -ic '^cache-control:' "/tmp/hdr/$f.txt" || true)
+            test "$n" -eq 1 || { echo "::error::$f returned $n Cache-Control headers"; fail=1; }
+          done
+          exit $fail
+
+      - name: SPA fallback serves index.html for a deep link
+        run: |
+          curl -fsS http://localhost/some/deep/route | grep -q '<div id="root">'
 
       - name: The backend and simulator are NOT reachable from the host
         run: |
