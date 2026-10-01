@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import sys
 import threading
 import time
@@ -30,7 +31,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 import requests
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -97,6 +107,35 @@ def optional_station_param(stationId: str | None = Query(None), station: str | N
     """Like station_param, but missing means 'all stations' (None)."""
     raw = stationId if stationId is not None else station
     return None if raw is None else require_station(raw)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Write protection
+# ═══════════════════════════════════════════════════════════════
+# Every state-changing route depends on require_admin. Reads and /ws/station stay public,
+# so a demo deployment is fully viewable while nobody can change thresholds, the
+# inventory ledger, the simulator or the alert state.
+#
+# The two POSTs that change nothing are deliberately NOT protected, because they are
+# reads that happen to need a request body: /api/simulation/whatif (explicitly read-only
+# against the published snapshot) and the explain routes. Those are rate-limited instead.
+#
+# With ADMIN_TOKEN unset there is no protection at all: convenient locally, refused by
+# config.check_production_config() when APP_ENV=production.
+
+def require_admin(x_admin_token: str | None = Header(None, alias="X-Admin-Token")) -> None:
+    """401 unless the caller presents the configured ADMIN_TOKEN."""
+    expected = app_config.ADMIN_TOKEN
+    if not expected:
+        return
+    if not x_admin_token or not secrets.compare_digest(x_admin_token, expected):
+        # Deliberately identical for a missing and a wrong token, and never echoed back.
+        log.warning("401 on a write route: %s token", "missing" if not x_admin_token else "invalid")
+        raise HTTPException(
+            status_code=401,
+            detail="Operator login required: send the X-Admin-Token header.",
+            headers={"WWW-Authenticate": 'X-Admin-Token realm="aurora"'},
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -386,6 +425,15 @@ async def tick_loop():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Refuses to start on a development-grade config when APP_ENV=production; otherwise
+    # logs the same problems as warnings.
+    app_config.check_production_config()
+    if not app_config.ADMIN_TOKEN:
+        log.warning(
+            "ADMIN_TOKEN is not set: every write endpoint (thresholds, logistics, "
+            "acknowledge, remote dispatch, simulator control) is unauthenticated. "
+            "Fine locally; set it before exposing this host."
+        )
     init_db()
     ALERTS.load_open()   # open/acknowledged alerts survive restarts
     await run_tick()   # prime: every station has a published snapshot before serving
@@ -553,7 +601,7 @@ class SensorBatch(BaseModel):
         return None if v is None else [str(x)[:80] for x in v[:50]]
 
 
-@app.post("/api/sensors/batch")
+@app.post("/api/sensors/batch", dependencies=[Depends(require_admin)])
 async def ingest_sensor_batch(batch: SensorBatch):
     sid = require_station(batch.stationId)
     points = store.record_batch(sid, batch.model_dump())
@@ -676,7 +724,7 @@ def get_ncpor_live(sid: str = Depends(station_param)):
         }
     }
 
-@app.post("/api/ncpor/ingest")
+@app.post("/api/ncpor/ingest", dependencies=[Depends(require_admin)])
 def trigger_ncpor_ingestion(sid: str | None = Depends(optional_station_param)):
     results = {}
     if sid:
@@ -963,7 +1011,7 @@ def run_what_if_simulation(req: WhatIfRequest):
 #  Satellite Link & Connection Management APIs
 # ═══════════════════════════════════════════════════════════════
 
-@app.post("/api/connection/toggle")
+@app.post("/api/connection/toggle", dependencies=[Depends(require_admin)])
 def toggle_station_connection(sid: str = Depends(station_param)):
     curr = store.toggle_connected(sid)
     return {"status": "success", "stationId": sid, "connected": curr}
@@ -977,7 +1025,7 @@ class AcknowledgeRequest(BaseModel):
     acknowledgedBy: OperatorName
 
 
-@app.post("/api/alerts/{alert_id}/acknowledge")
+@app.post("/api/alerts/{alert_id}/acknowledge", dependencies=[Depends(require_admin)])
 def acknowledge_alert(alert_id: str, req: AcknowledgeRequest):
     if len(alert_id) > 120:
         raise HTTPException(status_code=422, detail=["alert id too long"])
@@ -1043,7 +1091,7 @@ class InventoryUpdateRequest(BaseModel):
     updatedBy: OperatorName
 
 
-@app.post("/api/logistics/update")
+@app.post("/api/logistics/update", dependencies=[Depends(require_admin)])
 def update_inventory_item(req: InventoryUpdateRequest):
     sid = require_station(req.stationId)
     now_ts = int(time.time() * 1000)
@@ -1109,7 +1157,7 @@ class DispatchCommandRequest(BaseModel):
     issuedBy: OperatorName
 
 
-@app.post("/api/remote/dispatch")
+@app.post("/api/remote/dispatch", dependencies=[Depends(require_admin)])
 def dispatch_remote_command(req: DispatchCommandRequest):
     sid = require_station(req.stationId)
     catalog = station_config.remote_command_catalog()
@@ -1248,7 +1296,7 @@ def _scope(raw: str) -> str:
     return "*" if raw.strip() == "*" else require_station(raw)
 
 
-@app.post("/api/admin/config")
+@app.post("/api/admin/config", dependencies=[Depends(require_admin)])
 def update_admin_config(req: ConfigUpdateRequest):
     scope = _scope(req.stationId)
     updates = {
@@ -1277,7 +1325,7 @@ class ThresholdResetRequest(BaseModel):
     updatedBy: OperatorName
 
 
-@app.post("/api/admin/config/reset")
+@app.post("/api/admin/config/reset", dependencies=[Depends(require_admin)])
 def reset_admin_thresholds(req: ThresholdResetRequest):
     scope = _scope(req.stationId)
     if req.sensor is not None and req.sensor not in station_config.sensors(STATIONS[0] if scope == "*" else scope):
@@ -1348,14 +1396,14 @@ def sim_scenarios(sid: str = Depends(station_param)):
     return _sim_request("GET", "/scenarios", params={"station": sid})
 
 
-@app.post("/api/sim/inject/{scenario_id}")
+@app.post("/api/sim/inject/{scenario_id}", dependencies=[Depends(require_admin)])
 def sim_inject(scenario_id: str, sid: str = Depends(station_param)):
     if not re.fullmatch(r"[a-z0-9_]{1,40}", scenario_id):
         raise HTTPException(status_code=422, detail=["invalid scenario id"])
     return _sim_request("POST", f"/inject/{scenario_id}", params={"station": sid})
 
 
-@app.post("/api/sim/reset")
+@app.post("/api/sim/reset", dependencies=[Depends(require_admin)])
 def sim_reset(sid: str = Depends(station_param)):
     return _sim_request("POST", "/reset", params={"station": sid})
 
@@ -1374,7 +1422,7 @@ class ModeRequest(BaseModel):
         return v
 
 
-@app.post("/api/sim/mode")
+@app.post("/api/sim/mode", dependencies=[Depends(require_admin)])
 def sim_mode(req: ModeRequest):
     return _sim_request("POST", "/mode", json_body=req.model_dump(), timeout=MODE_TIMEOUT_S)
 

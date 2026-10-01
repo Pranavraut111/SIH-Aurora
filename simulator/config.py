@@ -162,6 +162,56 @@ ALERT_RESOLVE_TICKS = _get_int("ALERT_RESOLVE_TICKS", 3)
 # ── LLM (Groq) — server-side only ─────────────────────────────
 GROQ_API_KEY = _get("GROQ_API_KEY", "")
 GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
+# Cap on outbound Groq calls per rolling hour, across the whole process. Past the cap the
+# explain routes return the offline summary instead — honest, and it bounds the bill.
+GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 60)
+
+# ── Write protection ─────────────────────────────────────────
+# When set, every state-changing route requires `X-Admin-Token: <ADMIN_TOKEN>`.
+# Reads and the WebSocket stay public, so a demo deployment is viewable by anyone while
+# nobody can change thresholds, the inventory ledger or the simulator.
+# Unset means no protection: fine locally, never on a public host (see APP_ENV below).
+ADMIN_TOKEN = _get("ADMIN_TOKEN", "")
+
+# ── Deployment mode ──────────────────────────────────────────
+# "production" turns the soft warnings below into a refusal to start, so a public
+# deployment cannot come up with localhost origins or no write protection.
+APP_ENV = (_get("APP_ENV", "development") or "development").lower()
+
+
+def production_config_errors() -> list[str]:
+    """Settings that must not be left at their development values in production."""
+    errors = []
+    if not ADMIN_TOKEN:
+        errors.append(
+            "ADMIN_TOKEN is empty: every write endpoint would be open to the internet. "
+            "Generate one with `openssl rand -hex 32` and set it in .env."
+        )
+    local = [o for o in ALLOWED_ORIGINS if "localhost" in o or "127.0.0.1" in o]
+    if local:
+        errors.append(
+            f"ALLOWED_ORIGINS still contains development origins ({', '.join(local)}). "
+            "Set it to the origin the browser actually uses, e.g. https://your.domain."
+        )
+    return errors
+
+
+def check_production_config() -> None:
+    """In production, refuse to start on a development-grade configuration. Outside
+    production the same problems are logged as warnings so local dev is unaffected."""
+    errors = production_config_errors()
+    if not errors:
+        if APP_ENV == "production":
+            log.info("APP_ENV=production: configuration checks passed")
+        return
+    if APP_ENV == "production":
+        raise SystemExit(
+            "Refusing to start with APP_ENV=production:\n"
+            + "\n".join(f"  - {e}" for e in errors)
+            + "\n\nSee docs/DEPLOYMENT.md for the required variables."
+        )
+    for e in errors:
+        log.warning("Insecure for a public deployment (APP_ENV=%s): %s", APP_ENV, e)
 
 
 def summary() -> dict:
@@ -173,6 +223,8 @@ def summary() -> dict:
         "AURORA_MODE": AURORA_MODE, "AURORA_SPEED": AURORA_SPEED,
         "AURORA_DATE": AURORA_DATE, "AURORA_DATE_SOURCE": AURORA_DATE_SOURCE,
         "GROQ_API_KEY": "set" if GROQ_API_KEY else "not set", "GROQ_MODEL": GROQ_MODEL,
+        "GROQ_MAX_CALLS_PER_HOUR": GROQ_MAX_CALLS_PER_HOUR,
+        "APP_ENV": APP_ENV, "ADMIN_TOKEN": "set" if ADMIN_TOKEN else "not set",
         "LOG_LEVEL": LOG_LEVEL,
         "APP_VERSION": APP_VERSION, "SIM_BATCH_FRESH_S": SIM_BATCH_FRESH_S,
         "HISTORY_MAX_POINTS": HISTORY_MAX_POINTS, "TICK_INTERVAL_S": TICK_INTERVAL_S,

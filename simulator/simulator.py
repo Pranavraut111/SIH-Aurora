@@ -76,6 +76,12 @@ else:
 
 # ── Backend endpoint & ports (from config.py / root .env) ─────
 BACKEND_URL = f"{app_config.BACKEND_URL}/api/sensors/batch"
+# /api/sensors/batch is write-protected like every other state-changing route, so the
+# simulator authenticates with the same ADMIN_TOKEN from the shared root .env. Unset
+# means no protection, and the header is simply omitted.
+BATCH_HEADERS = {"Content-Type": "application/json"}
+if app_config.ADMIN_TOKEN:
+    BATCH_HEADERS["X-Admin-Token"] = app_config.ADMIN_TOKEN
 TICK_INTERVAL = 2.0  # seconds
 CONTROL_PORT = app_config.SIM_PORT
 
@@ -1288,13 +1294,17 @@ def main():
             for payload in payloads:
                 try:
                     response = requests.post(
-                        BACKEND_URL, json=payload, timeout=5,
-                        headers={"Content-Type": "application/json"},
+                        BACKEND_URL, json=payload, timeout=5, headers=BATCH_HEADERS,
                     )
                     if response.status_code == 200:
                         consecutive_errors = 0
                     else:
                         consecutive_errors += 1
+                        if response.status_code == 401:
+                            log.error(
+                                "Backend rejected telemetry (401): ADMIN_TOKEN does not match "
+                                "the backend's. Both services must read the same root .env."
+                            )
                 except requests.exceptions.ConnectionError:
                     consecutive_errors += 1
                     if consecutive_errors == 1:
