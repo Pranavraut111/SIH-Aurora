@@ -386,9 +386,11 @@ jobs:
 
       - name: Rate limits return 429 when hammered
         run: |
-          # The explain zone is 5r/m with burst 2, so a short burst must start 429ing.
+          # The explain zone is 5r/m with burst 2 nodelay, so the 4th rapid request must
+          # be refused outright (in delay mode it would merely be queued and a sequential
+          # caller would never see a 429 at all).
           got429=0
-          for i in $(seq 1 15); do
+          for i in $(seq 1 10); do
             code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
               -H 'Content-Type: application/json' \
               -d '{"stationId":"maitri","question":"status"}' \
