@@ -55,11 +55,14 @@ COPY docker/nginx-security-headers.conf /etc/nginx/snippets/security-headers.con
 
 # The upstream host:port is templated so compose (or another orchestrator) can move the
 # backend without rebuilding. nginx substitutes these into the conf at container start.
-# NGINX_ENVSUBST_FILTER keeps the substitution to BACKEND_*, so nginx's own
+# NGINX_ENTRYPOINT_LOCAL_RESOLVERS makes the entrypoint export NGINX_LOCAL_RESOLVERS from
+# the container's /etc/resolv.conf, which the template needs for per-request DNS (see the
+# comment in nginx.conf). The envsubst filter is kept to just those names, so nginx's own
 # $variables in the template are never touched.
 ENV BACKEND_HOST=backend \
     BACKEND_PORT=8080 \
-    NGINX_ENVSUBST_FILTER=^BACKEND_
+    NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1 \
+    NGINX_ENVSUBST_FILTER='^(BACKEND_|NGINX_LOCAL_RESOLVERS)'
 
 # nginx:alpine runs as root only to bind :80 and then drops to the `nginx` user for
 # workers (`user nginx;` in the base nginx.conf). The image ships no application code

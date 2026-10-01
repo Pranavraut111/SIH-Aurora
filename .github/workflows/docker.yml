@@ -260,7 +260,12 @@ jobs:
           # The compose stack runs without ADMIN_TOKEN by default, so set one and restart
           # just the two Python services to prove the 401 path end to end.
           echo "ADMIN_TOKEN=${ADMIN_TOKEN}" >> .env
+          # Deliberately recreates ONLY the Python services, exactly as `docker compose
+          # up -d` does after an .env edit. The backend gets a new IP and the frontend is
+          # left running, so this also proves nginx re-resolves the backend per request
+          # instead of caching the address from startup.
           docker compose up -d --force-recreate backend simulator
+          docker compose ps
           for i in $(seq 1 40); do
             curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
             sleep 3

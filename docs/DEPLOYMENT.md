@@ -197,6 +197,11 @@ docker compose up --build -d
 The volumes are not touched, so the database and the acknowledged alerts carry over.
 Pin a version instead of tracking `main` with `AURORA_TAG=v1.2.3` in `.env`.
 
+Editing `.env` and running `docker compose up -d` recreates only the services whose
+configuration changed — usually the backend and simulator, leaving nginx running. That is
+fine: nginx resolves the backend's address per request (see the comment at the top of
+`docker/nginx.conf`), so it follows the new container rather than holding the old IP.
+
 ### Back up and restore the database
 
 The SQLite database lives in the `aurora-data` volume. Back it up with SQLite's own
