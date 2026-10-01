@@ -11,7 +11,9 @@
  */
 import { expect, test } from '@playwright/test';
 
-const API = `http://127.0.0.1:${process.env.API_PORT || '8080'}`;
+// Against the Docker stack the API is same-origin behind nginx (E2E_BASE_URL);
+// locally Playwright starts the backend on its own port.
+const API = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.API_PORT || '8080'}`;
 
 const MODULES = [
   'Mission Overview',

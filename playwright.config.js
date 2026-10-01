@@ -8,6 +8,11 @@ import { defineConfig, devices } from '@playwright/test';
 const API_PORT = process.env.API_PORT || '8080';
 const SIM_PORT = process.env.SIM_PORT || '8001';
 const VITE_PORT = process.env.VITE_PORT || '5173';
+
+// Set E2E_BASE_URL to run the same specs against an already-running stack — notably the
+// Docker one, where nginx serves the UI and proxies /api and /ws on a single origin.
+// Playwright then starts nothing itself.
+const EXTERNAL_BASE_URL = process.env.E2E_BASE_URL;
 // Absolute: the Python services run with cwd=simulator/.
 const PYTHON = process.env.AURORA_PYTHON || path.resolve('.venv/bin/python');
 // A throwaway DB: the smoke test writes alerts and ingestion logs, and
@@ -36,7 +41,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
   use: {
-    baseURL: `http://localhost:${VITE_PORT}`,
+    baseURL: EXTERNAL_BASE_URL || `http://localhost:${VITE_PORT}`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -52,7 +57,7 @@ export default defineConfig({
     },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: [
+  webServer: EXTERNAL_BASE_URL ? undefined : [
     {
       command: `${PYTHON} unified_backend.py`,
       cwd: 'simulator',

@@ -1,0 +1,36 @@
+# ═══════════════════════════════════════════════════════════════
+#  Aurora — pull the published multi-arch images instead of building. Use this on a
+#  small VM: `docker compose build` needs a Node toolchain and ~2 GB of scratch space,
+#  while this only pulls (~400 MB total) and works the same on x86 and ARM.
+#
+#      docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#      docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+#  AURORA_TAG picks the version: `latest` tracks main, or pin a release (v1.2.3) or a
+#  commit (sha-abc1234). Images are built for linux/amd64 and linux/arm64 by
+#  .github/workflows/docker.yml and published to GHCR, which needs no login to pull.
+#
+#  The published images are built WITHOUT the Chronos extras, so WITH_ML has no effect
+#  here — for ML, build locally with the base file (docs/DEPLOYMENT.md).
+#
+#  With the HTTPS overlay as well:
+#      docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                     -f docker-compose.https.yml up -d
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  frontend:
+    # `!reset` drops the base file's build section, so compose pulls instead of building.
+    build: !reset null
+    image: ghcr.io/saeesh-vele/sih2026a-frontend:${AURORA_TAG:-latest}
+    pull_policy: always
+
+  backend:
+    build: !reset null
+    image: ghcr.io/saeesh-vele/sih2026a-backend:${AURORA_TAG:-latest}
+    pull_policy: always
+
+  simulator:
+    build: !reset null
+    image: ghcr.io/saeesh-vele/sih2026a-simulator:${AURORA_TAG:-latest}
+    pull_policy: always

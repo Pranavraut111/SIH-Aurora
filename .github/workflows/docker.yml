@@ -1,0 +1,316 @@
+name: Docker images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.dockerignore'
+      - '.github/workflows/docker.yml'
+      - 'simulator/requirements*.txt'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+# No secrets beyond the built-in GITHUB_TOKEN.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # ghcr.io requires a lowercase namespace; github.repository_owner is "Saeesh-Vele".
+  IMAGE_PREFIX: ghcr.io/saeesh-vele/sih2026a
+
+jobs:
+  # ── Does the stack actually come up? ────────────────────────
+  # Runs first and on amd64 only, so a broken compose file fails in ~3 minutes
+  # instead of after the (much slower) arm64 builds.
+  compose-smoke:
+    name: compose up (amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build and start the stack
+        run: |
+          docker compose up --build -d
+          docker compose ps
+
+      - name: Wait for all three containers to be healthy
+        run: |
+          for i in $(seq 1 60); do
+            unhealthy=$(docker compose ps --format '{{.Service}} {{.Health}}' \
+              | awk '$2 != "healthy" { print $1 }')
+            if [ -z "$unhealthy" ]; then echo "all healthy"; exit 0; fi
+            echo "waiting on: $unhealthy"
+            sleep 5
+          done
+          echo "::error::containers never became healthy"
+          docker compose ps
+          docker compose logs --tail=80
+          exit 1
+
+      - name: The UI and the proxied API answer on :80
+        run: |
+          curl -fsS http://localhost/ | grep -q '<div id="root">'
+          curl -fsS http://localhost/healthz | grep -q ok
+          curl -fsS http://localhost/api/health | tee /tmp/health.json
+          python3 -c "
+          import json; h = json.load(open('/tmp/health.json'))
+          assert h['db']['ok'], h
+          assert h['simulator']['reachable'], h
+          print('health ok:', h['status'], 'stations:', list(h['stations']))
+          "
+
+      - name: Security headers and caching come from nginx
+        run: |
+          headers=$(curl -fsSI http://localhost/)
+          echo "$headers"
+          echo "$headers" | grep -iq 'content-security-policy'
+          echo "$headers" | grep -iq 'x-content-type-options: nosniff'
+          echo "$headers" | grep -iq 'referrer-policy'
+          echo "$headers" | grep -iq 'cache-control: no-store'
+          # A deep link must fall back to index.html (SPA routing).
+          curl -fsS http://localhost/some/deep/route | grep -q '<div id="root">'
+
+      - name: The backend and simulator are NOT reachable from the host
+        run: |
+          fail=0
+          for port in 8080 8001; do
+            if curl -fsS -m 3 "http://localhost:${port}/" >/dev/null 2>&1; then
+              echo "::error::port ${port} is reachable from the host but must be internal-only"
+              fail=1
+            else
+              echo "port ${port}: not reachable from the host (correct)"
+            fi
+          done
+          # ...while nginx can still reach the backend over the internal network.
+          docker compose exec -T frontend wget -q -O- http://backend:8080/api/health >/dev/null
+          echo "nginx -> backend over the aurora network: ok"
+          exit $fail
+
+      - name: Browser smoke test through nginx
+        env:
+          E2E_BASE_URL: http://localhost
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
+      - name: Data survives a restart
+        run: |
+          id=$(curl -fsS "http://localhost/api/alerts?stationId=bharati" \
+                | python3 -c "import json,sys; a=json.load(sys.stdin)['activeAlerts']; print(a[0]['id'] if a else '')")
+          if [ -z "$id" ]; then
+            echo "no open bharati alert to acknowledge; injecting one"
+            curl -fsS -X POST "http://localhost/api/sim/inject/generator_failure?stationId=bharati" >/dev/null
+            sleep 8
+            id=$(curl -fsS "http://localhost/api/alerts?stationId=bharati" \
+                  | python3 -c "import json,sys; a=json.load(sys.stdin)['activeAlerts']; print(a[0]['id'] if a else '')")
+          fi
+          test -n "$id" || { echo "::error::still no alert to acknowledge"; exit 1; }
+          curl -fsS -X POST "http://localhost/api/alerts/$id/acknowledge" \
+            -H 'Content-Type: application/json' -d '{"acknowledgedBy":"ci-restart-test"}' >/dev/null
+          echo "acknowledged $id"
+
+          docker compose restart
+          for i in $(seq 1 60); do
+            curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
+            sleep 5
+          done
+          curl -fsS "http://localhost/api/alerts/history?stationId=bharati&limit=200" \
+            | python3 -c "
+          import json,sys
+          rows = json.load(sys.stdin)
+          rows = rows.get('alerts', rows) if isinstance(rows, dict) else rows
+          who = [r for r in rows if r.get('acknowledgedBy') == 'ci-restart-test']
+          assert who, 'the acknowledgement did not survive the restart'
+          print('acknowledgement persisted across restart:', who[0]['id'])
+          "
+
+      # ── Offline: the Python services get a network with no external route ──
+      - name: Tear the online stack down
+        run: docker compose down -v
+
+      - name: Start with no access to the internet
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d
+          for i in $(seq 1 60); do
+            unhealthy=$(docker compose -f docker-compose.yml -f docker-compose.offline.yml ps \
+              --format '{{.Service}} {{.Health}}' | awk '$2 != "healthy" { print $1 }')
+            if [ -z "$unhealthy" ]; then echo "all healthy with no internet"; break; fi
+            echo "waiting on: $unhealthy"
+            sleep 5
+          done
+          test -z "$unhealthy" || {
+            echo "::error::the offline stack never became healthy"
+            docker compose -f docker-compose.yml -f docker-compose.offline.yml logs --tail=120
+            exit 1
+          }
+
+      - name: Confirm the containers really have no internet
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.offline.yml exec -T backend python -c "
+          import socket, sys
+          socket.setdefaulttimeout(4)
+          for host in ('api.open-meteo.com', 'archive-api.open-meteo.com', 'huggingface.co', 'api.groq.com'):
+              try:
+                  socket.create_connection((host, 443))
+              except OSError as exc:
+                  print(f'{host}: unreachable ({type(exc).__name__}) — correct')
+              else:
+                  sys.exit(f'::error::{host} is still reachable; the offline test proves nothing')
+          "
+
+      - name: Offline UI works and reports honest states
+        env:
+          E2E_BASE_URL: http://localhost
+        run: |
+          curl -fsS http://localhost/ | grep -q '<div id="root">'
+          curl -fsS http://localhost/api/health | tee /tmp/offline-health.json
+          python3 -c "
+          import json; h = json.load(open('/tmp/offline-health.json'))
+          assert h['db']['ok'], h
+          assert h['simulator']['reachable'], h
+          # Chronos is honestly unavailable without the ML extras / HuggingFace.
+          print('offline health:', h['status'], '| chronos:', h['chronos'])
+          "
+          # Telemetry still flows: the ERA5 replay caches are baked into the image.
+          curl -fsS 'http://localhost/api/station/maitri/state' | python3 -c "
+          import json,sys
+          s = json.load(sys.stdin)
+          assert s['dataSource'] in ('simulator', 'physics-fallback'), s['dataSource']
+          assert s['sensors'], 'no sensors in the offline snapshot'
+          print('offline telemetry:', s['dataSource'], '| provenance:', s['provenance'])
+          "
+          # The AI explain route must answer from the offline explainer, not fail.
+          curl -fsS -X POST http://localhost/api/aurora-explain \
+            -H 'Content-Type: application/json' \
+            -d '{"stationId":"maitri","question":"status"}' | python3 -c "
+          import json,sys
+          r = json.load(sys.stdin)
+          assert r.get('llmAvailable') is False, r
+          assert r.get('explanation'), r
+          print('offline explain:', r.get('mode'))
+          "
+          # And the whole UI still passes the browser smoke test.
+          npm run test:e2e
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  # ── Multi-arch images -> GHCR ───────────────────────────────
+  build:
+    name: ${{ matrix.name }} (amd64 + arm64)
+    runs-on: ubuntu-latest
+    needs: compose-smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: frontend
+            dockerfile: docker/frontend.Dockerfile
+          - name: backend
+            dockerfile: docker/backend.Dockerfile
+          - name: simulator
+            dockerfile: docker/simulator.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is built under emulation on the amd64 runner.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Pull requests build both architectures but push nothing, so a fork cannot
+      # publish an image.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # ── Prove the arm64 images really run ───────────────────────
+  verify-arm64:
+    name: Run the arm64 images under QEMU
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: The arm64 backend starts and answers /api/health
+        run: |
+          tag=sha-$(echo "${{ github.sha }}" | cut -c1-7)
+          image="${{ env.IMAGE_PREFIX }}-backend:${tag}"
+          docker run -d --name aurora-arm64 --platform linux/arm64 \
+            -e ALLOWED_ORIGINS=http://localhost -p 18080:8080 "$image"
+          for i in $(seq 1 60); do
+            if curl -fsS -m 5 http://localhost:18080/api/health >/dev/null 2>&1; then
+              echo "arm64 backend healthy under QEMU"
+              curl -fsS http://localhost:18080/api/health | head -c 400; echo
+              docker exec aurora-arm64 python -c "import platform; print('arch:', platform.machine())"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the arm64 backend never answered"
+          docker logs aurora-arm64 --tail=100
+          exit 1
+
+      - if: always()
+        run: docker rm -f aurora-arm64 || true
