@@ -232,6 +232,8 @@ export default function TopBar({
         <button
           className={`status-pill alerts ${alertCount > 0 ? (criticalCount > 0 ? 'critical' : 'warning') : 'normal'}`}
           onClick={onOpenAlertsDrawer}
+          data-testid="alerts-pill"
+          data-alert-count={alertCount}
           title={alertCount > 0 ? `${alertCount} Active Alert(s) — Click to view` : 'All Systems Nominal'}
         >
           <LuTriangleAlert size={13} />

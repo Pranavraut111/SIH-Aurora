@@ -53,3 +53,9 @@ npm-debug.log*
 # Open-Meteo FORECAST caches (rewritten every 3 h while running). ERA5 replay caches
 # (simulator/weather_cache/<station>_<start>_<end>.json) stay tracked for the offline demo.
 simulator/weather_cache/*_forecast.json
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
