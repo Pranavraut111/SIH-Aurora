@@ -8,7 +8,10 @@ ARG NODE_VERSION=22
 ARG NGINX_VERSION=1.29
 
 # ── Stage 1: build the static bundle ──────────────────────────
-FROM node:${NODE_VERSION}-alpine AS builder
+# Debian, not Alpine: Vite 8 (Rolldown) and oxlint ship native bindings per libc, and
+# package-lock.json carries no `libc` field for them, so glibc is the safe match. Only
+# this stage is Debian — the image that ships is nginx:alpine.
+FROM node:${NODE_VERSION}-bookworm-slim AS builder
 
 # Single origin: the browser calls /api and /ws on its own host and nginx proxies both,
 # so there is no CORS to configure and no backend address baked into the JavaScript.

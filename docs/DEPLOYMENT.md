@@ -53,6 +53,13 @@ docker --version && docker compose version
 Either pull the published images (recommended on a small VM — no Node toolchain, no
 build, ~400 MB of pulls):
 
+> **One-time step after the first CI publish:** packages pushed to GHCR start out
+> private. Make each of `sih2026a-frontend`, `sih2026a-backend` and `sih2026a-simulator`
+> public once (GitHub → your profile → Packages → the package → *Package settings* →
+> *Change visibility*), or log in on the server with
+> `echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin` using a token that
+> has `read:packages`.
+
 ```bash
 git clone https://github.com/Saeesh-Vele/SIH2026A.git aurora
 cd aurora
@@ -325,6 +332,9 @@ published images (`-f docker-compose.prod.yml`) instead of building.
 
 **ARM: "no matching manifest".** The published images are multi-arch; make sure you are
 not pinning a digest or an old tag built before arm64 support.
+
+**`denied` or `unauthorized` when pulling from ghcr.io.** The packages are still private
+— see the note in [Get Aurora](#get-aurora), or build from source instead.
 
 **The simulator keeps restarting with WITH_ML=true.** It is being OOM-killed. Raise
 `SIMULATOR_MEMORY_LIMIT` to `3g` and use a host with 4 GB+.

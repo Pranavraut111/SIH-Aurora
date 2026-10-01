@@ -52,8 +52,15 @@ jobs:
           docker compose version
           docker compose config --quiet && echo "compose config is valid"
 
-      - name: Build the images
-        run: docker compose build --progress plain
+      # One step per image: the step name alone identifies which build broke.
+      - name: Build the backend image
+        run: docker compose build --progress plain backend
+
+      - name: Build the simulator image
+        run: docker compose build --progress plain simulator
+
+      - name: Build the frontend image
+        run: docker compose build --progress plain frontend
 
       - name: Start the stack
         run: |
