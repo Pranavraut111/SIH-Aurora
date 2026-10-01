@@ -237,19 +237,29 @@ jobs:
       # 200 with no body, not 405.
       - name: HEAD works on /healthz and the proxied /api/health
         run: |
+          # -I writes the response HEADERS to stdout, so -o would never be empty.
+          # %{size_download} is the body size, which must be 0 for a HEAD response.
           for path in /healthz /api/health; do
-            code=$(curl -s -o /tmp/head-body -w '%{http_code}' -I "http://localhost${path}")
+            read -r code size <<<"$(curl -s -o /dev/null \
+              -w '%{http_code} %{size_download}' -I "http://localhost${path}")"
             test "$code" = "200" || { echo "::error::HEAD ${path} returned ${code}"; exit 1; }
-            test ! -s /tmp/head-body || { echo "::error::HEAD ${path} returned a body"; exit 1; }
+            test "$size" = "0" || { echo "::error::HEAD ${path} returned a ${size}-byte body"; exit 1; }
             echo "HEAD ${path}: 200, no body"
           done
+          # GET must still return the full report, not an empty 200.
+          curl -fsS http://localhost/api/health | grep -q '"stations"'
 
       # ── Abuse protection ──────────────────────────────────────
+      # The token comes from the environment, never inline in a curl -H: a literal there
+      # is indistinguishable from a real leaked credential (gitleaks' curl-auth-header
+      # rule flags it, correctly).
       - name: Writes need the operator token
+        env:
+          ADMIN_TOKEN: ci-operator-token
         run: |
           # The compose stack runs without ADMIN_TOKEN by default, so set one and restart
           # just the two Python services to prove the 401 path end to end.
-          echo "ADMIN_TOKEN=ci-operator-token" >> .env
+          echo "ADMIN_TOKEN=${ADMIN_TOKEN}" >> .env
           docker compose up -d --force-recreate backend simulator
           for i in $(seq 1 40); do
             curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
@@ -260,11 +270,11 @@ jobs:
           test "$code" = "401" || { echo "::error::unauthenticated write returned $code, expected 401"; exit 1; }
           echo "no token  -> 401"
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H 'X-Admin-Token: wrong' "http://localhost/api/sim/reset?stationId=maitri")
+            -H "X-Admin-Token: not-${ADMIN_TOKEN}" "http://localhost/api/sim/reset?stationId=maitri")
           test "$code" = "401" || { echo "::error::wrong token returned $code, expected 401"; exit 1; }
           echo "wrong token -> 401"
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H 'X-Admin-Token: ci-operator-token' "http://localhost/api/sim/reset?stationId=maitri")
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" "http://localhost/api/sim/reset?stationId=maitri")
           test "$code" = "200" || { echo "::error::valid token returned $code, expected 200"; exit 1; }
           echo "right token -> 200"
           # Reading stays public throughout, and the simulator still feeds telemetry

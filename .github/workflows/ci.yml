@@ -147,4 +147,6 @@ jobs:
       - name: gitleaks detect
         run: |
           docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
-            detect --source /repo --config /repo/.gitleaks.toml --redact --no-banner --verbose
+            detect --source /repo --config /repo/.gitleaks.toml \
+            --gitleaks-ignore-path /repo/.gitleaksignore \
+            --redact --no-banner --verbose

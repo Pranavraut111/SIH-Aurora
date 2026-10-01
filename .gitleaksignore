@@ -1,0 +1,9 @@
+# Aurora — gitleaks findings that are verified NOT to be credentials.
+# Each entry is a fingerprint (commit:path:rule:line) and must carry a reason.
+# Prefer fixing the code: this file is for findings already frozen in git history.
+
+# A literal CI test token in a `curl -H 'X-Admin-Token: ...'` inside the Docker workflow.
+# It is the throwaway value the compose smoke test sets on its own stack, never a real
+# credential. Fixed in the working tree (the token now comes from the step environment),
+# but the line is frozen in this commit's history.
+888eb263a909ff79abcce8faf904f2f27535d6e7:.github/workflows/docker.yml:curl-auth-header:262
