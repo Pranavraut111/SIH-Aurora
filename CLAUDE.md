@@ -45,9 +45,11 @@
 - Python: import from `simulator/config.py` — the ONLY place in `simulator/` that reads
   `os.environ` or contains `localhost`. All file paths resolve relative to that module.
   (In `simulator.py` the module is imported as `app_config`, because `config` is a loop variable there.)
-- Frontend: import `API_URL` / `WS_URL` / `SIM_URL` from `src/config.js` (the only file in
+- Frontend: import `API_URL` / `WS_URL` from `src/config.js` (the only file in
   `src/` with `localhost`), and make HTTP calls through `src/services/api.js`
-  (`apiGet/apiPost/simGet/simPost`), which throws `ApiError` and never returns fake data.
+  (`apiGet/apiPost`), which throws `ApiError` and never returns fake data. The browser
+  never calls the simulator directly — simulator features are proxied by the backend
+  (`/api/ai/*`, `/api/sim/*`, `/api/aurora-explain`).
 - Python deps: `simulator/requirements.txt` (runtime, pinned), `simulator/requirements-ml.txt`
   (optional Chronos), `requirements-dev.txt` (pytest/httpx/ruff). `scikit-learn` must stay
   at 1.7.2 to match the pickled models.

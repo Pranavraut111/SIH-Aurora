@@ -396,3 +396,13 @@
     display: none;
   }
 }
+
+/* ── Global data-source badge ─────────────────────────────── */
+.status-pill.data-source-badge { gap: 6px; font-weight: 600; }
+.data-source-badge.tone-live { color: #34d399; border-color: rgba(52, 211, 153, 0.45); background: rgba(52, 211, 153, 0.08); }
+.data-source-badge.tone-fallback { color: #38bdf8; border-color: rgba(56, 189, 248, 0.45); background: rgba(56, 189, 248, 0.08); }
+.data-source-badge.tone-demo {
+  color: #1c1917; background: #f59e0b; border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+}
+.data-source-badge.tone-offline { color: #f87171; border-color: rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.08); }

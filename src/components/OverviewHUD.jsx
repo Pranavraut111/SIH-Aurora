@@ -19,7 +19,6 @@ import {
   LuUsers,
   LuMountain,
   LuCalendar,
-  LuVolume2,
   LuMic,
 } from 'react-icons/lu';
 import './OverviewHUD.css';
@@ -36,13 +35,14 @@ export default function OverviewHUD({
   const envData = sensorData?.lab || {};
   const genData = sensorData?.generator || {};
 
-  const temp = envData.env_temp ?? -22.4;
-  const wind = envData.env_wind ?? 34;
-  const power = genData.gen_power ?? 162;
+  // Live telemetry only — missing values render as "—" (no hardcoded stand-ins).
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const temp = num(envData.env_temp);
+  const wind = num(envData.env_wind);
+  const power = num(genData.gen_power);
   
   const [isJarvisMode, setIsJarvisMode] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [chatHistory, setChatHistory] = useState([]);
   
   // We need a ref to hold the recognition instance so we can stop/start it
   const [recognition, setRecognition] = useState(null);
@@ -81,20 +81,17 @@ export default function OverviewHUD({
       return;
     }
     
-    // Build the conversational prompt trick
-    const historyText = chatHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
-    const systemInstruction = `You are a highly advanced voice AI (like JARVIS). Keep answers EXTREMELY concise and conversational (1-3 sentences max). Answer the user's specific question directly. DO NOT output long diagnostic reports unless explicitly asked. DO NOT output markdown since this is for text-to-speech.`;
-    const promptContext = `CONVERSATION HISTORY:\n${historyText}\n\nSYSTEM INSTRUCTION:\n${systemInstruction}\n\nCURRENT USER VOICE QUERY: "${queryText}"`;
-
+    // Send only the user's question; the backend grounds the answer in the
+    // current decision JSON (Groq LLM, or an offline summary without one).
     try {
-      const d = await apiPost('/aurora-explain', { station: activeStation, freeText: promptContext, question: 'free' });
-      const ans = d?.explanation;
-      setChatHistory(prev => [...prev.slice(-4), { role: 'user', content: queryText }, { role: 'aurora', content: ans }]);
-      await speak(ans);
+      const d = await apiPost('/aurora-explain', { station: activeStation, freeText: queryText, question: 'free' }, { timeoutMs: 25000 });
+      const ans = d?.explanation || 'No answer returned.';
+      await speak(d?.llmAvailable === false ? `Offline summary. ${ans}` : ans);
     } catch (e) {
+      console.error('[Voice] aurora-explain failed', e);
       await speak(e?.kind === 'http'
-        ? "I'm sorry, I am unable to connect to the backend logic matrix."
-        : "Network anomaly detected. I cannot process that right now.");
+        ? `The backend returned an error, status ${e.status}.`
+        : 'The backend is unreachable.');
     }
   };
 
@@ -143,7 +140,7 @@ export default function OverviewHUD({
         // We use a small timeout to avoid thrashing
         setTimeout(() => {
           if (document.querySelector('.btn-hud-jarvis.listening') && !document.querySelector('.btn-hud-jarvis .pulse-icon.speaking')) {
-            try { rec.start(); } catch (e) {}
+            try { rec.start(); } catch (e) { console.warn('[Voice] could not restart recognition', e); }
           }
         }, 300);
       };
@@ -165,30 +162,30 @@ export default function OverviewHUD({
   const stats = [
     {
       label: 'OUTSIDE TEMP',
-      value: `${temp.toFixed(1)}`,
+      value: temp == null ? '—' : temp.toFixed(1),
       unit: '°C',
-      statusText: temp < -35 ? 'Severe Cold' : 'Polar Baseline',
-      color: temp < -40 ? '#f87171' : temp < -30 ? '#fbbf24' : '#38bdf8',
+      statusText: temp == null ? 'No telemetry' : temp < -35 ? 'Severe Cold' : 'Polar Baseline',
+      color: temp == null ? '#94a3b8' : temp < -40 ? '#f87171' : temp < -30 ? '#fbbf24' : '#38bdf8',
       IconComp: LuThermometerSnowflake,
       iconColor: '#38bdf8',
       bgGlow: 'rgba(56, 189, 248, 0.15)',
     },
     {
       label: 'WIND SPEED',
-      value: `${wind.toFixed(0)}`,
+      value: wind == null ? '—' : wind.toFixed(0),
       unit: 'km/h',
-      statusText: wind > 80 ? 'Blizzard Warning' : 'Moderate Katabatic',
-      color: wind > 80 ? '#fbbf24' : '#f8fafc',
+      statusText: wind == null ? 'No telemetry' : wind > 80 ? 'Blizzard Warning' : wind > 40 ? 'Strong Wind' : 'Calm to Moderate',
+      color: wind == null ? '#94a3b8' : wind > 80 ? '#fbbf24' : '#f8fafc',
       IconComp: LuWind,
       iconColor: '#38bdf8',
       bgGlow: 'rgba(56, 189, 248, 0.12)',
     },
     {
       label: 'POWER GENERATION',
-      value: `${power.toFixed(0)}`,
+      value: power == null ? '—' : power.toFixed(0),
       unit: 'kW',
-      statusText: 'Gen-Set 1 Online (65%)',
-      color: power < 80 ? '#fbbf24' : '#fbbf24',
+      statusText: power == null ? 'No telemetry' : 'Generator output (model-derived)',
+      color: power == null ? '#94a3b8' : '#fbbf24',
       IconComp: LuZap,
       iconColor: '#fbbf24',
       bgGlow: 'rgba(251, 191, 36, 0.15)',

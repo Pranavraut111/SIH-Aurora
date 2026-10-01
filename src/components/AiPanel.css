@@ -479,3 +479,20 @@
   50% { transform: scale(1.2); opacity: 0.7; }
   100% { transform: scale(1); opacity: 1; }
 }
+
+/* ── real-pipeline states (P0-5) ─────────────────────────────── */
+.ai-offline-state {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 10px 12px; margin: 8px 0; border-radius: 8px;
+  background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fbbf24; font-size: 0.85rem;
+}
+.ai-list { margin: 8px 0 4px 18px; font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary, #cbd5e1); }
+.ai-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 8px 0; }
+.ai-table th, .ai-table td { padding: 4px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.15); text-align: left; }
+.ai-table th { color: var(--text-muted, #94a3b8); font-weight: 500; }
+.ai-ask-form { display: flex; gap: 8px; margin: 10px 0; }
+.ai-ask-input {
+  flex: 1; padding: 8px 10px; border-radius: 8px; font-size: 0.85rem;
+  background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.25); color: inherit;
+}

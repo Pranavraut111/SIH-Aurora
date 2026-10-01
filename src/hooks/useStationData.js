@@ -13,8 +13,12 @@ import {
 } from '../data/stationData';
 import { analyzeStation } from '../services/decisionEngine';
 import { WS_URL } from '../config';
-import { apiGet, apiPost } from '../services/api';
-const RECONNECT_DELAY = 3000;
+import { apiPost } from '../services/api';
+
+// WS reconnect: exponential backoff 1 s → 30 s, reset when a socket opens (B21).
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30000;
+export const reconnectDelay = (attempt) => Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt);
 
 // Per-station stream: the backend sends only this station's snapshots.
 function stationWsUrl(stationId) {
@@ -32,16 +36,22 @@ export function useStationData(activeStation = 'maitri') {
     eventTimeline: [],
     timestamp: Date.now(),
     connected: true,
-    bandwidth: { rawBytes: 1420, compressedBytes: 420, savedKB: 24.8 },
-    signalQuality: 100,
+    bandwidth: null,          // not measured — never fabricated
+    signalQuality: null,      // not measured
     activePatterns: [],
     offlineQueueSize: 0,
     isCached: false,
+    telemetrySource: null,
   });
 
-  const [dataSource, setDataSource] = useState('connecting');
+  const [dataSource, setDataSourceState] = useState('connecting');
+  // Ref mirror so timers/callbacks never read a stale closure value (B21).
+  const dataSourceRef = useRef('connecting');
+  const setDataSource = useCallback((v) => { dataSourceRef.current = v; setDataSourceState(v); }, []);
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
+  const reconnectAttempt = useRef(0);
+  const simUnsubRef = useRef(null);   // the ONE browser-demo subscription (B20)
   const historyRef = useRef({});
   const activeStationRef = useRef(activeStation);
   const isManuallyDisconnectedRef = useRef(false);
@@ -82,23 +92,10 @@ export function useStationData(activeStation = 'maitri') {
 
       ws.onopen = () => {
         console.log('[WS] Connected to backend');
+        reconnectAttempt.current = 0;
         setDataSource('websocket');
-        stopSimulation();
+        stopBrowserDemo();
 
-        // Poll AI analysis for active station
-        const aiPollId = setInterval(async () => {
-          if (isManuallyDisconnectedRef.current) return;
-          const sid = activeStationRef.current;
-          try {
-            const ai = await apiGet(`/ai/analysis?stationId=${sid}`);
-            setStationData(prev => ({
-              ...prev,
-              aiHealth: ai?.overallHealth || 'healthy',
-              dependencyAlerts: ai?.dependencyAlerts || [],
-            }));
-          } catch (e) { /* AI service optional */ }
-        }, 4000);
-        ws._aiPollId = aiPollId;
       };
 
       ws.onmessage = (event) => {
@@ -139,8 +136,8 @@ export function useStationData(activeStation = 'maitri') {
             eventTimeline: state.eventTimeline || [],
             timestamp: state.timestamp || Date.now(),
             connected: true,
-            bandwidth: state.bandwidth || { rawBytes: 1420, compressedBytes: 420, savedKB: 24.8 },
-            signalQuality: state.signalQuality ?? 100,
+            bandwidth: state.bandwidth ?? null,
+            signalQuality: state.signalQuality ?? null,
             activePatterns: state.activePatterns || [],
             offlineQueueSize: 0,
             isCached: false,
@@ -159,16 +156,15 @@ export function useStationData(activeStation = 'maitri') {
 
       ws.onclose = () => {
         // Use THIS socket (not wsRef): on a station switch wsRef already holds the new socket.
-        if (ws._aiPollId) clearInterval(ws._aiPollId);
         if (wsRef.current === ws) wsRef.current = null;
         if (ws._switching) {
           console.log('[WS] Closed previous station stream (station switch)');
           return; // a new socket is already connecting; no fallback, no retry
         }
-        console.log('[WS] Disconnected, falling back to local cache/simulation');
+        if (ws._disposed) return; // hook unmounted
         if (!isManuallyDisconnectedRef.current) {
           fallbackToSimulation();
-          reconnectTimer.current = setTimeout(connectWebSocket, RECONNECT_DELAY);
+          scheduleReconnect();
         }
       };
 
@@ -177,18 +173,38 @@ export function useStationData(activeStation = 'maitri') {
         ws.close();
       };
     } catch (e) {
-      console.log('WebSocket connection failed, using local simulation');
+      console.warn('[WS] Connection failed, using browser demo mode', e);
       fallbackToSimulation();
-      reconnectTimer.current = setTimeout(connectWebSocket, RECONNECT_DELAY);
+      scheduleReconnect();
     }
   }, [updateHistory]);
 
+  function scheduleReconnect() {
+    clearTimeout(reconnectTimer.current);
+    const delay = reconnectDelay(reconnectAttempt.current);
+    reconnectAttempt.current += 1;
+    console.log(`[WS] Disconnected; retry in ${delay / 1000}s (browser demo mode meanwhile)`);
+    reconnectTimer.current = setTimeout(() => connectWebSocketRef.current(), delay);
+  }
+  const connectWebSocketRef = useRef(connectWebSocket);
+  connectWebSocketRef.current = connectWebSocket;
+
+  function stopBrowserDemo() {
+    if (simUnsubRef.current) {
+      simUnsubRef.current();
+      simUnsubRef.current = null;
+    }
+    stopSimulation();
+  }
+
   // ── Fall back to local simulation ─────────────────────────
+  // Browser demo mode: client-side random-walk data, clearly labelled SIMULATED.
   const fallbackToSimulation = useCallback(() => {
     setDataSource('simulation');
+    if (simUnsubRef.current) return; // already subscribed — never stack subscriptions (B20)
     startSimulation(2000);
 
-    const unsub = subscribeSim(() => {
+    simUnsubRef.current = subscribeSim(() => {
       if (isManuallyDisconnectedRef.current) {
         offlineQueueRef.current += 1;
         setStationData(prev => ({
@@ -216,25 +232,16 @@ export function useStationData(activeStation = 'maitri') {
         eventTimeline: snapshot.eventTimeline || [],
         timestamp: snapshot.timestamp,
         connected: true,
-        bandwidth: computeBandwidth(snapshot),
-        signalQuality: snapshot.signalQuality ?? 100,
+        bandwidth: null,
+        signalQuality: null,
         activePatterns: snapshot.activePatterns || [],
         offlineQueueSize: 0,
         isCached: false,
+        telemetrySource: 'browser-demo',
+        provenance: { equipment: 'SIMULATED', environment: 'SIMULATED', storage: 'SIMULATED' },
       });
     });
-
-    window.__auroraSimUnsub = unsub;
-  }, [updateHistory]);
-
-  function computeBandwidth(snapshot) {
-    const raw = JSON.stringify(snapshot.sensors);
-    const rawBytes = raw.length;
-    const compressionRatio = 0.3 + Math.random() * 0.1;
-    const compressedBytes = Math.round(rawBytes * compressionRatio);
-    const savedKB = ((rawBytes - compressedBytes) / 1024).toFixed(1);
-    return { rawBytes, compressedBytes, savedKB: parseFloat(savedKB) };
-  }
+  }, [updateHistory, setDataSource]);
 
   // ── Link Toggle Handler ───────────────────────────────────
   const toggleConnection = useCallback(async () => {
@@ -252,19 +259,13 @@ export function useStationData(activeStation = 'maitri') {
         offlineQueueSize: 1,
       }));
     } else {
-      // Transition to ONLINE / RESTORED
-      const savedIncrement = (offlineQueueRef.current * 1.4);
+      // Transition to ONLINE / RESTORED (the missed messages were dropped, not stored)
       offlineQueueRef.current = 0;
       setStationData(prev => ({
         ...prev,
         connected: true,
-        signalQuality: 100,
         isCached: false,
         offlineQueueSize: 0,
-        bandwidth: {
-          ...prev.bandwidth,
-          savedKB: parseFloat((prev.bandwidth.savedKB + savedIncrement).toFixed(1))
-        }
       }));
     }
 
@@ -272,7 +273,7 @@ export function useStationData(activeStation = 'maitri') {
     try {
       await apiPost(`/connection/toggle?stationId=${activeStationRef.current}`);
     } catch (e) {
-      /* Handled gracefully */
+      console.warn('[Link] backend toggle failed (UI-only link simulation)', e);
     }
   }, [stationData.connected]);
 
@@ -284,6 +285,7 @@ export function useStationData(activeStation = 'maitri') {
         activeAlerts: prev.activeAlerts.filter(a => a.id !== alertId)
       }));
     } catch (e) {
+      console.warn(`[Alerts] acknowledge ${alertId} failed on backend; hiding locally`, e);
       setStationData(prev => ({
         ...prev,
         activeAlerts: prev.activeAlerts.filter(a => a.id !== alertId)
@@ -296,7 +298,7 @@ export function useStationData(activeStation = 'maitri') {
     connectWebSocket();
 
     const fallbackTimer = setTimeout(() => {
-      if (dataSource === 'connecting') {
+      if (dataSourceRef.current === 'connecting') {
         fallbackToSimulation();
       }
     }, 2000);
@@ -304,12 +306,12 @@ export function useStationData(activeStation = 'maitri') {
     return () => {
       clearTimeout(fallbackTimer);
       clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-      stopSimulation();
-      if (window.__auroraSimUnsub) {
-        window.__auroraSimUnsub();
-        delete window.__auroraSimUnsub;
+      if (wsRef.current) {
+        wsRef.current._disposed = true;
+        wsRef.current.close();
+        wsRef.current = null;
       }
+      stopBrowserDemo();
     };
   }, []);
 

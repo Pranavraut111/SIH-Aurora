@@ -3,7 +3,8 @@
    Structured mission control views with live telemetry,
    equipment status matrix, interactive dependency graph, and microgrid flow.
    ═══════════════════════════════════════════════════════════════ */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { apiGet } from '../services/api';
 import { motion } from 'framer-motion';
 import { BUILDINGS, DEPENDENCY_GRAPH } from '../data/stationData';
 import DependencyGraph from './DependencyGraph';
@@ -178,28 +179,66 @@ export function InfrastructurePanel({ sensorData = {}, alerts = {}, onBuildingCl
 // ═══════════════════════════════════════════════════════════════
 // ENERGY GRID DASHBOARD
 // ═══════════════════════════════════════════════════════════════
-export function EnergyPanel({ sensorData = {}, alerts = {} }) {
+export function EnergyPanel({ sensorData = {}, activeStation = 'maitri', telemetrySource }) {
+  // Live telemetry (simulator batch or physics fallback). No defaults: missing = "—".
   const genData = sensorData.generator || {};
-  const powerKW = genData.gen_power ?? 162;
-  const fuelRateLph = genData.gen_fuel_rate ?? 32.4;
-  const rpm = genData.gen_rpm ?? 1500;
-  const coolantTempC = genData.gen_temp ?? 84.5;
-  const oilPressureBar = genData.gen_oil_pressure ?? 4.8;
-  const vibrationMm = genData.gen_vibration ?? 1.8;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const powerKW = num(genData.gen_power);
+  const fuelRateLph = num(genData.gen_fuel_rate);
+  const rpm = num(genData.gen_rpm);
+  const coolantTempC = num(genData.gen_temp);
 
-  // Day tank & autonomy calculation
-  const dayTankLiters = 4800;
-  const totalFuelLiters = 185000;
-  const burnRateDaily = fuelRateLph * 24;
-  const autonomyDays = Math.floor(totalFuelLiters / Math.max(burnRateDaily, 100));
+  // Physics-model breakdown for the same station (one twin-inspector schema)
+  const [twin, setTwin] = useState({ station: null, data: null, error: null });
+  // Fuel stock comes from the operator-entered logistics ledger, not a constant
+  const [fuel, setFuel] = useState({ station: null, item: null, error: null });
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await apiGet(`/twin-inspector?stationId=${activeStation}`);
+        if (alive) setTwin({ station: activeStation, data, error: null });
+      } catch (err) {
+        console.error('[EnergyPanel] twin-inspector failed', err);
+        if (alive) setTwin({ station: activeStation, data: null, error: err });
+      }
+      try {
+        const inv = await apiGet(`/logistics?stationId=${activeStation}`);
+        const item = (inv.items || []).find((i) => i.id === `${activeStation}-fuel`) || null;
+        if (alive) setFuel({ station: activeStation, item, error: null });
+      } catch (err) {
+        console.error('[EnergyPanel] logistics failed', err);
+        if (alive) setFuel({ station: activeStation, item: null, error: err });
+      }
+    };
+    load();
+    const id = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, [activeStation]);
 
-  // Power distribution breakdown
+  const twinData = twin.station === activeStation ? twin.data : null;
+  const twinError = twin.station === activeStation ? twin.error : null;
+  const fuelItem = fuel.station === activeStation ? fuel.item : null;
+  const gm = twinData?.generatorModel || {};
+  const ratedKW = num(gm.maxPower_kW);
+  const loadPct = num(gm.loadFactor_pct) ?? (powerKW != null && ratedKW ? (powerKW / ratedKW) * 100 : null);
+  const pb = twinData?.powerBreakdown || {};
+  const totalDemand = num(pb.total_demand_kW);
   const loadBreakdown = [
-    { label: 'Life Support & Heating', pct: 45, kw: powerKW * 0.45, color: '#fbbf24' },
-    { label: 'Scientific Instruments', pct: 25, kw: powerKW * 0.25, color: '#38bdf8' },
-    { label: 'Communications & Satcom', pct: 15, kw: powerKW * 0.15, color: '#a78bfa' },
-    { label: 'Auxiliary & Trace Heating', pct: 15, kw: powerKW * 0.15, color: '#34d399' },
+    { label: 'Base electrical (buildings)', kw: num(pb.base_electrical_kW), color: '#38bdf8' },
+    { label: 'Electrical heating', kw: num(pb.heating_electrical_kW), color: '#fbbf24' },
+    { label: 'Water treatment', kw: num(pb.water_treatment_kW), color: '#34d399' },
+    { label: 'Communications', kw: num(pb.comms_kW), color: '#a78bfa' },
+    { label: 'Ventilation', kw: num(pb.ventilation_kW), color: '#f472b6' },
   ];
+
+  const burnRateDaily = fuelRateLph != null ? fuelRateLph * 24 : null;
+  const fuelStockL = fuelItem && fuelItem.unit === 'L' ? fuelItem.current : null;
+  const autonomyDays = fuelStockL != null && burnRateDaily ? Math.floor(fuelStockL / burnRateDaily) : null;
+  const f = (v, d = 1) => (v == null ? '—' : v.toFixed(d));
+  const sourceLabel = telemetrySource === 'simulator' ? 'LIVE SIMULATOR · MODEL-DERIVED'
+    : telemetrySource === 'physics-fallback' ? 'PHYSICS FALLBACK · MODEL-DERIVED'
+      : telemetrySource === 'browser-demo' ? 'BROWSER DEMO · SIMULATED' : 'NO TELEMETRY';
 
   return (
     <div className="energy-module-container">
@@ -211,156 +250,154 @@ export function EnergyPanel({ sensorData = {}, alerts = {} }) {
           </div>
           <div>
             <div className="energy-title-row">
-              <h1 className="energy-title font-display">Antarctic Microgrid & Power Management</h1>
-              <span className="energy-badge-active">NCPOR CONTINUOUS POWER</span>
+              <h1 className="energy-title font-display">Microgrid & Power</h1>
+              <span className="energy-badge-active">{sourceLabel}</span>
             </div>
             <p className="energy-subtitle">
-              Synchronized diesel generation, fuel burn optimization, thermal heat exchange, and electrical bus loads.
+              Generator values from telemetry; load split from the physics model (Willans-line fuel model, estimated parameters).
             </p>
           </div>
         </div>
 
         <div className="energy-header-status">
-          <span className="gen-status-pill online">
-            <span className="status-dot-pulse" /> GEN-SET 1 &bull; ONLINE
-          </span>
           <span className="gen-status-pill standby">
-            GEN-SET 2 &bull; HOT STANDBY
+            Single modelled generator · second gen-set not modelled
           </span>
         </div>
       </div>
 
       {/* Hero Metrics Row */}
       <div className="energy-hero-grid">
-        {/* Total Power Output Card */}
         <div className="energy-hero-card glass-panel">
           <div className="card-top-row">
             <span className="card-tag text-label">TOTAL GENERATION</span>
             <LuZap size={16} className="text-warning" />
           </div>
           <div className="card-val-row">
-            <span className="hero-val font-mono text-warning tabular-nums">{powerKW.toFixed(0)}</span>
+            <span className="hero-val font-mono text-warning tabular-nums">{f(powerKW, 0)}</span>
             <span className="hero-unit">kW</span>
           </div>
           <div className="card-sub-info">
-            <span>Rated: 250 kW (65% Load Factor)</span>
+            <span>Rated (model): {ratedKW != null ? `${ratedKW} kW` : '—'} · load {loadPct != null ? `${loadPct.toFixed(0)}%` : '—'}</span>
             <div className="hero-bar-track">
-              <div className="hero-bar-fill" style={{ width: `${(powerKW / 250) * 100}%`, background: '#fbbf24' }} />
+              <div className="hero-bar-fill" style={{ width: `${Math.min(100, loadPct ?? 0)}%`, background: '#fbbf24' }} />
             </div>
           </div>
         </div>
 
-        {/* Fuel Flow Card */}
         <div className="energy-hero-card glass-panel">
           <div className="card-top-row">
             <span className="card-tag text-label">FUEL BURN RATE</span>
             <LuFuel size={16} className="text-cyan" />
           </div>
           <div className="card-val-row">
-            <span className="hero-val font-mono text-cyan tabular-nums">{fuelRateLph.toFixed(1)}</span>
+            <span className="hero-val font-mono text-cyan tabular-nums">{f(fuelRateLph)}</span>
             <span className="hero-unit">L/hr</span>
           </div>
           <div className="card-sub-info">
-            <span>Daily: ~{burnRateDaily.toFixed(0)} L &bull; Autonomy: <strong>{autonomyDays} days</strong></span>
-            <div className="hero-bar-track">
-              <div className="hero-bar-fill" style={{ width: `${(fuelRateLph / 50) * 100}%`, background: '#38bdf8' }} />
-            </div>
+            <span>
+              Daily: {burnRateDaily != null ? `~${burnRateDaily.toFixed(0)} L` : '—'} &bull; Stock (logistics ledger):{' '}
+              {fuelStockL != null ? `${fuelStockL.toLocaleString()} L` : fuel.error ? 'backend unreachable' : '—'} &bull;
+              Autonomy: <strong>{autonomyDays != null ? `${autonomyDays} days` : '—'}</strong>
+            </span>
           </div>
         </div>
 
-        {/* Engine Coolant Temp */}
         <div className="energy-hero-card glass-panel">
           <div className="card-top-row">
             <span className="card-tag text-label">COOLANT TEMP</span>
             <LuFlame size={16} className="text-amber" />
           </div>
           <div className="card-val-row">
-            <span className="hero-val font-mono text-amber tabular-nums">{coolantTempC.toFixed(1)}</span>
+            <span className="hero-val font-mono text-amber tabular-nums">{f(coolantTempC)}</span>
             <span className="hero-unit">°C</span>
           </div>
           <div className="card-sub-info">
-            <span>Operating Window: 80°C - 95°C</span>
+            <span>Model-derived coolant temperature</span>
             <div className="hero-bar-track">
-              <div className="hero-bar-fill" style={{ width: `${(coolantTempC / 110) * 100}%`, background: '#f59e0b' }} />
+              <div className="hero-bar-fill" style={{ width: `${Math.min(100, ((coolantTempC ?? 0) / 110) * 100)}%`, background: '#f59e0b' }} />
             </div>
           </div>
         </div>
 
-        {/* Engine RPM & Oil */}
         <div className="energy-hero-card glass-panel">
           <div className="card-top-row">
-            <span className="card-tag text-label">FREQUENCY / RPM</span>
+            <span className="card-tag text-label">ENGINE RPM</span>
             <LuActivity size={16} className="text-emerald" />
           </div>
           <div className="card-val-row">
-            <span className="hero-val font-mono text-emerald tabular-nums">{rpm.toFixed(0)}</span>
+            <span className="hero-val font-mono text-emerald tabular-nums">{f(rpm, 0)}</span>
             <span className="hero-unit">RPM</span>
           </div>
           <div className="card-sub-info">
-            <span>50.0 Hz Synchronized &bull; Oil: {oilPressureBar.toFixed(1)} bar</span>
-            <div className="hero-bar-track">
-              <div className="hero-bar-fill" style={{ width: '100%', background: '#34d399' }} />
-            </div>
+            <span>Oil pressure / vibration / bus frequency: not modelled</span>
           </div>
         </div>
       </div>
 
-      {/* Bottom Split: Load Breakdown & Heat Exchanger Loop */}
+      {/* Bottom Split: Load Breakdown & Heat */}
       <div className="energy-split-grid">
-        {/* Electrical Load Distribution */}
         <div className="energy-subpanel glass-panel">
           <div className="subpanel-header">
             <LuGauge size={16} className="text-warning" />
-            <h3 className="subpanel-title font-display">Bus Load Distribution</h3>
+            <h3 className="subpanel-title font-display">Electrical demand breakdown (physics model)</h3>
           </div>
-          <div className="load-bars-list">
-            {loadBreakdown.map((item) => (
-              <div key={item.label} className="load-bar-item">
-                <div className="load-item-header">
-                  <span className="load-item-name">{item.label}</span>
-                  <span className="load-item-val font-mono">
-                    {item.kw.toFixed(1)} kW <small>({item.pct}%)</small>
-                  </span>
-                </div>
-                <div className="load-track">
-                  <div
-                    className="load-fill"
-                    style={{ width: `${item.pct}%`, background: item.color }}
-                  />
-                </div>
+          {twinError ? (
+            <p className="chp-note">Backend unreachable — physics breakdown unavailable.</p>
+          ) : !totalDemand ? (
+            <p className="chp-note">Waiting for physics model…</p>
+          ) : (
+            <div className="load-bars-list">
+              {loadBreakdown.map((item) => {
+                const pct = item.kw != null ? (item.kw / totalDemand) * 100 : 0;
+                return (
+                  <div key={item.label} className="load-bar-item">
+                    <div className="load-item-header">
+                      <span className="load-item-name">{item.label}</span>
+                      <span className="load-item-val font-mono">
+                        {f(item.kw)} kW <small>({pct.toFixed(0)}%)</small>
+                      </span>
+                    </div>
+                    <div className="load-track">
+                      <div className="load-fill" style={{ width: `${pct}%`, background: item.color }} />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="load-item-header">
+                <span className="load-item-name">Total demand</span>
+                <span className="load-item-val font-mono">{f(totalDemand)} kW</span>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* Combined Heat & Power (CHP) Thermal Loop */}
         <div className="energy-subpanel glass-panel">
           <div className="subpanel-header">
             <LuThermometerSnowflake size={16} className="text-cyan" />
-            <h3 className="subpanel-title font-display">Thermal Heat Recovery (CHP)</h3>
+            <h3 className="subpanel-title font-display">Heating & waste-heat recovery (physics model)</h3>
           </div>
           <div className="chp-details">
             <div className="chp-metric-row">
-              <span className="chp-label">Exhaust Heat Exchanger Efficiency</span>
-              <span className="chp-val font-mono text-success">88.4%</span>
+              <span className="chp-label">Total building heat loss</span>
+              <span className="chp-val font-mono">{f(num(twinData?.totalHeatLoss_kW))} kW</span>
             </div>
             <div className="chp-metric-row">
-              <span className="chp-label">Recovered Thermal Output</span>
-              <span className="chp-val font-mono text-cyan">142 kW (Thermal)</span>
+              <span className="chp-label">Heating demand</span>
+              <span className="chp-val font-mono">{f(num(twinData?.heatingDemand_kW))} kW</span>
             </div>
             <div className="chp-metric-row">
-              <span className="chp-label">Glycol Loop Flow Rate</span>
-              <span className="chp-val font-mono">48.2 L/min @ 68°C</span>
+              <span className="chp-label">Waste-heat recovery share (assumed)</span>
+              <span className="chp-val font-mono">{twinData?.wasteHeatRecovery != null ? `${(twinData.wasteHeatRecovery * 100).toFixed(0)}%` : '—'}</span>
             </div>
             <div className="chp-metric-row">
-              <span className="chp-label">Habitat Trace Heating Status</span>
-              <span className="chp-val font-mono text-success">Active / Regulated</span>
+              <span className="chp-label">Distribution efficiency (estimated)</span>
+              <span className="chp-val font-mono">{twinData?.heatingEfficiency != null ? `${(twinData.heatingEfficiency * 100).toFixed(0)}%` : '—'}</span>
             </div>
-          </div>
-          <div className="chp-efficiency-box">
-            <span className="chp-note">
-              &bull; Heat recovered from generator exhaust jacket prevents freezing of living quarters potable water circuits without extra fuel consumption.
-            </span>
+            <div className="chp-metric-row">
+              <span className="chp-label">Glycol loop flow / exchanger efficiency</span>
+              <span className="chp-val font-mono text-muted">not modelled</span>
+            </div>
           </div>
         </div>
       </div>

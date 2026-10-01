@@ -14,7 +14,9 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
   const [dispatching, setDispatching] = useState(false);
   const [dispatchMsg, setDispatchMsg] = useState(null);
 
-  // Subsystem states
+  // Last REQUESTED state per control. Simulated dispatch: nothing is actuated,
+  // so these reflect what was requested, not equipment state.
+  const [dispatchError, setDispatchError] = useState(null);
   const [genset2State, setGenset2State] = useState('STANDBY'); // 'RUNNING' | 'STANDBY' | 'OFF'
   const [auxHeatingState, setAuxHeatingState] = useState(false);
   const [snowMeltState, setSnowMeltState] = useState(true);
@@ -27,7 +29,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
       const d2 = await apiGet(`/alerts?stationId=${activeStation}`);
       setActiveAlerts(d2?.activeAlerts || []);
     } catch (e) {
-      console.warn('C&C fetch error:', e);
+      console.error('C&C fetch error:', e);
     }
   };
 
@@ -39,18 +41,20 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
 
   const handleDispatch = async (subsystem, command, params = {}) => {
     setDispatching(true);
+    setDispatchError(null);
     try {
       const d = await apiPost('/remote/dispatch', {
         stationId: activeStation,
         subsystem,
         command,
         parameters: params,
-        issuedBy: 'Remote Mission Control Commander'
+        issuedBy: 'Operator (demo)'
       });
-      setDispatchMsg(`Command dispatched: ${command} (${d?.executionTimeMs}ms)`);
+      setDispatchMsg(`${command}: ${d?.status ?? 'queued (simulated)'} — ${d?.message ?? 'simulated dispatch, no equipment actuated'}`);
       fetchState();
     } catch (err) {
-      console.error(err);
+      console.error('[Remote] dispatch failed', err);
+      setDispatchError(err?.kind === 'http' ? `Dispatch rejected: HTTP ${err.status}` : 'Dispatch failed: backend unreachable');
     } finally {
       setDispatching(false);
       setTimeout(() => setDispatchMsg(null), 4000);
@@ -71,17 +75,17 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
           <div className="remote-title-row">
             <LuRadioTower size={22} className="remote-title-icon" />
             <h2 className="remote-title font-display">
-              {activeStation === 'maitri' ? 'Maitri' : 'Bharati'} Remote Command & Control (C&C)
+              {activeStation === 'maitri' ? 'Maitri' : 'Bharati'} Remote Commands — Simulated dispatch
             </h2>
           </div>
           <p className="remote-subtitle text-caption">
-            Tele-command dispatch pipeline, satellite latency monitor, and operational incident management.
+            Commands are logged in the backend as “queued (simulated)”. Nothing is sent to station equipment and the twin is not changed.
           </p>
         </div>
 
         <div className="satellite-link-pill">
           <span className="sat-dot"></span>
-          <span>Iridium SBD + VSAT Primary Link (420ms RTT)</span>
+          <span>Simulated dispatch — no link to real equipment</span>
         </div>
       </div>
 
@@ -95,12 +99,15 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
           <LuCircleCheck size={14} /> {dispatchMsg}
         </motion.div>
       )}
+      {dispatchError && (
+        <div className="dispatch-success-banner text-danger" role="alert">{dispatchError}</div>
+      )}
 
       {/* Grid: Subsystem Controls Left, Incident & Command Queue Right */}
       <div className="remote-content-grid">
         {/* Subsystem Actuators */}
         <div className="actuators-column">
-          <h3 className="section-heading font-display">Station Equipment Actuators</h3>
+          <h3 className="section-heading font-display">Command requests (simulated, not actuated)</h3>
 
           {/* Genset 2 */}
           <div className="actuator-card glass-panel-subtle">
@@ -110,7 +117,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
               </div>
               <div className="actuator-meta">
                 <span className="actuator-name font-display">Backup Genset #2</span>
-                <span className="actuator-status text-caption">Status: <strong>{genset2State}</strong></span>
+                <span className="actuator-status text-caption">Last request: <strong>{genset2State}</strong> (simulated)</span>
               </div>
             </div>
             <div className="actuator-buttons">
@@ -119,14 +126,14 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                 onClick={() => { setGenset2State('RUNNING'); handleDispatch('Power Grid', 'ENGAGE_BACKUP_GENSET_RUN'); }}
                 disabled={dispatching}
               >
-                Auto-Start & Synchronize
+                Request start
               </button>
               <button
                 className={`btn-actuator ${genset2State === 'STANDBY' ? 'active yellow' : ''}`}
                 onClick={() => { setGenset2State('STANDBY'); handleDispatch('Power Grid', 'SET_GENSET_STANDBY_HOT'); }}
                 disabled={dispatching}
               >
-                Hot-Standby
+                Request hot-standby
               </button>
             </div>
           </div>
@@ -139,7 +146,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
               </div>
               <div className="actuator-meta">
                 <span className="actuator-name font-display">Auxiliary Heating (Zone B)</span>
-                <span className="actuator-status text-caption">State: <strong>{auxHeatingState ? 'ACTIVE (+28 kW)' : 'OFFLINE'}</strong></span>
+                <span className="actuator-status text-caption">Last request: <strong>{auxHeatingState ? 'ENABLE' : 'DISABLE'}</strong> (simulated)</span>
               </div>
             </div>
             <div className="actuator-buttons">
@@ -152,7 +159,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                 }}
                 disabled={dispatching}
               >
-                {auxHeatingState ? 'Disengage Aux Circuit' : 'Engage Aux Thermal Circuit'}
+                {auxHeatingState ? 'Request disable' : 'Request enable'}
               </button>
             </div>
           </div>
@@ -165,7 +172,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
               </div>
               <div className="actuator-meta">
                 <span className="actuator-name font-display">Water Snow-Melt Heat Tracers</span>
-                <span className="actuator-status text-caption">State: <strong>{snowMeltState ? 'ENERGIZED (Anti-Freeze)' : 'OFFLINE'}</strong></span>
+                <span className="actuator-status text-caption">Last request: <strong>{snowMeltState ? 'ENABLE' : 'DISABLE'}</strong> (simulated)</span>
               </div>
             </div>
             <div className="actuator-buttons">
@@ -178,7 +185,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                 }}
                 disabled={dispatching}
               >
-                {snowMeltState ? 'Tracer Heaters Online' : 'Energize Tracer Heaters'}
+                {snowMeltState ? 'Request disable' : 'Request enable'}
               </button>
             </div>
           </div>
@@ -191,7 +198,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
               </div>
               <div className="actuator-meta">
                 <span className="actuator-name font-display">High-Gain Satellite Radome</span>
-                <span className="actuator-status text-caption">Mode: <strong>{antennaGainState}</strong></span>
+                <span className="actuator-status text-caption">Last request: <strong>{antennaGainState}</strong> (simulated)</span>
               </div>
             </div>
             <div className="actuator-buttons">
@@ -200,14 +207,14 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                 onClick={() => { setAntennaGainState('AUTO'); handleDispatch('Comms Tower', 'SET_RADOME_TRACKING_AUTO'); }}
                 disabled={dispatching}
               >
-                Auto-Track
+                Request auto-track
               </button>
               <button
                 className={`btn-actuator ${antennaGainState === 'STOWED' ? 'active yellow' : ''}`}
                 onClick={() => { setAntennaGainState('STOWED'); handleDispatch('Comms Tower', 'STOW_DISH_BLIZZARD_MODE'); }}
                 disabled={dispatching}
               >
-                Blizzard Stow Mode
+                Request stow
               </button>
             </div>
           </div>
@@ -221,7 +228,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
             {activeAlerts.length === 0 ? (
               <div className="all-clear-message">
                 <LuCircleCheck size={16} color="#10b981" />
-                <span>All station systems reporting nominal parameters.</span>
+                <span>No active backend alerts.</span>
               </div>
             ) : (
               <div className="alert-cards-scroll">
@@ -232,7 +239,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                       <span className="incident-loc">{alt.buildingName}</span>
                       <button
                         className="btn-ack"
-                        onClick={() => onAcknowledgeAlert?.(alt.buildingId)}
+                        onClick={() => onAcknowledgeAlert?.(alt.id)}
                       >
                         Acknowledge
                       </button>
@@ -251,14 +258,14 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
             </h3>
             <div className="command-rows-scroll font-mono">
               {commands.length === 0 ? (
-                <div className="text-muted" style={{ padding: '12px' }}>No remote commands dispatched in current session.</div>
+                <div className="text-muted" style={{ padding: '12px' }}>No simulated commands logged for this station.</div>
               ) : (
                 commands.map((cmd) => (
                   <div key={cmd.id} className="cmd-log-row">
                     <div className="cmd-log-top">
                       <span className="cmd-id">{cmd.id}</span>
                       <span className="cmd-sys">[{cmd.subsystem}]</span>
-                      <span className="cmd-status badge badge-success">{cmd.status}</span>
+                      <span className="cmd-status badge badge-warning">{cmd.status}</span>
                     </div>
                     <div className="cmd-name">{cmd.command}</div>
                     <div className="cmd-footer text-caption">

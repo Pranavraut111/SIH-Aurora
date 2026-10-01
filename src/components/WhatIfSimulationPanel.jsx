@@ -133,7 +133,7 @@ export default function WhatIfSimulationPanel({ activeStation = 'maitri', sensor
                 {activeStation === 'maitri' ? 'Maitri' : 'Bharati'} Digital Twin &mdash; What-If Scenario Simulator
               </h2>
               <p className="sim-subtitle text-caption">
-                Physics-grounded causal simulation engine testing polar hazards against real NCPOR baseline telemetry.
+                Runs hypothetical hazards through the physics model from the current model baseline (results are MODEL-DERIVED).
               </p>
             </div>
           </div>

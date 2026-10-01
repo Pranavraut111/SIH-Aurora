@@ -31,7 +31,7 @@ export const NAV_SECTIONS = [
   {
     category: 'MONITORING',
     items: [
-      { id: 'environmental', label: 'NCPOR Weather', IconComp: LuThermometerSnowflake, color: '#38bdf8' },
+      { id: 'environmental', label: 'Weather Observations', IconComp: LuThermometerSnowflake, color: '#38bdf8' },
       { id: 'infrastructure', label: 'Infrastructure', IconComp: LuBuilding2, color: '#a78bfa' },
       { id: 'energy', label: 'Energy Grid', IconComp: LuZap, color: '#fbbf24' },
     ],
@@ -138,9 +138,9 @@ export default function SidebarNav({
           <div className="sidebar-footer-card">
             <div className="sidebar-footer-row">
               <LuActivity size={14} className="sidebar-footer-icon" />
-              <span className="sidebar-footer-title">NCPOR Telemetry</span>
+              <span className="sidebar-footer-title">Station Telemetry</span>
             </div>
-            <p className="sidebar-footer-sub">Real Polar Ingestion Active</p>
+            <p className="sidebar-footer-sub">Data source: see badge in top bar</p>
           </div>
         </div>
       )}

@@ -58,7 +58,14 @@ export default function App() {
     : getActiveAlerts(stationData);
   const criticalCount = activeAlerts.filter(a => a.level === 'critical').length;
   const isConnected = stationData.connected !== undefined ? stationData.connected : true;
-  const bandwidthSaved = stationData.bandwidth?.savedKB || 0;
+  // Global data-source badge: live simulator / physics fallback / browser demo / offline
+  const telemetryBadge = !isConnected
+    ? 'offline'
+    : dataSource === 'simulation'
+      ? 'browser-demo'
+      : dataSource === 'websocket'
+        ? (stationData.telemetrySource || 'connecting')
+        : 'connecting';
   const aiHealth = stationData.aiHealth || 'healthy';
   const dependencyAlerts = stationData.dependencyAlerts || [];
   const eventTimeline = stationData.eventTimeline || [];
@@ -99,6 +106,7 @@ export default function App() {
           <EnvironmentalPanel
             sensorData={stationData.sensors}
             activeStation={activeStation}
+            provenance={stationData.provenance}
           />
         );
       case 'infrastructure':
@@ -115,7 +123,8 @@ export default function App() {
         return (
           <EnergyPanel
             sensorData={stationData.sensors}
-            alerts={stationData.alerts}
+            activeStation={activeStation}
+            telemetrySource={telemetryBadge}
           />
         );
       case 'logistics':
@@ -185,8 +194,7 @@ export default function App() {
         onOpenConnectionDrawer={() => setShowConnectionDrawer(true)}
         onOpenAlertsDrawer={() => setShowAlertsDrawer(true)}
         onOpenTwinInspector={() => setShowTwinInspector(true)}
-        bandwidthSaved={bandwidthSaved}
-        signalQuality={stationData.signalQuality}
+        telemetryBadge={telemetryBadge}
         onTimelineToggle={() => setShowTimeline(prev => !prev)}
         showTimeline={showTimeline}
       />
@@ -243,11 +251,9 @@ export default function App() {
         onClose={() => setShowConnectionDrawer(false)}
         isConnected={isConnected}
         onToggleConnection={handleToggleConnection}
-        bandwidthSaved={bandwidthSaved}
         offlineQueueSize={stationData.offlineQueueSize || 0}
-        dataSource={dataSource}
-        signalQuality={stationData.signalQuality}
-        bandwidth={stationData.bandwidth}
+        telemetryBadge={telemetryBadge}
+        provenance={stationData.provenance}
       />
 
       {/* Active Alerts Drawer */}

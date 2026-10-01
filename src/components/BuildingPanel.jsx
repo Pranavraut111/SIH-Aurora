@@ -187,7 +187,7 @@ export default function BuildingPanel({ buildingId, sensorData, historyData, ale
         )}
         {/* Provenance Badge */}
         <div className="panel-provenance-footer">
-          <span>Provenance: <strong>NCPOR Telemetry & Aurora Causal Model</strong></span>
+          <span>Provenance: <strong>Aurora physics model (MODEL-DERIVED / SIMULATED)</strong></span>
         </div>
       </motion.div>
     </AnimatePresence>

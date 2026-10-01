@@ -39,7 +39,7 @@ const MODULE_META = {
     color: '#58a6ff',
   },
   environmental: {
-    title: 'NCPOR Weather',
+    title: 'Weather Observations',
     subtitle: 'AWS Polar Observations & Scientific Feeds',
     IconComp: LuThermometerSnowflake,
     color: '#38bdf8',
@@ -70,7 +70,7 @@ const MODULE_META = {
   },
   reports: {
     title: 'Station Reports',
-    subtitle: 'NCPOR Operations Dossier & PDF Export',
+    subtitle: 'Station status report & PDF export',
     IconComp: LuFileText,
     color: '#60a5fa',
   },
@@ -88,11 +88,29 @@ const MODULE_META = {
   },
   ai: {
     title: 'AI Diagnostics',
-    subtitle: 'Physics-Informed LSTM Neural Residuals',
+    subtitle: 'Physics-residual anomaly detection & decisions',
     IconComp: LuSparkles,
     color: '#f472b6',
   },
 };
+
+const DATA_SOURCE_BADGES = {
+  simulator: { label: 'Live simulator', title: 'Telemetry from the simulator (physics model on ERA5 reanalysis replay)', tone: 'live' },
+  'physics-fallback': { label: 'Physics fallback', title: 'Simulator offline — backend physics model is producing telemetry', tone: 'fallback' },
+  'browser-demo': { label: 'Browser demo mode', title: 'Backend unreachable — random-walk demo data generated in this browser. NOT real.', tone: 'demo' },
+  offline: { label: 'Offline', title: 'Link cut (simulated) — showing the last received values', tone: 'offline' },
+  connecting: { label: 'Connecting…', title: 'Waiting for the first telemetry message', tone: 'offline' },
+};
+
+function DataSourceBadge({ source }) {
+  const b = DATA_SOURCE_BADGES[source] || DATA_SOURCE_BADGES.connecting;
+  return (
+    <div className={`status-pill data-source-badge tone-${b.tone}`} title={b.title} data-testid="data-source-badge" data-source={source}>
+      <LuGauge size={13} />
+      <span className="pill-value">{b.label}</span>
+    </div>
+  );
+}
 
 export default function TopBar({
   activeModule = 'overview',
@@ -105,7 +123,7 @@ export default function TopBar({
   onOpenConnectionDrawer,
   onOpenAlertsDrawer,
   onOpenTwinInspector,
-  bandwidthSaved = 0,
+  telemetryBadge = 'connecting',
   onTimelineToggle,
   showTimeline,
 }) {
@@ -204,12 +222,8 @@ export default function TopBar({
 
       {/* ── Right: Telemetry Status, Inspector & Actions ────── */}
       <div className="topbar-right">
-        {/* Bandwidth Delta-Saved Pill */}
-        <div className="status-pill bandwidth" title="Bandwidth saved via delta-compression over satellite link">
-          <LuGauge size={13} />
-          <span className="pill-value font-mono tabular-nums">{bandwidthSaved.toFixed(1)}</span>
-          <span className="pill-unit">KB Saved</span>
-        </div>
+        {/* Global data-source badge (where the numbers on screen come from) */}
+        <DataSourceBadge source={telemetryBadge} />
 
         {/* Digital Twin Inspector Trigger Button */}
         <button
@@ -243,7 +257,7 @@ export default function TopBar({
           <LuSatelliteDish size={13} />
           <span className="connection-dot" />
           <span className="pill-label font-mono">
-            {isConnected ? 'ONLINE (NCPOR)' : 'LINK LOST'}
+            {isConnected ? 'ONLINE' : 'LINK CUT (SIM)'}
           </span>
         </button>
 

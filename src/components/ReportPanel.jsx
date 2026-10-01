@@ -8,15 +8,23 @@ import {
 import './ReportPanel.css';
 import { apiGet } from '../services/api';
 
-// Preserves the previous `r.ok ? r.json() : null` semantics: HTTP errors → null,
-// network/timeout errors still reject (caught by the caller's try/catch).
-function nullOnHttpError(err) {
-  if (err?.kind === 'http') {
-    console.warn('[Report] data source returned', err.status, err.url);
-    return null;
-  }
-  throw err;
+// Each source fails independently; a failed source is reported in the
+// document as unavailable — never replaced with made-up numbers.
+function settle(promise, label) {
+  return promise.then(
+    (data) => ({ data, error: null }),
+    (err) => {
+      console.error(`[Report] ${label} failed`, err);
+      return { data: null, error: err?.kind === 'http' ? `HTTP ${err.status}` : 'backend unreachable' };
+    },
+  );
 }
+const PROV_STATUS = {
+  REAL: { cls: 'ok', text: 'REAL (NCPOR AWS)' },
+  REANALYSIS: { cls: 'model', text: 'REANALYSIS (ERA5)' },
+  'HARDCODED-DEMO': { cls: 'model', text: 'HARDCODED DEMO (no observations in DB)' },
+};
+const v = (x, unit = '') => (x == null ? '—' : `${x}${unit}`);
 
 
 export default function ReportPanel({ activeStation = 'maitri', sensorData = {} }) {
@@ -38,12 +46,11 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
     setLoading(true);
     try {
       const [weatherRes, riskRes, logisticsRes, alertsRes, configRes] = await Promise.all([
-        // Non-2xx → null (unchanged behaviour); network errors still reject.
-        apiGet(`/ncpor/live?stationId=${selectedStation}`).catch(nullOnHttpError),
-        apiGet(`/risk?stationId=${selectedStation}`).catch(nullOnHttpError),
-        apiGet(`/logistics?stationId=${selectedStation}`).catch(nullOnHttpError),
-        apiGet(`/alerts?stationId=${selectedStation}`).catch(nullOnHttpError),
-        apiGet('/admin/config').catch(nullOnHttpError),
+        settle(apiGet(`/ncpor/live?stationId=${selectedStation}`), 'weather'),
+        settle(apiGet(`/risk?stationId=${selectedStation}`), 'risk'),
+        settle(apiGet(`/logistics?stationId=${selectedStation}`), 'logistics'),
+        settle(apiGet(`/alerts?stationId=${selectedStation}`), 'alerts'),
+        settle(apiGet('/admin/config'), 'config'),
       ]);
 
       setReportData({
@@ -51,28 +58,20 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
         stationName: selectedStation === 'maitri' ? 'Maitri Antarctic Research Station' : 'Bharati Antarctic Research Station',
         location: selectedStation === 'maitri' ? '70°46′S, 11°44′E (Schirmacher Oasis, Dronning Maud Land)' : '69°24′S, 76°12′E (Larsemann Hills, Prydz Bay)',
         elevation: selectedStation === 'maitri' ? '117m MSL' : '35m MSL',
-        weather: weatherRes?.weather || {
-          temperature_c: -12.8,
-          wind_speed_ms: 15.2,
-          wind_speed_kmh: 54.7,
-          air_pressure_hpa: 984.0,
-          relative_humidity_pct: 68.0,
-          source: 'NCPOR AWS Real-Time Observation Stream'
+        weather: weatherRes.data?.weather || null,
+        risk: riskRes.data || null,
+        logistics: logisticsRes.data?.items || null,
+        alerts: alertsRes.data?.activeAlerts || [],
+        config: configRes.data || {},
+        errors: {
+          weather: weatherRes.error, risk: riskRes.error, logistics: logisticsRes.error,
+          alerts: alertsRes.error, config: configRes.error,
         },
-        risk: riskRes || {
-          overall_health: 'healthy',
-          risk_score: 25,
-          wind_chill_c: -22.4,
-          identified_risks: []
-        },
-        logistics: logisticsRes?.items || [],
-        alerts: alertsRes?.activeAlerts || [],
-        config: configRes || {},
         generatedAt: new Date().toISOString(),
         sensors: sensorData || {}
       });
     } catch (e) {
-      console.warn('Report data fetch error:', e);
+      console.error('Report data fetch error:', e);
     } finally {
       setLoading(false);
       setPrintTimestamp(new Date().toUTCString());
@@ -95,26 +94,33 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NCPOR_${selectedStation.toUpperCase()}_Operations_Report_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `Aurora_${selectedStation.toUpperCase()}_Operations_Report_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const w = reportData?.weather;
+  const weatherProv = w ? `${w.provenance} — ${w.dataset || 'no dataset'} (${w.source})` : 'unavailable';
+  const wStatus = PROV_STATUS[w?.provenance] || { cls: 'model', text: 'UNKNOWN' };
+  const gen = reportData?.sensors?.generator || {};
+  const lq = reportData?.sensors?.livingQuarters || {};
+  const specificFuel = gen.gen_fuel_rate && gen.gen_power ? (gen.gen_fuel_rate / gen.gen_power).toFixed(3) : null;
 
   // Download CSV Metrics Summary
   const handleDownloadCSV = () => {
     if (!reportData) return;
     const rows = [
       ['Metric', 'Value', 'Unit', 'Source / Provenance'],
-      ['Station Name', reportData.stationName, '', 'NCPOR / MoES'],
-      ['Coordinates', reportData.location, '', 'NCPOR Station Spec'],
-      ['Ambient Temperature', reportData.weather.temperature_c, '°C', reportData.weather.source],
-      ['Wind Speed', reportData.weather.wind_speed_kmh, 'km/h', reportData.weather.source],
-      ['Air Pressure', reportData.weather.air_pressure_hpa, 'hPa', reportData.weather.source],
-      ['Relative Humidity', reportData.weather.relative_humidity_pct, '%', reportData.weather.source],
-      ['Calculated Wind Chill', reportData.risk.wind_chill_c, '°C', 'Aurora Polar Wind Chill Model'],
-      ['Overall Risk Score', `${reportData.risk.risk_score}/100`, '', 'Aurora AI Risk Engine'],
-      ['Primary Power Generation', reportData.sensors?.generator?.gen_power || 158.0, 'kW', 'Physics-Derived Engine State'],
-      ['Hourly Fuel Rate', reportData.sensors?.generator?.gen_fuel_rate || 28.5, 'L/hr', 'Physics-Derived Engine State'],
+      ['Station Name', reportData.stationName, '', 'public station info'],
+      ['Coordinates', reportData.location, '', 'public station info'],
+      ['Ambient Temperature', w?.temperature_c ?? '', '°C', weatherProv],
+      ['Wind Speed', w?.wind_speed_kmh ?? '', 'km/h', weatherProv],
+      ['Air Pressure', w?.air_pressure_hpa ?? '', 'hPa', weatherProv],
+      ['Relative Humidity', w?.relative_humidity_pct ?? '', '%', weatherProv],
+      ['Calculated Wind Chill', reportData.risk?.wind_chill_c ?? '', '°C', 'MODEL-DERIVED (wind chill formula)'],
+      ['Overall Risk Score', reportData.risk ? `${reportData.risk.risk_score}/100` : '', '', 'MODEL-DERIVED (rule-based risk score)'],
+      ['Generator Power', gen.gen_power ?? '', 'kW', 'MODEL-DERIVED'],
+      ['Generator Fuel Rate', gen.gen_fuel_rate ?? '', 'L/hr', 'MODEL-DERIVED'],
     ];
 
     if (reportData.logistics) {
@@ -127,7 +133,7 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `NCPOR_${selectedStation.toUpperCase()}_Metrics_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Aurora_${selectedStation.toUpperCase()}_Metrics_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -149,7 +155,7 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
             <h2 className="toolbar-title font-display">Station Operations Report Generator</h2>
           </div>
           <p className="toolbar-desc text-caption">
-            Formal polar mission status brief grounded on real NCPOR automatic weather station data and physics telemetry.
+            Status brief from the stored weather observations (labelled REAL / REANALYSIS) and model-derived telemetry. Prototype — not an official document.
           </p>
         </div>
 
@@ -182,27 +188,26 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
 
       {/* Printable Report Document Container */}
       <div className="report-document glass-panel" ref={reportRef}>
-        {/* Official Header */}
+        {/* Report Header */}
         <div className="report-doc-header">
           <div className="report-emblem-row">
             <div className="gov-badge">
-              <span className="gov-title">GOVERNMENT OF INDIA</span>
-              <span className="ministry-title">MINISTRY OF EARTH SCIENCES (MoES)</span>
-              <span className="ncpor-title">National Centre for Polar and Ocean Research (NCPOR), Goa</span>
+              <span className="gov-title">AURORA DIGITAL TWIN — PROTOTYPE</span>
+              <span className="ministry-title">NOT AN OFFICIAL NCPOR / MoES DOCUMENT</span>
+              <span className="ncpor-title">Generated by the Aurora demo for SIH PS 26060</span>
             </div>
             <div className="report-meta-box">
-              <span className="doc-num font-mono">DOC ID: NCPOR/IARP/{selectedStation.toUpperCase()}/{new Date().getFullYear()}-Q3</span>
-              <span className="doc-security">SECURITY: OFFICIAL OPERATIONAL BRIEF</span>
-              <span className="doc-date font-mono">TIMESTAMP: {printTimestamp}</span>
+              <span className="doc-num font-mono">REPORT: AURORA/{selectedStation.toUpperCase()}/{new Date().toISOString().slice(0, 10)}</span>
+              <span className="doc-date font-mono">GENERATED: {printTimestamp}</span>
             </div>
           </div>
 
           <div className="report-subject-banner">
             <h1 className="report-main-title font-display">
-              INDIAN ANTARCTIC RESEARCH PROGRAMME (IARP)
+              STATION STATUS REPORT
             </h1>
             <h3 className="report-sub-title">
-              DAILY STATION OPERATIONS & METEOROLOGICAL TELEMETRY STATUS REPORT
+              WEATHER OBSERVATIONS & MODEL-DERIVED OPERATIONS SUMMARY
             </h3>
           </div>
         </div>
@@ -210,10 +215,15 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
         {loading ? (
           <div className="report-loading">
             <LuSparkles size={24} className="spin" />
-            <span>Compiling station observation report from NCPOR data infrastructure...</span>
+            <span>Compiling report from the Aurora backend…</span>
           </div>
         ) : (
           <div className="report-doc-body">
+            {Object.entries(reportData.errors || {}).filter(([, e]) => e).length > 0 && (
+              <p className="section-note text-caption" role="status" style={{ color: '#f87171' }}>
+                Unavailable sources: {Object.entries(reportData.errors).filter(([, e]) => e).map(([k, e]) => `${k} (${e})`).join(', ')}.
+              </p>
+            )}
             {/* Section 1: Station Overview */}
             <div className="report-section">
               <h4 className="section-heading font-display">
@@ -234,15 +244,17 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
                 </div>
                 <div className="ov-item">
                   <span className="ov-lbl">Operational Status:</span>
-                  <span className="ov-val status-badge-inline ok">🟢 Fully Operational</span>
+                  <span className={`ov-val status-badge-inline ${reportData.alerts.length ? 'warn' : 'ok'}`}>
+                    {reportData.errors?.alerts ? 'Unknown (alerts unavailable)' : reportData.alerts.length ? `${reportData.alerts.length} active alert(s)` : 'No active alerts'}
+                  </span>
                 </div>
                 <div className="ov-item">
                   <span className="ov-lbl">Wintering Personnel:</span>
-                  <span className="ov-val">{selectedStation === 'maitri' ? '25 Expedition Members' : '47 Expedition Members'}</span>
+                  <span className="ov-val">{selectedStation === 'maitri' ? '25' : '47'} (HARDCODED-DEMO figure)</span>
                 </div>
                 <div className="ov-item">
                   <span className="ov-lbl">Primary Telemetry Feed:</span>
-                  <span className="ov-val font-mono">{reportData.weather.source}</span>
+                  <span className="ov-val font-mono">{weatherProv}</span>
                 </div>
               </div>
             </div>
@@ -250,10 +262,13 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
             {/* Section 2: Real Atmospheric Observations */}
             <div className="report-section">
               <h4 className="section-heading font-display">
-                2. REAL-TIME NCPOR AUTOMATIC WEATHER STATION (AWS) OBSERVATIONS
+                2. LATEST STORED WEATHER OBSERVATION
               </h4>
               <p className="section-note text-caption">
-                Ground-truth surface observations retrieved from NCPOR meteorological data portal (https://data.ncpor.res.in).
+                {!w ? `Weather unavailable (${reportData.errors?.weather || 'no data'}).`
+                  : w.provenance === 'REAL' ? 'Latest NCPOR AWS observation ingested from https://data.ncpor.res.in.'
+                    : w.provenance === 'REANALYSIS' ? 'Latest ERA5 reanalysis value (model reanalysis, not a station measurement). Ingest NCPOR data to get station observations.'
+                      : 'No observations in the database — built-in default values.'}
               </p>
 
               <table className="report-table">
@@ -269,38 +284,38 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
                 <tbody>
                   <tr>
                     <td><strong>Surface Air Temperature</strong></td>
-                    <td className="font-mono tabular-nums font-semibold">{reportData.weather.temperature_c}°C</td>
+                    <td className="font-mono tabular-nums font-semibold">{v(w?.temperature_c, '°C')}</td>
                     <td>Celsius</td>
-                    <td>NCPOR AWS PT100 Resistance Probe</td>
-                    <td><span className="tbl-status ok">VERIFIED (REAL)</span></td>
+                    <td>{w?.source || '—'}</td>
+                    <td><span className={`tbl-status ${wStatus.cls}`}>{wStatus.text}</span></td>
                   </tr>
                   <tr>
                     <td><strong>Sustained Wind Speed</strong></td>
-                    <td className="font-mono tabular-nums font-semibold">{reportData.weather.wind_speed_kmh} km/h ({reportData.weather.wind_speed_ms} m/s)</td>
+                    <td className="font-mono tabular-nums font-semibold">{v(w?.wind_speed_kmh, ' km/h')} ({v(w?.wind_speed_ms, ' m/s')})</td>
                     <td>km/h</td>
-                    <td>Ultrasonic Heated Anemometer</td>
-                    <td><span className="tbl-status ok">VERIFIED (REAL)</span></td>
+                    <td>{w?.source || '—'}</td>
+                    <td><span className={`tbl-status ${wStatus.cls}`}>{wStatus.text}</span></td>
                   </tr>
                   <tr>
                     <td><strong>Barometric Air Pressure</strong></td>
-                    <td className="font-mono tabular-nums font-semibold">{reportData.weather.air_pressure_hpa} hPa</td>
+                    <td className="font-mono tabular-nums font-semibold">{v(w?.air_pressure_hpa, ' hPa')}</td>
                     <td>hPa</td>
-                    <td>Digital Piezoresistive Barometer</td>
-                    <td><span className="tbl-status ok">VERIFIED (REAL)</span></td>
+                    <td>{w?.source || '—'}</td>
+                    <td><span className={`tbl-status ${wStatus.cls}`}>{wStatus.text}</span></td>
                   </tr>
                   <tr>
                     <td><strong>Relative Humidity</strong></td>
-                    <td className="font-mono tabular-nums font-semibold">{reportData.weather.relative_humidity_pct}%</td>
+                    <td className="font-mono tabular-nums font-semibold">{v(w?.relative_humidity_pct, '%')}</td>
                     <td>%</td>
-                    <td>Capacitive Thin-Film Hygrometer</td>
-                    <td><span className="tbl-status ok">VERIFIED (REAL)</span></td>
+                    <td>{w?.source || '—'}</td>
+                    <td><span className={`tbl-status ${wStatus.cls}`}>{wStatus.text}</span></td>
                   </tr>
                   <tr>
                     <td><strong>Calculated Wind Chill (Siple-Passel / Jaggar)</strong></td>
-                    <td className="font-mono tabular-nums font-semibold" style={{ color: '#38bdf8' }}>{reportData.risk.wind_chill_c}°C</td>
+                    <td className="font-mono tabular-nums font-semibold" style={{ color: '#38bdf8' }}>{v(reportData.risk?.wind_chill_c, '°C')}</td>
                     <td>°C</td>
-                    <td>Aurora Polar Physics Diagnostic Engine</td>
-                    <td><span className="tbl-status model">PHYSICS DERIVED</span></td>
+                    <td>Wind chill formula on the values above</td>
+                    <td><span className="tbl-status model">MODEL-DERIVED</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -313,32 +328,30 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
               </h4>
               <div className="power-grid-summary">
                 <div className="p-card">
-                  <span className="p-title">Total Station Electrical Demand</span>
-                  <span className="p-val font-mono">
-                    {reportData.sensors?.generator?.gen_power ? `${reportData.sensors.generator.gen_power} kW` : '158.4 kW'}
-                  </span>
-                  <span className="p-sub">Primary DG Unit at 79% Load</span>
+                  <span className="p-title">Generator Output</span>
+                  <span className="p-val font-mono">{v(gen.gen_power, ' kW')}</span>
+                  <span className="p-sub">MODEL-DERIVED (live telemetry)</span>
                 </div>
                 <div className="p-card">
                   <span className="p-title">Active Diesel Burn Rate</span>
                   <span className="p-val font-mono">
-                    {reportData.sensors?.generator?.gen_fuel_rate ? `${reportData.sensors.generator.gen_fuel_rate} L/hr` : '28.5 L/hr'}
+                    {v(gen.gen_fuel_rate, ' L/hr')}
                   </span>
-                  <span className="p-sub">Specific: 0.245 L/kWh</span>
+                  <span className="p-sub">Specific: {specificFuel ? `${specificFuel} L/kWh` : '—'}</span>
                 </div>
                 <div className="p-card">
                   <span className="p-title">Generator Coolant Temp</span>
                   <span className="p-val font-mono">
-                    {reportData.sensors?.generator?.gen_temp ? `${reportData.sensors.generator.gen_temp}°C` : '82.0°C'}
+                    {v(gen.gen_temp, '°C')}
                   </span>
-                  <span className="p-sub">Nominal Range (78 - 88°C)</span>
+                  <span className="p-sub">Warning threshold: {v(reportData.config?.thresholds?.generator_temp_warning, '°C')}</span>
                 </div>
                 <div className="p-card">
                   <span className="p-title">Living Block Indoor Temp</span>
                   <span className="p-val font-mono">
-                    {reportData.sensors?.livingQuarters?.lq_temp ? `${reportData.sensors.livingQuarters.lq_temp}°C` : '20.8°C'}
+                    {v(lq.lq_temp, '°C')}
                   </span>
-                  <span className="p-sub">HVAC Setpoint: 21.0°C</span>
+                  <span className="p-sub">MODEL-DERIVED</span>
                 </div>
               </div>
             </div>
@@ -377,12 +390,7 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
                     ))
                   ) : (
                     <tr>
-                      <td>Polar ATF Special Diesel Fuel</td>
-                      <td className="font-mono">68,400 Liters</td>
-                      <td className="font-mono">140,000 Liters</td>
-                      <td className="font-mono">684 L/day</td>
-                      <td><span className="autonomy-badge good">100.0 Days (SUFFICIENT)</span></td>
-                      <td className="text-caption">NCPOR Physical Logistics Audit Log</td>
+                      <td colSpan={6}>Inventory unavailable ({reportData.errors?.logistics || 'no items'}).</td>
                     </tr>
                   )}
                 </tbody>
@@ -392,8 +400,11 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
             {/* Section 5: Risk Engine & Operational Advisories */}
             <div className="report-section">
               <h4 className="section-heading font-display">
-                5. AI RISK ENGINE & OPERATIONAL ADVISORIES
+                5. RULE-BASED RISK ASSESSMENT
               </h4>
+              {!reportData.risk ? (
+                <p className="section-note text-caption">Risk engine unavailable ({reportData.errors?.risk || 'no data'}).</p>
+              ) : (
               <div className="risk-advisory-box">
                 <div className="risk-header-line">
                   <span className="risk-score-display">
@@ -418,23 +429,23 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
                 ) : (
                   <p className="risk-nominal">
                     <LuShieldCheck size={18} style={{ color: '#4ade80' }} />
-                    All station life-support, power generation, and communications systems are functioning within standard polar engineering limits.
+                    No weather/operations risks identified by the rule-based risk score.
                   </p>
                 )}
               </div>
+              )}
             </div>
 
-            {/* Section 6: Official Endorsement & Sign-Off */}
+            {/* Section 6: Review & Sign-Off */}
             <div className="report-section signoff-section">
               <h4 className="section-heading font-display">
-                6. MISSION CONTROL ENDORSEMENT & COMMAND SIGN-OFF
+                6. REVIEW & SIGN-OFF
               </h4>
               <div className="signoff-grid">
                 <div className="sign-box">
                   <span className="sign-title">Prepared By:</span>
-                  <span className="sign-name">Autonomous Antarctic Digital Twin Engine (AURORA v3)</span>
-                  <span className="sign-role">NCPOR Mission Control Remote Interface</span>
-                  <div className="sign-stamp">CERTIFIED VERIFIED DATA</div>
+                  <span className="sign-name">Aurora digital twin (prototype, auto-generated)</span>
+                  <span className="sign-role">Values labelled by provenance; not verified by NCPOR</span>
                 </div>
                 <div className="sign-box">
                   <span className="sign-title">Station Leader Endorsement:</span>

@@ -6,7 +6,7 @@
    - THROWS ApiError on non-2xx, timeout, network failure or bad JSON.
      It NEVER returns fake/fallback data — callers decide what to show.
    ═══════════════════════════════════════════════════════════════ */
-import { API_PREFIX, SIM_URL } from '../config';
+import { API_PREFIX } from '../config';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -29,7 +29,7 @@ function joinUrl(base, path) {
 }
 
 /**
- * @param {string} url absolute URL (use apiGet/simGet helpers for base handling)
+ * @param {string} url absolute URL (use the apiGet/apiPost helpers for base handling)
  * @param {{method?: string, body?: any, timeoutMs?: number, headers?: object}} opts
  */
 export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {}) {
@@ -75,6 +75,3 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
 export const apiGet = (path, opts) => request(joinUrl(API_PREFIX, path), { ...opts, method: 'GET' });
 export const apiPost = (path, body, opts) => request(joinUrl(API_PREFIX, path), { ...opts, method: 'POST', body });
 
-// ── Internal simulator control API (legacy direct calls) ─────
-export const simGet = (path, opts) => request(joinUrl(SIM_URL, path), { ...opts, method: 'GET' });
-export const simPost = (path, body, opts) => request(joinUrl(SIM_URL, path), { ...opts, method: 'POST', body });

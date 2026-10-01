@@ -11,7 +11,8 @@ import {
 import './EnvironmentalPanel.css';
 import { apiGet, apiPost } from '../services/api';
 
-export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri' }) {
+export default function EnvironmentalPanel({ sensorData = {}, activeStation = 'maitri', provenance }) {
+  const [fetchError, setFetchError] = useState(null);
   const [plotType, setPlotType] = useState('timeseries'); // 'timeseries' | 'anomaly' | 'forecast' | 'correlation' | 'seasonal' | 'risk'
   const [selectedParam, setSelectedParam] = useState('temperature');
   const [anomalyAlgo, setAnomalyAlgo] = useState('isf'); // 'isf' | 'svm'
@@ -29,10 +30,28 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
   const [ingestStatus, setIngestStatus] = useState(null);
 
   const envData = sensorData.lab || {};
-  const currentTemp = envData.env_temp ?? -12.7;
-  const currentWind = envData.env_wind ?? 15.2;
-  const currentPres = envData.env_pressure ?? 984.0;
-  const currentHum = envData.env_humidity ?? 68.0;
+  // Live telemetry only (lab.env_* — wind in km/h). Missing → "—", never a stand-in.
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const currentTemp = num(envData.env_temp);
+  const currentWind = num(envData.env_wind);
+  const currentPres = num(envData.env_pressure);
+  const currentHum = num(envData.env_humidity);
+  const fmt = (v, d) => (v == null ? '—' : v.toFixed(d));
+  // Telemetry environment provenance from the backend snapshot
+  const envProv = provenance?.environment;
+  const liveStripSource = envProv === 'REAL'
+    ? 'NCPOR AWS observation (latest ingested row)'
+    : envProv === 'REANALYSIS'
+      ? `ERA5 reanalysis replay${provenance?.weatherSource ? ` (${provenance.weatherSource})` : ''}`
+      : envProv === 'SIMULATED' ? 'Simulated weather (injection or demo mode)' : 'Source unknown';
+  // Badge = dataset of the observations actually plotted below
+  const datasets = [...new Set(observations.map((o) => o.dataset).filter(Boolean))];
+  const hasLive = datasets.some((d) => d.includes('NCPOR-AWS-Live'));
+  const hasEra5 = datasets.some((d) => /ERA5|reanalysis/i.test(d));
+  const datasetBadge = hasLive && hasEra5 ? 'NCPOR AWS live + ERA5 reanalysis'
+    : hasLive ? 'NCPOR AWS live observations'
+      : hasEra5 ? 'ERA5 reanalysis (not station observations)'
+        : datasets.length ? datasets.join(', ') : 'No observations loaded';
 
   // Fetch observational / analytical data
   const fetchData = async () => {
@@ -50,8 +69,10 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
       } else if (plotType === 'risk') {
         setRiskData(await apiGet(`/risk?stationId=${activeStation}`));
       }
+      setFetchError(null);
     } catch (e) {
-      console.warn('[NCPOR] Fetch error:', e);
+      console.error('[NCPOR] Fetch error:', e);
+      setFetchError(e?.kind === 'http' ? `Backend error (HTTP ${e.status})` : 'Backend unreachable');
     } finally {
       setLoading(false);
     }
@@ -63,20 +84,22 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
 
   const handleTriggerIngest = async () => {
     setIngesting(true);
-    setIngestStatus('Connecting to https://data.ncpor.res.in live AWS endpoint...');
+    setIngestStatus({ ok: null, text: 'Requesting NCPOR AWS data portal…' });
     try {
-      await apiPost('/ncpor/ingest', { stationId: activeStation });
-      setIngestStatus(`Ingested fresh observations for ${activeStation.toUpperCase()} from NCPOR AWS!`);
-      fetchData();
+      const res = await apiPost(`/ncpor/ingest?stationId=${activeStation}`);
+      const r = res?.results?.[activeStation];
+      if (r?.status === 'success') {
+        setIngestStatus({ ok: true, text: `Ingested ${r.records_ingested} records for ${activeStation.toUpperCase()} from ${r.source} (${(r.parameters || []).length} series).` });
+        fetchData();
+      } else {
+        setIngestStatus({ ok: false, text: `Ingest failed for ${activeStation.toUpperCase()}: ${r?.error || r?.message || 'no result returned'}. 0 records ingested.` });
+      }
     } catch (err) {
-      // Messages unchanged for now; fake-success wording is removed in a later step (P0-5).
-      console.warn('[NCPOR] Ingest request failed:', err);
-      setIngestStatus(err?.kind === 'http'
-        ? 'Ingestion complete (using cached verified telemetry).'
-        : 'Ingestion triggered.');
+      console.error('[NCPOR] Ingest request failed:', err);
+      setIngestStatus({ ok: false, text: err?.kind === 'http' ? `Ingest failed: backend returned HTTP ${err.status}.` : 'Ingest failed: backend unreachable.' });
     } finally {
       setIngesting(false);
-      setTimeout(() => setIngestStatus(null), 5000);
+      setTimeout(() => setIngestStatus(null), 8000);
     }
   };
 
@@ -96,10 +119,10 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
             <h2 className="env-title font-display">
               {activeStation === 'maitri' ? 'Maitri' : 'Bharati'} Meteorological & AWS Observations
             </h2>
-            <span className="env-badge-ncpor">Official NCPOR / NPDC Live Telemetry</span>
+            <span className="env-badge-ncpor" data-testid="env-dataset-badge">{datasetBadge}</span>
           </div>
           <p className="env-subtitle text-caption">
-            Primary data source: National Centre for Polar and Ocean Research AWS & Surface Station Infrastructure
+            Live strip: {liveStripSource}. Charts: stored observations ({datasets.join(', ') || 'none'}).
           </p>
         </div>
 
@@ -120,8 +143,14 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
           animate={{ opacity: 1, height: 'auto' }}
           exit={{ opacity: 0, height: 0 }}
         >
-          <LuSparkles size={14} /> {ingestStatus}
+          <LuSparkles size={14} /> <span className={ingestStatus.ok === false ? 'text-danger' : ingestStatus.ok ? 'text-success' : ''}>{ingestStatus.text}</span>
         </motion.div>
+      )}
+
+      {fetchError && (
+        <div className="ingest-notification-banner text-danger" role="status">
+          {fetchError} — charts below are not up to date.
+        </div>
       )}
 
       {/* Real-time Hero Weather Strip */}
@@ -132,10 +161,10 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
             <LuThermometerSnowflake size={16} />
           </div>
           <div className="metric-val-row">
-            <span className="metric-val font-mono">{currentTemp.toFixed(1)}</span>
+            <span className="metric-val font-mono">{fmt(currentTemp, 1)}</span>
             <span className="metric-unit">°C</span>
           </div>
-          <span className="metric-provenance">IMD AWS Sensor (2m elevation)</span>
+          <span className="metric-provenance">{liveStripSource}</span>
         </div>
 
         <div className="env-metric-card">
@@ -144,10 +173,10 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
             <LuWind size={16} />
           </div>
           <div className="metric-val-row">
-            <span className="metric-val font-mono">{(currentWind * 3.6).toFixed(0)}</span>
-            <span className="metric-unit">km/h <small>({(currentWind).toFixed(1)} m/s)</small></span>
+            <span className="metric-val font-mono">{fmt(currentWind, 0)}</span>
+            <span className="metric-unit">km/h <small>({currentWind == null ? '—' : (currentWind / 3.6).toFixed(1)} m/s)</small></span>
           </div>
-          <span className="metric-provenance">10m Cup Anemometer</span>
+          <span className="metric-provenance">{liveStripSource}</span>
         </div>
 
         <div className="env-metric-card">
@@ -156,10 +185,10 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
             <LuGauge size={16} />
           </div>
           <div className="metric-val-row">
-            <span className="metric-val font-mono">{currentPres.toFixed(1)}</span>
+            <span className="metric-val font-mono">{fmt(currentPres, 1)}</span>
             <span className="metric-unit">hPa</span>
           </div>
-          <span className="metric-provenance">Precision Barometric Sensor</span>
+          <span className="metric-provenance">{liveStripSource}</span>
         </div>
 
         <div className="env-metric-card">
@@ -168,10 +197,10 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
             <LuDroplets size={16} />
           </div>
           <div className="metric-val-row">
-            <span className="metric-val font-mono">{currentHum.toFixed(0)}</span>
+            <span className="metric-val font-mono">{fmt(currentHum, 0)}</span>
             <span className="metric-unit">%</span>
           </div>
-          <span className="metric-provenance">Capacitive Thin-Film Hygrometer</span>
+          <span className="metric-provenance">{liveStripSource}</span>
         </div>
       </div>
 
@@ -531,7 +560,7 @@ export default function EnvironmentalPanel({ sensorData, activeStation = 'maitri
     return (
       <div className="corr-wrapper">
         <h4 className="corr-title font-display">Atmospheric Parameter Correlation Heatmap</h4>
-        <p className="corr-desc text-caption">Inter-parameter dependencies evaluated from continuous NCPOR time series</p>
+        <p className="corr-desc text-caption">Inter-parameter correlations from the stored observation time series (ERA5 and/or NCPOR AWS)</p>
 
         <div className="corr-table-container">
           <table className="corr-table font-mono">

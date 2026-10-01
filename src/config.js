@@ -8,8 +8,8 @@
      VITE_WS_URL   station WebSocket. Absolute ("ws://…", "wss://…",
                    "http(s)://…") or relative ("/ws/station"); relative
                    paths are resolved against window.location (ws/wss).
-     VITE_SIM_URL  internal simulator control API (legacy direct calls;
-                   to be proxied through the backend — see CLAUDE.md).
+   The browser never calls the simulator (:8001) directly; everything goes
+   through the unified backend (see CLAUDE.md).
    ═══════════════════════════════════════════════════════════════ */
 
 const env = import.meta.env;
@@ -17,7 +17,6 @@ const env = import.meta.env;
 const DEFAULTS = {
   API_URL: 'http://localhost:8080',
   WS_URL: 'ws://localhost:8080/ws/station',
-  SIM_URL: 'http://localhost:8001',
 };
 
 function stripTrailingSlash(url) {
@@ -37,9 +36,6 @@ export const API_URL = stripTrailingSlash(pick(env.VITE_API_URL, DEFAULTS.API_UR
  * ends in /api (e.g. a proxy mounted at "/api") is used as-is.
  */
 export const API_PREFIX = /\/api$/.test(API_URL) ? API_URL : `${API_URL}/api`;
-
-/** Internal simulator control API base (no trailing slash). */
-export const SIM_URL = stripTrailingSlash(pick(env.VITE_SIM_URL, DEFAULTS.SIM_URL));
 
 /** Resolve the WebSocket URL, deriving ws/wss from window.location for relative paths. */
 export function resolveWsUrl(raw = pick(env.VITE_WS_URL, DEFAULTS.WS_URL)) {

@@ -1,407 +1,315 @@
 /* ═══════════════════════════════════════════════════════════════
-   Aurora — AI Predictions & Diagnostics Dashboard (SIH 26060)
-   Physics-informed neural anomaly detection, sensor residual tracking,
-   and evidence-grounded AI diagnostic briefings.
+   Aurora — AI Diagnostics (real pipeline only, P0-4 / P0-5)
+   Every value here comes from the simulator pipeline via the backend:
+     /api/ai/anomaly   physics-residual Isolation Forest + 6σ residual gate
+     /api/ai/decision  rule-based decision engine (+ audit trail)
+     /api/ai/forecast  physics forward run on the live Open-Meteo forecast
+     /api/ai/chronos   Chronos-Bolt quantiles (optional ML extras)
+     /api/aurora-explain  Groq LLM, or an offline summary when unavailable
+   No mock fallbacks: when a source is down the panel says so.
    ═══════════════════════════════════════════════════════════════ */
-import { useEffect, useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  LuSparkles,
-  LuTriangleAlert,
-  LuShieldCheck,
-  LuBrain,
-  LuActivity,
-  LuCpu,
-  LuZap,
-  LuThermometerSnowflake,
-  LuCircleCheck,
-  LuRefreshCw,
-  LuLayers,
-  LuMic,
-} from 'react-icons/lu';
-import './AiPanel.css';
+import { useCallback, useEffect, useState } from 'react';
+import { LuSparkles, LuMic, LuActivity, LuShieldCheck, LuTriangleAlert, LuListTree, LuTrendingUp } from 'react-icons/lu';
 import { apiGet, apiPost } from '../services/api';
+import './AiPanel.css';
 
-const SENSOR_NAMES = {
-  gen_power: 'Generator Power',
-  gen_fuel_rate: 'Fuel Rate',
-  gen_rpm: 'Engine RPM',
-  gen_temp: 'Engine Coolant Temp',
-  heat_a_flow: 'Heat A Flow',
-  heat_a_temp: 'Heat A Temp',
-  heat_a_pressure: 'Heat A Pressure',
-  heat_b_flow: 'Heat B Flow',
-  heat_b_temp: 'Heat B Temp',
-  water_level: 'Water Level',
-  water_temp: 'Water Temp',
-  water_ph: 'Water pH Level',
-  comms_signal: 'Signal Strength',
-  comms_bandwidth: 'Sat Bandwidth',
-  comms_uptime: 'Satcom Uptime',
-  lq_temp: 'Habitat Interior Temp',
-  lq_humidity: 'Habitat Humidity',
-  lq_co2: 'Habitat CO2 Level',
-  store_fuel: 'Fuel Farm Stock',
-  store_food: 'Food Reserves',
-  store_spares: 'Spare Parts Buffer',
-  env_temp: 'Ambient Temp',
-  env_wind: 'Wind Velocity',
-  env_pressure: 'Atmospheric Pressure',
-  env_humidity: 'External Humidity',
-};
+const POLL_MS = 3000;
+const QUESTIONS = [
+  { id: 'status', label: 'Status' },
+  { id: 'why', label: 'Why?' },
+  { id: 'action', label: 'What should I do?' },
+  { id: 'detail', label: 'Full detail' },
+];
 
-const BUILDING_NAMES = {
-  generator: 'Generator Shed',
-  heating: 'Heating Zone A',
-  heatingB: 'Heating Zone B',
-  waterTank: 'Water Treatment',
-  commsMast: 'Comms Tower',
-  livingQuarters: 'Living Quarters',
-  storage: 'Logistics Depot',
-  lab: 'Science Laboratory',
-};
+/** Human-readable state for a failed request (no fake data). */
+function describeError(err) {
+  if (!err) return null;
+  if (err.kind === 'http' && err.status === 503) {
+    const raw = typeof err.body?.detail === 'string' ? err.body.detail : '';
+    return { title: 'Simulator offline', detail: raw.replace(/^Simulator offline:\s*/, '') || 'the simulation service is not running' };
+  }
+  if (err.kind === 'http') return { title: `Backend error (HTTP ${err.status})`, detail: err.url };
+  return { title: 'Backend unreachable', detail: err.message };
+}
+
+function useAiSource(path, activeStation) {
+  // Results are tagged with their station so a station switch shows "Loading…"
+  // instead of the previous station's data (no reset-in-effect needed).
+  const [state, setState] = useState({ station: null, data: null, error: null });
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await apiGet(`${path}?stationId=${activeStation}`, { timeoutMs: 5000 });
+        if (alive) setState({ station: activeStation, data, error: null });
+      } catch (err) {
+        if (alive) setState({ station: activeStation, data: null, error: err });
+      }
+    };
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => { alive = false; clearInterval(id); };
+  }, [path, activeStation]);
+  return state.station === activeStation
+    ? { ...state, loading: false }
+    : { data: null, error: null, loading: true };
+}
+
+function SourceState({ state, children }) {
+  if (state.loading) return <p className="ai-subtitle">Loading…</p>;
+  const e = describeError(state.error);
+  if (e) {
+    return (
+      <div className="ai-offline-state" role="status">
+        <LuTriangleAlert size={16} /> <strong>{e.title}</strong>
+        <span className="text-muted"> — {e.detail}</span>
+      </div>
+    );
+  }
+  return children(state.data);
+}
+
+const fmt = (v, d = 1) => (typeof v === 'number' ? v.toFixed(d) : '—');
 
 export default function AiPanel({ activeStation = 'maitri' }) {
-  const [predictions, setPredictions] = useState({});
-  const [forecasterCount, setForecasterCount] = useState(24);
-  const [filter, setFilter] = useState('all');
-  const [explanation, setExplanation] = useState(null);
-  const [loadingExplain, setLoadingExplain] = useState(false);
+  const anomaly = useAiSource('/ai/anomaly', activeStation);
+  const decision = useAiSource('/ai/decision', activeStation);
+  const forecast = useAiSource('/ai/forecast', activeStation);
+  const chronos = useAiSource('/ai/chronos', activeStation);
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchPredictions = async () => {
-      try {
-        const data = await apiGet(`/predictions?stationId=${activeStation}`);
-        if (isMounted) {
-          setPredictions(data?.predictions || {});
-          setForecasterCount(data?.forecasterCount || 24);
-        }
-      } catch (err) {
-        if (err?.kind !== 'http') return; // network/timeout: unchanged silent fallback
-        try {
-          const data2 = await apiGet(`/anomaly?stationId=${activeStation}`);
-          if (isMounted) setPredictions(data2?.predictions || {});
-        } catch (err2) {
-          console.warn('[AiPanel] anomaly fallback failed:', err2);
-        }
-      }
-    };
-    fetchPredictions();
-    const interval = setInterval(fetchPredictions, 3000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
+  const [answerState, setAnswer] = useState(null);
+  const [asking, setAsking] = useState(false);
+  const [freeText, setFreeText] = useState('');
+  const [listening, setListening] = useState(false);
+
+  const ask = useCallback(async (question, text = '') => {
+    setAsking(true);
+    try {
+      const res = await apiPost('/aurora-explain', { station: activeStation, question, freeText: text }, { timeoutMs: 25000 });
+      setAnswer({ ...res, station: activeStation, asked: text || QUESTIONS.find((q) => q.id === question)?.label || question });
+    } catch (err) {
+      const e = describeError(err);
+      setAnswer({ explanation: `${e.title}: ${e.detail}`, mode: 'error', llmAvailable: false, station: activeStation, asked: text || question });
+    } finally {
+      setAsking(false);
+    }
   }, [activeStation]);
 
-  const [isListening, setIsListening] = useState(false);
-  
-  const handleVoiceRequest = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Your browser does not support the Web Speech API for voice features.");
+  // An answer belongs to the station it was asked about.
+  const answer = answerState && (!answerState.station || answerState.station === activeStation) ? answerState : null;
+
+  const startVoice = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setAnswer({ explanation: 'Voice input is not supported by this browser — type your question instead.', mode: 'error', asked: 'voice' });
       return;
     }
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    
-    recognition.onstart = () => {
-      setIsListening(true);
-      setExplanation("Listening to your diagnostic query...");
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onstart = () => setListening(true);
+    rec.onend = () => setListening(false);
+    rec.onerror = (ev) => { setListening(false); setAnswer({ explanation: `Voice recognition error: ${ev.error}`, mode: 'error', asked: 'voice' }); };
+    rec.onresult = (ev) => {
+      const transcript = ev.results[0][0].transcript;
+      setFreeText(transcript);
+      ask('free', transcript);
     };
-
-    recognition.onresult = async (event) => {
-      const transcript = event.results[0][0].transcript;
-      setExplanation(`Analyzing voice query: "${transcript}"...\n\nRouting to Groq Llama/Whisper diagnostic engine...`);
-      setIsListening(false);
-      setLoadingExplain(true);
-      
-      try {
-        const d = await apiPost('/aurora-explain', { station: activeStation, freeText: transcript, question: "free" });
-        setExplanation(`**Query:** "${transcript}"\n\n${d?.explanation}`);
-      } catch (e) {
-        // Fallback texts unchanged for now; removed in a later step (P0-5).
-        setExplanation(e?.kind === 'http'
-          ? `**Query:** "${transcript}"\n\nFallback: All physical sensor residuals are nominal. Cannot connect to LLM backend.`
-          : `**Query:** "${transcript}"\n\nFallback: Physics models nominal.`);
-      } finally {
-        setLoadingExplain(false);
-      }
-    };
-    
-    recognition.onerror = (event) => {
-      setIsListening(false);
-      setExplanation("Voice recognition error: " + event.error);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-    
-    recognition.start();
+    rec.start();
   };
 
-  const handleRequestExplain = async () => {
-    setLoadingExplain(true);
-    try {
-      const d = await apiPost('/aurora-explain', { station: activeStation });
-      setExplanation(d?.explanation);
-    } catch (e) {
-      if (e?.kind === 'http') {
-        // Mock fallback grounded explanation if backend offline (removed in P0-5)
-        setExplanation(
-          `## Aurora AI Diagnostic Briefing [${activeStation.toUpperCase()}]\n\n` +
-          `• **Subsystem Integrity:** Nominal operation across 24 physics-informed LSTM neural forecasters.\n` +
-          `• **Residual Variance:** Telemetry is tracking within ±1.8% of thermal and thermodynamic model baselines.\n` +
-          `• **Generator & Power Grid:** Fuel flow rate and coolant jacket thermals exhibit zero anomalous drift.\n` +
-          `• **Recommendation:** Maintain standard 30-day polar maintenance schedule.`
-        );
-      } else {
-        setExplanation(
-          `## Aurora AI Diagnostic Briefing [${activeStation.toUpperCase()}]\n\n` +
-          `• **Subsystem Status:** All station sensor residuals are within nominal thermodynamic boundaries.\n` +
-          `• **Telemetry Analysis:** Generator, habitat trace heating, and water circuits operating with 99.4% confidence.`
-        );
-      }
-    } finally {
-      setLoadingExplain(false);
-    }
-  };
-
-  const rows = useMemo(() => {
-    const items = [];
-    Object.entries(predictions).forEach(([buildingId, sensors]) => {
-      Object.entries(sensors).forEach(([sensorId, pred]) => {
-        items.push({ buildingId, sensorId, ...pred });
-      });
-    });
-
-    if (items.length === 0) {
-      // Default set of physics forecasters if backend is initializing
-      const defaultSensors = [
-        { buildingId: 'generator', sensorId: 'gen_power', actual: 162.0, predicted: 160.5, residual: 1.5, anomaly_score: 0.02, is_anomaly: false },
-        { buildingId: 'generator', sensorId: 'gen_fuel_rate', actual: 32.4, predicted: 32.1, residual: 0.3, anomaly_score: 0.01, is_anomaly: false },
-        { buildingId: 'generator', sensorId: 'gen_temp', actual: 84.5, predicted: 83.2, residual: 1.3, anomaly_score: 0.03, is_anomaly: false },
-        { buildingId: 'livingQuarters', sensorId: 'lq_temp', actual: 20.2, predicted: 20.0, residual: 0.2, anomaly_score: 0.01, is_anomaly: false },
-        { buildingId: 'livingQuarters', sensorId: 'lq_co2', actual: 520.0, predicted: 510.0, residual: 10.0, anomaly_score: 0.02, is_anomaly: false },
-        { buildingId: 'waterTank', sensorId: 'water_level', actual: 78.4, predicted: 79.0, residual: -0.6, anomaly_score: 0.01, is_anomaly: false },
-        { buildingId: 'waterTank', sensorId: 'water_temp', actual: 58.0, predicted: 57.5, residual: 0.5, anomaly_score: 0.02, is_anomaly: false },
-        { buildingId: 'lab', sensorId: 'env_temp', actual: -22.4, predicted: -22.1, residual: -0.3, anomaly_score: 0.01, is_anomaly: false },
-        { buildingId: 'lab', sensorId: 'env_wind', actual: 34.0, predicted: 32.5, residual: 1.5, anomaly_score: 0.02, is_anomaly: false },
-        { buildingId: 'commsMast', sensorId: 'comms_signal', actual: 98.0, predicted: 97.0, residual: 1.0, anomaly_score: 0.01, is_anomaly: false },
-        { buildingId: 'storage', sensorId: 'store_fuel', actual: 82.0, predicted: 82.0, residual: 0.0, anomaly_score: 0.00, is_anomaly: false },
-      ];
-      return defaultSensors;
-    }
-
-    if (filter === 'anomalies') {
-      return items.filter((r) => r.is_anomaly);
-    }
-    items.sort((a, b) => {
-      if (a.is_anomaly !== b.is_anomaly) return b.is_anomaly ? 1 : -1;
-      return (b.anomaly_score || 0) - (a.anomaly_score || 0);
-    });
-    return items;
-  }, [predictions, filter]);
-
-  const anomalyCount = rows.filter((r) => r.is_anomaly).length;
+  const a = anomaly.data;
+  const isAnomaly = Boolean(a?.isAnomaly);
 
   return (
     <div className="ai-module-container">
       {/* Header */}
       <div className="ai-header glass-panel">
         <div className="ai-header-left">
-          <div className="ai-header-icon-box">
-            <LuSparkles size={24} className="ai-header-icon" />
-          </div>
+          <div className="ai-header-icon-box"><LuSparkles size={24} className="ai-header-icon" /></div>
           <div>
             <div className="ai-title-row">
-              <h1 className="ai-title font-display">Physics-Informed AI Diagnostics</h1>
-              <span className="ai-badge-active">LSTM RESIDUAL ENGINE</span>
+              <h1 className="ai-title font-display">AI Diagnostics</h1>
+              <span className="ai-badge-active">PHYSICS-RESIDUAL ISOLATION FOREST + 6σ GATE</span>
             </div>
             <p className="ai-subtitle">
-              Continuous thermodynamic model correlation, drift detection, and predictive maintenance for{' '}
-              {activeStation === 'maitri' ? 'Maitri Research Station' : 'Bharati Research Station'}.
+              Observed telemetry vs the physics model's prediction for the same tick, for{' '}
+              {activeStation === 'maitri' ? 'Maitri' : 'Bharati'}. Degradation signatures are synthetic prototypes.
             </p>
           </div>
         </div>
-
-        {/* Top KPI Badges */}
         <div className="ai-header-kpis">
           <div className="ai-kpi-chip">
-            <span className="kpi-label">Neural Models</span>
-            <span className="kpi-value font-mono">{forecasterCount || 24}</span>
-            <span className="kpi-sub text-cyan">Active Forecasters</span>
+            <span className="kpi-label">Anomaly score</span>
+            <span className={`kpi-value font-mono ${isAnomaly ? 'text-danger' : 'text-success'}`}>{a ? fmt(a.anomalyScore, 3) : '—'}</span>
+            <span className="kpi-sub">threshold {a ? fmt(a.threshold, 3) : '—'}</span>
           </div>
           <div className="ai-kpi-chip">
-            <span className="kpi-label">Anomalies</span>
-            <span className={`kpi-value font-mono ${anomalyCount > 0 ? 'text-danger' : 'text-success'}`}>
-              {anomalyCount}
-            </span>
-            <span className="kpi-sub">{anomalyCount > 0 ? 'Action Req.' : 'Nominal'}</span>
+            <span className="kpi-label">State</span>
+            <span className={`kpi-value font-mono ${isAnomaly ? 'text-danger' : 'text-success'}`}>{a ? (isAnomaly ? 'ANOMALOUS' : 'NORMAL') : '—'}</span>
+            <span className="kpi-sub">{a?.triggeredBy?.length ? a.triggeredBy.join(' + ') : 'no rule fired'}</span>
           </div>
           <div className="ai-kpi-chip">
-            <span className="kpi-label">Model Confidence</span>
-            <span className="kpi-value font-mono text-emerald">98.6%</span>
-            <span className="kpi-sub">Physics Grounded</span>
+            <span className="kpi-label">Decision risk</span>
+            <span className="kpi-value font-mono">{decision.data?.risk?.level ?? '—'}</span>
+            <span className="kpi-sub">{decision.data?.event?.type?.replace(/_/g, ' ') ?? ''}</span>
           </div>
         </div>
       </div>
 
-      {/* AI Diagnostic Briefing Generator Card */}
+      {/* Anomaly evidence + candidate causes */}
+      <div className="ai-brief-card glass-panel" data-testid="ai-anomaly">
+        <div className="section-title-wrap"><LuActivity size={16} className="text-cyan" /><h3 className="section-title font-display">Anomaly detection</h3></div>
+        <SourceState state={anomaly}>
+          {(d) => (
+            <>
+              <div className="ai-score-bar-wrap">
+                <div className="ai-score-bar-header">
+                  <span className="score-label">Isolation-Forest path score (not a probability) · max residual {fmt(d.maxResidualSigma)}σ / gate {d.residualAlarmSigma}σ</span>
+                  <span className="score-val font-mono">{fmt(d.anomalyScore, 3)} / {fmt(d.threshold, 3)}</span>
+                </div>
+                <div className="ai-score-track">
+                  <div className="ai-score-fill" style={{ width: `${Math.min(100, (d.anomalyScore / Math.max(d.threshold, 0.01)) * 60)}%`, background: d.isAnomaly ? '#f87171' : '#34d399' }} />
+                </div>
+              </div>
+              {d.evidence?.length ? (
+                <ul className="ai-list">
+                  {d.evidence.map((e) => (
+                    <li key={e.sensor} className="font-mono">
+                      {e.sensor}: {e.value} vs physics-expected {e.expected} ({e.deviation_sigma > 0 ? '+' : ''}{e.deviation_sigma}σ)
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="ai-subtitle"><LuShieldCheck size={14} /> No sensor deviates ≥ 3σ from the physics prediction.</p>}
+              {d.candidateCauses?.length > 0 && (
+                <p className="ai-subtitle">Possible causes (rule-based): {d.candidateCauses.map((c) => `${c.description} (${Math.round(c.confidence * 100)}%)`).join('; ')}</p>
+              )}
+            </>
+          )}
+        </SourceState>
+      </div>
+
+      {/* Residual table */}
+      <div className="ai-matrix-section">
+        <div className="matrix-section-header">
+          <div className="section-title-wrap"><LuActivity size={16} className="text-cyan" /><h3 className="section-title font-display">Sensor residuals vs physics prediction (same tick)</h3></div>
+        </div>
+        <SourceState state={anomaly}>
+          {(d) => (
+            <div className="ai-grid">
+              {(d.residuals || []).map((r) => {
+                const hot = Math.abs(r.z) >= 3;
+                return (
+                  <div key={r.sensor} className={`ai-card glass-panel ${hot ? 'anomaly' : 'nominal'}`}>
+                    <div className="ai-card-top">
+                      <div><h4 className="ai-card-sensor font-display">{r.sensor.replace(/_/g, ' ')}</h4><span className="ai-card-facility text-caption">{r.building}</span></div>
+                      <span className={`ai-score-badge ${hot ? 'badge-danger' : 'badge-success'}`}>{fmt(r.z)}σ</span>
+                    </div>
+                    <div className="ai-card-metrics">
+                      <div className="ai-metric-item"><span className="ai-m-label">Observed</span><span className="ai-m-val font-mono">{fmt(r.observed, 2)}</span></div>
+                      <div className="ai-metric-item"><span className="ai-m-label">Physics</span><span className="ai-m-val font-mono text-muted">{fmt(r.expected, 2)}</span></div>
+                      <div className="ai-metric-item"><span className="ai-m-label">σ (assumed)</span><span className="ai-m-val font-mono">{r.sigma}</span></div>
+                    </div>
+                  </div>
+                );
+              })}
+              {!(d.residuals || []).length && <p className="ai-subtitle">No residuals yet (detector warming up or not loaded).</p>}
+            </div>
+          )}
+        </SourceState>
+      </div>
+
+      {/* Decision + audit trail */}
+      <div className="ai-brief-card glass-panel" data-testid="ai-decision">
+        <div className="section-title-wrap"><LuListTree size={16} className="text-cyan" /><h3 className="section-title font-display">Decision engine</h3></div>
+        <SourceState state={decision}>
+          {(d) => (
+            <>
+              <p className="ai-subtitle"><strong>{d.event?.description}</strong> — risk <strong>{d.risk?.level}</strong>
+                {d.evaluation ? ` · evaluated at tick ${d.evaluation.tick} (${d.evaluation.reasons.join(', ')})` : ''}</p>
+              {d.recentlyResolved && (
+                <div className="ai-offline-state" data-testid="ai-recently-resolved">
+                  Recently resolved {d.recentlyResolved.resolvedSecondsAgo}s ago: {d.recentlyResolved.event?.description} (was {d.recentlyResolved.risk})
+                </div>
+              )}
+              {d.risk?.triggered_rules?.length > 0 && (
+                <ul className="ai-list">{d.risk.triggered_rules.map((r) => <li key={r.id}>{r.id} {r.name} — {r.rationale}</li>)}</ul>
+              )}
+              {d.recommendation && (
+                <p className="ai-subtitle">Recommendation: {d.recommendation.action}. Monitoring: {d.recommendation.monitoring}. Escalation: {d.recommendation.escalation}. Confidence: {d.recommendation.confidence}.</p>
+              )}
+              {d.auditTrail?.length > 0 && (
+                <details><summary className="ai-subtitle">Audit trail ({d.auditTrail.length} steps)</summary>
+                  <ol className="ai-list">{d.auditTrail.map((s) => <li key={s.step} className="font-mono">{s.step} — {s.source} ({s.provenance})</li>)}</ol>
+                </details>
+              )}
+            </>
+          )}
+        </SourceState>
+      </div>
+
+      {/* Physics forecast + Chronos */}
       <div className="ai-brief-card glass-panel">
+        <div className="section-title-wrap"><LuTrendingUp size={16} className="text-cyan" /><h3 className="section-title font-display">Forecasts</h3></div>
+        <SourceState state={forecast}>
+          {(f) => (f.available ? (
+            <>
+              <p className="ai-subtitle">Physics forward run · {f.provenance?.alignment} · risk {f.risk?.level}</p>
+              <table className="ai-table font-mono">
+                <thead><tr><th>Horizon</th><th>Outside °C</th><th>Load %</th><th>Gen °C</th><th>Fuel L/hr</th></tr></thead>
+                <tbody>{f.predictions.map((p) => (
+                  <tr key={p.horizon}><td>{p.horizon}</td><td>{fmt(p.weather?.env_temp)}</td><td>{fmt(p.predicted?.gen_load_pct)}</td><td>{fmt(p.predicted?.gen_temp_C)}</td><td>{fmt(p.predicted?.fuel_rate_Lhr)}</td></tr>
+                ))}</tbody>
+              </table>
+            </>
+          ) : <p className="ai-subtitle">Physics forecast unavailable: {f.reason}</p>)}
+        </SourceState>
+        <SourceState state={chronos}>
+          {(c) => (c.available ? (
+            <table className="ai-table font-mono">
+              <thead><tr><th>Chronos-Bolt signal</th><th>p10</th><th>p50</th><th>p90</th><th>horizon</th></tr></thead>
+              <tbody>{Object.entries(c.forecasts || {}).map(([sig, v]) => (v.available ? (
+                <tr key={sig}><td>{sig}</td><td>{fmt(v.p10.at(-1))}</td><td>{fmt(v.median.at(-1))}</td><td>{fmt(v.p90.at(-1))}</td><td>+{v.horizon_minutes.at(-1)} min{v.note ? ` · ${v.note}` : ''}</td></tr>
+              ) : (
+                <tr key={sig}><td>{sig}</td><td colSpan={4}>{v.reason}</td></tr>
+              )))}</tbody>
+            </table>
+          ) : <p className="ai-subtitle">Chronos unavailable: {c.reason}</p>)}
+        </SourceState>
+      </div>
+
+      {/* Explanation */}
+      <div className="ai-brief-card glass-panel" data-testid="ai-explain">
         <div className="ai-brief-header">
           <div className="ai-brief-title-wrap">
-            <LuBrain size={20} className="ai-brain-icon text-pink" />
             <div>
-              <h3 className="ai-brief-title font-display">Automated Evidence-Grounded Diagnostic Brief</h3>
-              <p className="ai-brief-sub">
-                Synthesizes multi-sensor residual deltas and station failure modes into an actionable report.
-              </p>
+              <h3 className="ai-brief-title font-display">Explanation</h3>
+              <p className="ai-brief-sub">Groq LLM explains the decision JSON; without an LLM you get a deterministic offline summary.</p>
             </div>
           </div>
           <div className="btn-group-explain">
-            <button
-              className={`btn-ai-voice ${isListening ? 'listening' : ''}`}
-              onClick={handleVoiceRequest}
-              disabled={loadingExplain || isListening}
-            >
-              <LuMic size={15} className={isListening ? 'pulse' : ''} />
-              {isListening ? 'Listening...' : 'Voice Query'}
-            </button>
-            <button
-              className="btn-ai-explain"
-              onClick={handleRequestExplain}
-              disabled={loadingExplain || isListening}
-            >
-              <LuSparkles size={15} />
-              {loadingExplain && !isListening ? 'Generating...' : 'Generate AI Brief'}
+            {QUESTIONS.map((q) => (
+              <button key={q.id} className="btn-ai-explain" disabled={asking} onClick={() => ask(q.id)}>{q.label}</button>
+            ))}
+            <button className={`btn-ai-voice ${listening ? 'listening' : ''}`} onClick={startVoice} disabled={asking || listening}>
+              <LuMic size={15} className={listening ? 'pulse' : ''} /> {listening ? 'Listening…' : 'Voice'}
             </button>
           </div>
         </div>
-
-        <AnimatePresence>
-          {explanation && (
-            <motion.div
-              className="ai-explanation-box"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-            >
-              <div className="explain-header">
-                <span className="explain-badge font-mono">DIAGNOSTIC REPORT &bull; READY</span>
-              </div>
-              <div className="explain-text font-mono">
-                {explanation}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Model Residual Matrix */}
-      <div className="ai-matrix-section">
-        <div className="matrix-section-header">
-          <div className="section-title-wrap">
-            <LuActivity size={16} className="text-cyan" />
-            <h3 className="section-title font-display">Sensor Residuals & Physics Predictions</h3>
-          </div>
-
-          {/* Filter Pills */}
-          <div className="ai-filters">
-            <button
-              className={`ai-filter-btn ${filter === 'all' ? 'active' : ''}`}
-              onClick={() => setFilter('all')}
-            >
-              All Models ({rows.length})
-            </button>
-            <button
-              className={`ai-filter-btn ${filter === 'anomalies' ? 'active' : ''}`}
-              onClick={() => setFilter('anomalies')}
-            >
-              Anomalies Only ({anomalyCount})
-            </button>
-          </div>
-        </div>
-
-        {/* Residual Cards Grid */}
-        <div className="ai-grid">
-          {rows.length === 0 ? (
-            <div className="ai-empty-state glass-panel">
-              <LuShieldCheck size={32} className="text-success" />
-              <h4 className="empty-title font-display">Zero Anomaly Deviations</h4>
-              <p className="empty-desc">
-                All physical sensors are tracking within normal standard deviations of LSTM thermodynamic models.
-              </p>
+        <form className="ai-ask-form" onSubmit={(e) => { e.preventDefault(); if (freeText.trim()) ask('free', freeText.trim()); }}>
+          <input className="ai-ask-input" value={freeText} maxLength={500} placeholder="Ask about this station (e.g. “why is the risk high?”)" onChange={(e) => setFreeText(e.target.value)} />
+          <button className="btn-ai-explain" type="submit" disabled={asking || !freeText.trim()}>{asking ? 'Asking…' : 'Ask'}</button>
+        </form>
+        {answer && (
+          <div className="ai-explanation-box" data-testid="ai-answer">
+            <div className="explain-header">
+              <span className="explain-badge font-mono">
+                {answer.mode === 'llm' ? 'LLM (GROQ)' : answer.mode === 'error' ? 'ERROR' : 'OFFLINE SUMMARY — LLM UNAVAILABLE'} · Q: {answer.asked}
+              </span>
             </div>
-          ) : (
-            rows.map((r, i) => {
-              const actual = typeof r.actual === 'number' ? r.actual : 0;
-              const predicted = typeof r.predicted === 'number' ? r.predicted : actual;
-              const residual = typeof r.residual === 'number' ? r.residual : actual - predicted;
-              const score = typeof r.anomaly_score === 'number' ? r.anomaly_score : 0.02;
-              const isAnomaly = r.is_anomaly || score > 0.6;
-              const sensorLabel = SENSOR_NAMES[r.sensorId] || r.sensorId.replace(/_/g, ' ');
-              const buildingLabel = BUILDING_NAMES[r.buildingId] || r.buildingId;
-
-              return (
-                <motion.div
-                  key={`${r.buildingId}-${r.sensorId}-${i}`}
-                  className={`ai-card glass-panel ${isAnomaly ? 'anomaly' : 'nominal'}`}
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                >
-                  <div className="ai-card-top">
-                    <div>
-                      <h4 className="ai-card-sensor font-display">{sensorLabel}</h4>
-                      <span className="ai-card-facility text-caption">{buildingLabel}</span>
-                    </div>
-                    <span className={`ai-score-badge ${isAnomaly ? 'badge-danger' : 'badge-success'}`}>
-                      {isAnomaly ? 'ANOMALY' : 'NOMINAL'}
-                    </span>
-                  </div>
-
-                  <div className="ai-card-metrics">
-                    <div className="ai-metric-item">
-                      <span className="ai-m-label">Observed Telemetry</span>
-                      <span className="ai-m-val font-mono">{actual.toFixed(1)}</span>
-                    </div>
-                    <div className="ai-metric-item">
-                      <span className="ai-m-label">Physics Model</span>
-                      <span className="ai-m-val font-mono text-muted">{predicted.toFixed(1)}</span>
-                    </div>
-                    <div className="ai-metric-item">
-                      <span className="ai-m-label">Residual (Δ)</span>
-                      <span className={`ai-m-val font-mono ${Math.abs(residual) > 5 ? 'text-warning' : 'text-cyan'}`}>
-                        {residual >= 0 ? `+${residual.toFixed(1)}` : residual.toFixed(1)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Anomaly Score Bar */}
-                  <div className="ai-score-bar-wrap">
-                    <div className="ai-score-bar-header">
-                      <span className="score-label">Anomaly Risk Metric</span>
-                      <span className="score-val font-mono">{(score * 100).toFixed(0)}%</span>
-                    </div>
-                    <div className="ai-score-track">
-                      <div
-                        className="ai-score-fill"
-                        style={{
-                          width: `${Math.max(score * 100, 5)}%`,
-                          background: isAnomaly ? '#f87171' : score > 0.3 ? '#fbbf24' : '#34d399',
-                        }}
-                      />
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })
-          )}
-        </div>
+            <div className="explain-text font-mono">{answer.explanation}</div>
+          </div>
+        )}
       </div>
     </div>
   );

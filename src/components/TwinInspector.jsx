@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import './TwinInspector.css';
-import { apiGet, simGet, simPost } from '../services/api';
+import { apiGet, apiPost } from '../services/api';
 
 /**
  * Digital Twin Inspector — Shows the full causal chain breakdown
@@ -22,18 +22,21 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
   const [tab, setTab] = useState('chain'); // 'chain' | 'assumptions' | 'replay'
   const [replayDate, setReplayDate] = useState('2024-07-15');
   const [replaySpeed, setReplaySpeed] = useState(120);
+  const [error, setError] = useState(null);
+  const [modeMsg, setModeMsg] = useState(null);
 
   useEffect(() => {
     if (!isOpen) return;
     
     const fetchData = () => {
       setLoading(true);
-      apiGet(`/twin-inspector?station=${activeStation}`)
-        .then(d => { setData(d); setLoading(false); })
-        .catch(() => {
-          simGet(`/api/twin-inspector?station=${activeStation}`)
-            .then(d => { setData(d); setLoading(false); })
-            .catch((err) => { console.warn('[TwinInspector] both sources failed:', err); setLoading(false); });
+      apiGet(`/twin-inspector?stationId=${activeStation}`)
+        .then(d => { setData(d); setError(null); setLoading(false); })
+        .catch((err) => {
+          console.error('[TwinInspector] backend request failed:', err);
+          setError(err?.kind === 'http' ? `Backend error (HTTP ${err.status})` : 'Backend unreachable');
+          setData(null);
+          setLoading(false);
         });
     };
 
@@ -59,14 +62,24 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
     return <span className="basis-tag" style={{ background: c.bg, color: c.color }}>{c.icon} {basis}</span>;
   };
 
+  const modeError = (err) => {
+    console.error('[TwinInspector] mode switch failed', err);
+    const detail = typeof err?.body?.detail === 'string' ? err.body.detail : null;
+    setModeMsg(err?.status === 503 ? `Simulator offline — mode not changed${detail ? ` (${detail})` : ''}`
+      : err?.kind === 'http' ? `Mode switch rejected: HTTP ${err.status}` : 'Backend unreachable');
+  };
+
   const handleReplay = () => {
-    simPost('/mode', { mode: 'reanalysis', date: replayDate, speed: replaySpeed })
-      .then(() => setTab('chain'))
-      .catch(console.error);
+    setModeMsg('Switching to ERA5 replay…');
+    apiPost('/sim/mode', { mode: 'reanalysis', date: replayDate, speed: replaySpeed }, { timeoutMs: 35000 })
+      .then(() => { setModeMsg(null); setTab('chain'); })
+      .catch(modeError);
   };
 
   const handleSwitchToSim = () => {
-    simPost('/mode', { mode: 'simulation' }).catch(console.error);
+    apiPost('/sim/mode', { mode: 'simulation' }, { timeoutMs: 35000 })
+      .then(() => setModeMsg('Switched to developer/test mode (synthetic weather).'))
+      .catch(modeError);
   };
 
   return (
@@ -85,7 +98,9 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
           <button className={tab === 'replay' ? 'active' : ''} onClick={() => setTab('replay')}>Historical Replay</button>
         </div>
 
-        {loading && !data && <div className="ti-loading">Loading...</div>}
+        {loading && !data && !error && <div className="ti-loading">Loading...</div>}
+        {error && <div className="ti-loading" role="status">{error} — twin inspector unavailable.</div>}
+        {modeMsg && <div className="ti-replay-info" role="status">{modeMsg}</div>}
 
         {data && tab === 'chain' && (
           <div className="ti-content">
@@ -93,6 +108,9 @@ export default function TwinInspector({ activeStation, isOpen, onClose }) {
             <div className="ti-banner">
               <div className="ti-banner-label">DATA SOURCE</div>
               <div className="ti-banner-value">{data.dataSource?.label || 'Unknown'}</div>
+              <div className="ti-banner-time" data-testid="ti-telemetry-source">
+                Telemetry: {data.telemetrySource === 'simulator' ? 'live simulator' : data.telemetrySource === 'physics-fallback' ? 'backend physics fallback (simulator offline)' : data.telemetrySource}
+              </div>
               {data.environment?.simulatedTime && (
                 <div className="ti-banner-time">
                   Simulated: {data.environment.simulatedTime.replace('T', ' ').slice(0, 16)}

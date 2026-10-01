@@ -11,7 +11,7 @@ import {
   LuX, LuPlay, LuRotateCcw, LuTriangleAlert, LuSettings,
 } from 'react-icons/lu';
 import './DemoControl.css';
-import { simGet, simPost } from '../services/api';
+import { apiGet, apiPost } from '../services/api';
 
 
 const SCENARIO_ICONS = {
@@ -30,48 +30,63 @@ const SCENARIO_COLORS = {
   co2_spike: '#c084fc',
 };
 
-export default function DemoControl() {
+export default function DemoControl({ activeStation = 'maitri' }) {
   const [isOpen, setIsOpen] = useState(false);
   const [scenarios, setScenarios] = useState({});
   const [activeScenario, setActiveScenario] = useState(null);
   const [injecting, setInjecting] = useState(null);
   const [tickCount, setTickCount] = useState(0);
+  const [error, setError] = useState(null);
 
-  // Fetch available scenarios
+  const describe = (e) => (e?.status === 503 ? 'Simulator offline'
+    : e?.kind === 'http' ? `Backend error (HTTP ${e.status})` : 'Backend unreachable');
+
+  // Fetch available scenarios for the ACTIVE station (B14), via the backend proxy
   useEffect(() => {
+    let alive = true;
     const fetchScenarios = async () => {
       try {
-        const data = await simGet('/scenarios');
+        const data = await apiGet(`/sim/scenarios?stationId=${activeStation}`);
+        if (!alive) return;
         setScenarios(data?.scenarios || {});
-        setActiveScenario(data?.activeScenario);
-        setTickCount(data?.tickCount);
-      } catch (e) { /* Simulator not running */ }
+        setActiveScenario(data?.activeScenario ?? null);
+        setTickCount(data?.tickCount ?? 0);
+        setError(null);
+      } catch (e) {
+        if (!alive) return;
+        if (e?.status !== 503) console.warn('[DemoControl] scenarios unavailable', e);
+        setError(describe(e));
+      }
     };
     fetchScenarios();
     const interval = setInterval(fetchScenarios, 3000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => { alive = false; clearInterval(interval); };
+  }, [activeStation]);
 
   const triggerScenario = useCallback(async (scenarioId) => {
     setInjecting(scenarioId);
     try {
-      await simPost(`/inject/${scenarioId}`);
+      await apiPost(`/sim/inject/${scenarioId}?stationId=${activeStation}`);
       setActiveScenario(scenarioId);
+      setError(null);
       setTimeout(() => setInjecting(null), 1000);
     } catch (e) {
       console.error('Failed to inject scenario:', e);
+      setError(`Inject failed: ${describe(e)}`);
       setInjecting(null);
     }
-  }, []);
+  }, [activeStation]);
 
   const resetAll = useCallback(async () => {
     try {
-      await simPost('/reset');
+      await apiPost(`/sim/reset?stationId=${activeStation}`);
       setActiveScenario(null);
+      setError(null);
     } catch (e) {
       console.error('Failed to reset:', e);
+      setError(`Reset failed: ${describe(e)}`);
     }
-  }, []);
+  }, [activeStation]);
 
   return (
     <>
@@ -105,8 +120,9 @@ export default function DemoControl() {
               <span className="demo-tick font-mono tabular-nums">Tick #{tickCount}</span>
             </div>
             <p className="demo-subtitle text-caption">
-              Trigger anomaly scenarios to demonstrate AI detection and cascade alerts
+              Inject a synthetic fault into <strong>{activeStation === 'maitri' ? 'Maitri' : 'Bharati'}</strong> to exercise anomaly detection and the decision engine.
             </p>
+            {error && <p className="demo-subtitle text-caption" role="status" style={{ color: '#f87171' }}>{error}</p>}
 
             {/* Active scenario indicator */}
             <AnimatePresence>
