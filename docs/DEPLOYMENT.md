@@ -204,17 +204,22 @@ src.backup(dst); dst.close(); src.close()
 docker compose cp backend:/tmp/backup.db "backups/aurora-$(date +%F-%H%M).db"
 ```
 
-Restore:
+Restore. The database runs in WAL mode, so the stale `-wal` and `-shm` files from the
+old database **must** go with it — SQLite would otherwise try to replay that write-ahead
+log into the restored file:
 
 ```bash
 docker compose down
-docker compose run --rm --no-deps -v "$PWD/backups:/backups" backend \
-  sh -c 'cp /backups/aurora-2026-10-01-1200.db /data/antarctic_observations.db'
+docker compose run --rm --no-deps -v "$PWD/backups:/backups" backend sh -c '
+  rm -f /data/antarctic_observations.db-wal /data/antarctic_observations.db-shm
+  cp /backups/aurora-2026-10-01-1200.db /data/antarctic_observations.db
+'
 docker compose up -d
 ```
 
-The backend runs the migrations on the restored file at startup, so a backup from an
-older version is fine.
+The backup above is written with SQLite's `.backup`, which produces a self-contained file
+with no WAL to carry over. The backend runs the migrations on the restored file at
+startup, so a backup from an older version is fine.
 
 To start completely fresh (this **deletes** the data):
 
