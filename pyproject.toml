@@ -24,6 +24,32 @@ filterwarnings = [
     "default",
 ]
 
+# ── Type checking (IDE only; nothing here runs in CI or at run time) ──────────
+# simulator/ modules import each other flat (`import db`, `from units import …`) because
+# simulator/config.py resolves paths module-relative and each service adds its own
+# directory to sys.path at startup. A type checker has no way to infer that, so without
+# `search-path` it reports every local import as missing — 86 of them — and it guesses the
+# import root is src/ (the Vite app) from the project layout.
+#
+# `python-interpreter` pins the project venv. Otherwise Pyrefly queries whichever
+# interpreter it finds first, which on a machine with Anaconda on PATH is
+# /opt/anaconda3 — a different site-packages that has none of Aurora's dependencies.
+[tool.pyrefly]
+project-includes = ["simulator"]
+project-excludes = [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    "legacy",
+    "dist",
+]
+# simulator/tests is a second root: pytest puts the test directory on sys.path, which is
+# how `from conftest import insert_obs` resolves at run time.
+search-path = ["simulator", "simulator/tests"]
+# The version comes from this interpreter; do not also pin python-version or the two can
+# disagree (the venv is 3.13 locally, CI runs 3.12).
+python-interpreter = ".venv/bin/python"
+
 [tool.coverage.run]
 source = ["simulator"]
 branch = true

@@ -96,6 +96,21 @@
 - Never commit `.env` files or secrets. Only `.env.example` (placeholders) is tracked.
 - Setup: copy `.mcp.json.example` to `.mcp.json` and set `cwd` to your local repo path (`.mcp.json` is gitignored).
 
+## Editor / type checking
+- `simulator/` modules import each other **flat** (`import db`, `from units import …`): each
+  service adds its own directory to `sys.path` at startup and `config.py` resolves paths
+  module-relative. A type checker cannot infer that, so both are told explicitly:
+  `[tool.pyrefly] search-path` in `pyproject.toml` and `python.analysis.extraPaths` in
+  `.vscode/settings.json` (committed). **Keep the two lists in step**, including
+  `simulator/tests` — pytest puts the test dir on `sys.path`, which is how
+  `from conftest import …` resolves.
+- Both also pin the interpreter to `.venv/bin/python`; otherwise a machine with Anaconda on
+  PATH resolves imports against `/opt/anaconda3`, which has none of Aurora's dependencies.
+- Pylance is set to `typeCheckingMode: basic`. The codebase is un-annotated — sensor
+  readings and physics parameters are plain heterogeneous dicts — so stricter modes report
+  inference artefacts, not defects. Raise it as annotations and TypedDicts land.
+- This is editor-only configuration: nothing here runs in CI or at run time.
+
 ## Tests and lint
 - One command each: `make test` (pytest + Vitest), `make lint` (ruff + oxlint), `make e2e`.
 - **Python:** `pytest` from the repo root — config in `pyproject.toml` (`testpaths = simulator/tests`).

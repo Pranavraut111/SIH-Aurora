@@ -29,6 +29,8 @@ coverage/
 *.local
 .vscode/*
 !.vscode/extensions.json
+# Committed so the language server resolves simulator/ imports and uses .venv
+!.vscode/settings.json
 .idea
 *.suo
 *.sw?

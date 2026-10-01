@@ -1,0 +1,45 @@
+{
+  // Aurora — committed editor settings. Only what the project needs to resolve itself;
+  // personal preferences stay in your user settings.
+  //
+  // Interpreter: the repo venv, not whatever is first on PATH. On a machine with Anaconda
+  // installed, the language server otherwise picks /opt/anaconda3, whose site-packages has
+  // none of Aurora's dependencies (see `make setup` / CLAUDE.md).
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
+  // simulator/ modules import each other flat (`import db`, `from units import …`) because
+  // simulator/config.py resolves paths module-relative and each service adds its own
+  // directory to sys.path at startup. Pylance/pyright cannot infer that, so without
+  // extraPaths every local import is reported as unresolved.
+  // simulator/tests is a second root: pytest puts the test directory on sys.path, which is
+  // how `from conftest import insert_obs` resolves.
+  // The Pyrefly equivalent is `search-path` in pyproject.toml — keep the two in step.
+  "python.analysis.extraPaths": [
+    "./simulator",
+    "./simulator/tests"
+  ],
+
+  // The codebase is not annotated: sensor readings and physics parameters are plain
+  // heterogeneous dicts. Stricter modes report hundreds of inference artefacts (e.g.
+  // `config["step"]` infers `str | float`, so `float * config["step"]` looks like an
+  // error) rather than defects. Raise this as annotations and TypedDicts land.
+  "python.analysis.typeCheckingMode": "basic",
+
+  // Tests are configured in pyproject.toml ([tool.pytest.ini_options]).
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+
+  // Ruff owns Python formatting/lint decisions for this repo; `ruff check .` must exit 0.
+  // `ruff format` is deliberately NOT enforced (see CLAUDE.md), so no format-on-save here.
+  "[python]": {
+    "editor.codeActionsOnSave": {
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true
+  }
+}
