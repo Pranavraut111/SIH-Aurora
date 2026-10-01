@@ -250,6 +250,16 @@ jobs:
           curl -fsS http://localhost/api/health | grep -q '"stations"'
 
       # ── Abuse protection ──────────────────────────────────────
+      - name: Install the browser test toolchain
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Browser smoke test through nginx
+        env:
+          E2E_BASE_URL: http://localhost
+        run: npm run test:e2e
+
       # ── Write protection ──────────────────────────────────────
       # The token comes from the step environment, never inline in a curl -H: a literal
       # there is indistinguishable from a real leaked credential (gitleaks'
@@ -441,16 +451,6 @@ jobs:
           docker compose exec -T frontend wget -q -O- http://backend:8080/api/health >/dev/null
           echo "nginx -> backend over the aurora network: ok"
           exit $fail
-
-      - name: Install the browser test toolchain
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Browser smoke test through nginx
-        env:
-          E2E_BASE_URL: http://localhost
-        run: npm run test:e2e
 
       - name: Data survives a restart
         run: |
