@@ -250,48 +250,99 @@ jobs:
           curl -fsS http://localhost/api/health | grep -q '"stations"'
 
       # ── Abuse protection ──────────────────────────────────────
-      # The token comes from the environment, never inline in a curl -H: a literal there
-      # is indistinguishable from a real leaked credential (gitleaks' curl-auth-header
-      # rule flags it, correctly).
-      - name: Writes need the operator token
+      # ── Write protection ──────────────────────────────────────
+      # The token comes from the step environment, never inline in a curl -H: a literal
+      # there is indistinguishable from a real leaked credential (gitleaks'
+      # curl-auth-header rule flags it, correctly).
+      # One assertion per step, so a failure names itself without reading the log.
+      - name: Enable write protection and recreate the Python services
         env:
           ADMIN_TOKEN: ci-operator-token
         run: |
-          # The compose stack runs without ADMIN_TOKEN by default, so set one and restart
-          # just the two Python services to prove the 401 path end to end.
-          echo "ADMIN_TOKEN=${ADMIN_TOKEN}" >> .env
           # Deliberately recreates ONLY the Python services, exactly as `docker compose
-          # up -d` does after an .env edit. The backend gets a new IP and the frontend is
-          # left running, so this also proves nginx re-resolves the backend per request
-          # instead of caching the address from startup.
+          # up -d` does after an .env edit: the backend gets a new IP while the frontend
+          # keeps running, which also exercises nginx's per-request DNS resolution.
+          echo "ADMIN_TOKEN=${ADMIN_TOKEN}" >> .env
           docker compose up -d --force-recreate backend simulator
           docker compose ps
+
+      - name: Write — nginx still reaches the recreated backend
+        run: |
           for i in $(seq 1 40); do
-            curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
+            if curl -fsS -m 3 http://localhost/api/health > /tmp/wp-health.json 2>/dev/null; then
+              echo "backend reachable through nginx after $((i * 3))s"
+              cat /tmp/wp-health.json | head -c 300; echo
+              exit 0
+            fi
             sleep 3
           done
+          echo "::error::nginx could not reach the recreated backend"
+          curl -sS -o /dev/null -w 'status %{http_code}\n' http://localhost/api/health || true
+          docker compose ps
+          docker compose logs --tail=60 frontend backend
+          exit 1
+
+      - name: Write — the backend picked the token up
+        run: |
+          curl -fsS http://localhost/api/admin/session | tee /tmp/wp-session.json
+          python3 -c "
+          import json
+          s = json.load(open('/tmp/wp-session.json'))
+          assert s['writeProtected'] is True, f'backend did not pick up ADMIN_TOKEN: {s}'
+          assert s['authenticated'] is False, s
+          print('write protection active')
+          "
+
+      - name: Write — no token is 401
+        run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
             "http://localhost/api/sim/reset?stationId=maitri")
-          test "$code" = "401" || { echo "::error::unauthenticated write returned $code, expected 401"; exit 1; }
-          echo "no token  -> 401"
+          test "$code" = "401" || { echo "::error::expected 401, got $code"; exit 1; }
+
+      - name: Write — a wrong token is 401
+        env:
+          ADMIN_TOKEN: ci-operator-token
+        run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H "X-Admin-Token: not-${ADMIN_TOKEN}" "http://localhost/api/sim/reset?stationId=maitri")
-          test "$code" = "401" || { echo "::error::wrong token returned $code, expected 401"; exit 1; }
-          echo "wrong token -> 401"
+            -H "X-Admin-Token: not-${ADMIN_TOKEN}" \
+            "http://localhost/api/sim/reset?stationId=maitri")
+          test "$code" = "401" || { echo "::error::expected 401, got $code"; exit 1; }
+
+      - name: Write — the right token is accepted
+        env:
+          ADMIN_TOKEN: ci-operator-token
+        run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-            -H "X-Admin-Token: ${ADMIN_TOKEN}" "http://localhost/api/sim/reset?stationId=maitri")
-          test "$code" = "200" || { echo "::error::valid token returned $code, expected 200"; exit 1; }
-          echo "right token -> 200"
-          # Reading stays public throughout, and the simulator still feeds telemetry
-          # (it authenticates with the same token from .env).
-          curl -fsS http://localhost/api/station/maitri/state >/dev/null
-          sleep 6
-          curl -fsS http://localhost/api/health | python3 -c "
-          import json,sys
-          h=json.load(sys.stdin)
-          assert h['simulator']['reachable'], h
-          print('simulator still ingesting with the token set')
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            "http://localhost/api/sim/reset?stationId=maitri")
+          test "$code" = "200" || { echo "::error::expected 200, got $code"; exit 1; }
+
+      - name: Write — reads stay public with protection on
+        run: |
+          for path in /api/health /api/stations /api/station/maitri/state \
+                      /api/alerts?stationId=maitri /api/admin/config?stationId=maitri; do
+            curl -fsS -o /dev/null "http://localhost${path}" \
+              || { echo "::error::a read was refused: $path"; exit 1; }
+          done
+          echo "reads need no token"
+
+      - name: Write — the simulator still ingests with the token set
+        run: |
+          # The simulator authenticates its own /api/sensors/batch POSTs with the same
+          # token, so telemetry must keep flowing.
+          sleep 10
+          curl -fsS http://localhost/api/health | tee /tmp/wp-health2.json
+          python3 -c "
+          import json
+          h = json.load(open('/tmp/wp-health2.json'))
+          assert h['simulator']['reachable'], h['simulator']
+          ages = {s: v['lastBatchAgeSec'] for s, v in h['stations'].items()}
+          fresh = [s for s, a in ages.items() if a is not None and a < 60]
+          assert fresh, f'no station received a recent batch: {ages}'
+          print('simulator ingesting with the token set; batch ages:', ages)
           "
+          docker compose logs --tail=40 simulator | grep -i "401" \
+            && { echo "::error::the simulator was rejected with 401"; exit 1; } || true
 
       - name: Browser smoke test with write protection on
         env:
