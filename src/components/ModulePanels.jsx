@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { apiGet } from '../services/api';
 import { motion } from 'framer-motion';
-import { BUILDINGS, DEPENDENCY_GRAPH } from '../data/stationData';
+import { BUILDINGS } from '../data/stationData';
 import DependencyGraph from './DependencyGraph';
 import {
   LuBuilding2,
@@ -89,7 +89,7 @@ function BuildingCard({ buildingId, building, sensors = {}, alertLevel = 'normal
 // ═══════════════════════════════════════════════════════════════
 // INFRASTRUCTURE DASHBOARD
 // ═══════════════════════════════════════════════════════════════
-export function InfrastructurePanel({ sensorData = {}, alerts = {}, onBuildingClick, dependencyAlerts = [], aiHealth = 'healthy' }) {
+export function InfrastructurePanel({ sensorData = {}, alerts = {}, onBuildingClick, dependencyAlerts = [], aiHealth = 'healthy', activeStation = 'maitri' }) {
   const buildingKeys = Object.keys(BUILDINGS);
   const alertValues = Object.values(alerts);
   const criticalCount = alertValues.filter(a => a === 'critical').length;
@@ -170,6 +170,7 @@ export function InfrastructurePanel({ sensorData = {}, alerts = {}, onBuildingCl
           onNodeClick={onBuildingClick}
           dependencyAlerts={dependencyAlerts}
           aiHealth={aiHealth}
+          stationId={activeStation}
         />
       </div>
     </div>

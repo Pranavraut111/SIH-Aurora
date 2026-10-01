@@ -8,6 +8,7 @@
    ═══════════════════════════════════════════════════════════════ */
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { STATION_IDS, stationMeta, formatCoords } from '../data/stationConfig';
 import {
   LuSnowflake,
   LuChevronDown,
@@ -155,10 +156,10 @@ export default function TopBar({
           >
             <LuMapPin size={14} className="station-pin-icon" />
             <span className="station-active font-display">
-              {activeStation === 'maitri' ? 'Maitri Station' : 'Bharati Station'}
+              {stationMeta(activeStation).name} Station
             </span>
             <span className="station-coords font-mono">
-              {activeStation === 'maitri' ? '70.77°S, 11.73°E' : '69.41°S, 76.19°E'}
+              {formatCoords(activeStation)}
             </span>
             <LuChevronDown
               size={13}
@@ -175,32 +176,25 @@ export default function TopBar({
                 exit={{ opacity: 0, y: -6, scale: 0.98 }}
                 transition={{ duration: 0.15 }}
               >
-                <button
-                  className={`station-option ${activeStation === 'maitri' ? 'active' : ''}`}
-                  onClick={() => {
-                    onStationChange('maitri');
-                    setShowStationMenu(false);
-                  }}
-                >
-                  <div className="station-option-content">
-                    <div className="station-opt-title font-display">Maitri Research Station</div>
-                    <div className="station-opt-sub font-mono">Schirmacher Oasis (70.77°S, 11.73°E) &bull; Est. 1989</div>
-                  </div>
-                  {activeStation === 'maitri' && <span className="station-opt-check">&bull;</span>}
-                </button>
-                <button
-                  className={`station-option ${activeStation === 'bharati' ? 'active' : ''}`}
-                  onClick={() => {
-                    onStationChange('bharati');
-                    setShowStationMenu(false);
-                  }}
-                >
-                  <div className="station-option-content">
-                    <div className="station-opt-title font-display">Bharati Research Station</div>
-                    <div className="station-opt-sub font-mono">Larsemann Hills (69.41°S, 76.19°E) &bull; Est. 2012</div>
-                  </div>
-                  {activeStation === 'bharati' && <span className="station-opt-check">&bull;</span>}
-                </button>
+                {STATION_IDS.map((sid) => {
+                  const m = stationMeta(sid);
+                  return (
+                    <button
+                      key={sid}
+                      className={`station-option ${activeStation === sid ? 'active' : ''}`}
+                      onClick={() => {
+                        onStationChange(sid);
+                        setShowStationMenu(false);
+                      }}
+                    >
+                      <div className="station-option-content">
+                        <div className="station-opt-title font-display">{m.fullName}</div>
+                        <div className="station-opt-sub font-mono">{m.region} ({formatCoords(sid)}) &bull; Est. {m.commissionedYear}</div>
+                      </div>
+                      {activeStation === sid && <span className="station-opt-check">&bull;</span>}
+                    </button>
+                  );
+                })}
               </motion.div>
             )}
           </AnimatePresence>

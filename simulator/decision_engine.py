@@ -31,54 +31,14 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import station_config  # noqa: E402
+
 # ═══════════════════════════════════════════════════════
 #  Dependency graph — what affects what
 # ═══════════════════════════════════════════════════════
 
-DEPENDENCY_GRAPH = {
-    "weather": {
-        "description": "Environmental conditions",
-        "affects": ["heating", "building_thermal"],
-        "provenance": "reanalysis/forecast",
-    },
-    "heating": {
-        "description": "Station heating system",
-        "depends_on": ["weather"],
-        "affects": ["power_demand", "fuel"],
-        "provenance": "model-derived",
-    },
-    "building_thermal": {
-        "description": "Building insulation and thermal state",
-        "depends_on": ["weather", "heating"],
-        "affects": ["indoor_comfort", "heating"],
-        "provenance": "model-derived",
-    },
-    "power_demand": {
-        "description": "Total electrical demand",
-        "depends_on": ["heating", "base_load"],
-        "affects": ["generator"],
-        "provenance": "model-derived",
-    },
-    "generator": {
-        "description": "Diesel generator system",
-        "depends_on": ["power_demand"],
-        "affects": ["fuel", "electrical_supply"],
-        "subsystems": ["cooling", "bearings", "fuel_injection"],
-        "provenance": "model-derived",
-    },
-    "fuel": {
-        "description": "Fuel storage and consumption",
-        "depends_on": ["generator"],
-        "affects": ["autonomy"],
-        "provenance": "model-derived",
-    },
-    "cooling": {
-        "description": "Generator cooling system",
-        "depends_on": ["generator"],
-        "affects": ["generator"],
-        "provenance": "model-derived",
-    },
-}
+# Abstract causal graph — from station_config.json (single source of truth).
+DEPENDENCY_GRAPH = station_config.decision_causal_graph()
 
 # ═══════════════════════════════════════════════════════
 #  Risk matrix — explicit, auditable rules

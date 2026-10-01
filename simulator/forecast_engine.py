@@ -30,11 +30,9 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from physics_model import StationPhysicsModel
 
-# ── Station coordinates (shared with weather_data.py) ──────
-STATION_COORDS = {
-    "maitri":  {"lat": -70.77, "lon": 11.73},
-    "bharati": {"lat": -69.41, "lon": 76.19},
-}
+# ── Station coordinates — from station_config.json (single source of truth) ──
+import station_config  # noqa: E402
+STATION_COORDS = {sid: station_config.coords(sid) for sid in station_config.station_ids()}
 
 from config import WEATHER_CACHE_DIR as CACHE_DIR, forecast_cache_path
 from units import cache_wind_unit, wind_factor_to_kmh

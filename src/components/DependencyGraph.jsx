@@ -7,31 +7,28 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LuLayers, LuShieldCheck, LuTriangleAlert, LuZap } from 'react-icons/lu';
 import './DependencyGraph.css';
+import { buildingList, dependencyEdges } from '../data/stationConfig';
 
-// ── Graph Layout ──────────────────────────────────────────────
-const GRAPH_NODES = {
-  generator:       { x: 400, y: 60,  label: 'Generator Shed',    abbr: 'GEN', module: 'energy' },
-  heating:         { x: 200, y: 180, label: 'Heating Zone A',    abbr: 'HT-A', module: 'infra' },
-  heatingB:        { x: 380, y: 180, label: 'Heating Zone B',    abbr: 'HT-B', module: 'infra' },
-  waterTank:       { x: 560, y: 180, label: 'Water Treatment',   abbr: 'H2O', module: 'infra' },
-  commsMast:       { x: 700, y: 120, label: 'Comms Tower',       abbr: 'COM', module: 'infra' },
-  livingQuarters:  { x: 300, y: 320, label: 'Living Quarters',   abbr: 'LQ', module: 'infra' },
-  storage:         { x: 100, y: 320, label: 'Logistics Store',   abbr: 'STR', module: 'logistics' },
-  lab:             { x: 550, y: 320, label: 'Research Lab',      abbr: 'LAB', module: 'env' },
+// ── Graph Layout (positions only; names, abbreviations and edges come from station_config.json) ──
+const NODE_POSITIONS = {
+  storage:         { x: 170, y: 60 },
+  generator:       { x: 400, y: 60 },
+  heating:         { x: 200, y: 180 },
+  heatingB:        { x: 560, y: 180 },
+  waterTank:       { x: 380, y: 200 },
+  commsMast:       { x: 700, y: 120 },
+  livingQuarters:  { x: 300, y: 330 },
+  lab:             { x: 580, y: 330 },
 };
 
-const GRAPH_EDGES = [
-  { source: 'generator', target: 'heating',         label: 'powers' },
-  { source: 'generator', target: 'heatingB',        label: 'powers' },
-  { source: 'generator', target: 'waterTank',       label: 'powers' },
-  { source: 'generator', target: 'commsMast',       label: 'powers' },
-  { source: 'generator', target: 'livingQuarters',  label: 'powers' },
-  { source: 'heating',   target: 'livingQuarters',  label: 'heats' },
-  { source: 'heatingB',  target: 'livingQuarters',  label: 'heats' },
-  { source: 'waterTank', target: 'livingQuarters',  label: 'supplies' },
-  { source: 'waterTank', target: 'lab',             label: 'supplies' },
-  { source: 'generator', target: 'lab',             label: 'powers' },
-];
+function graphFor(stationId) {
+  const nodes = Object.fromEntries(buildingList(stationId).map((b) => [b.id, {
+    ...(NODE_POSITIONS[b.id] || { x: 60, y: 380 }),
+    label: b.name, abbr: b.abbr, module: b.module,
+  }]));
+  const edges = dependencyEdges(stationId).map((e) => ({ source: e.source, target: e.target, label: e.relation }));
+  return { nodes, edges };
+}
 
 const ALERT_COLORS = {
   normal:   'var(--status-success)',
@@ -44,7 +41,9 @@ export default function DependencyGraph({
   onNodeClick,
   dependencyAlerts = [],
   aiHealth = 'healthy',
+  stationId = 'maitri',
 }) {
+  const { nodes: GRAPH_NODES, edges: GRAPH_EDGES } = graphFor(stationId);
   const svgRef = useRef(null);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 420 });

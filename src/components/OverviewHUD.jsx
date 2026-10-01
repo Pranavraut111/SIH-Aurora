@@ -255,10 +255,10 @@ export default function OverviewHUD({
           <div className="hud-card-location">
             <LuMapPin size={14} className="hud-pin-icon" />
             <span className="hud-coords-text font-mono">
-              {station.coords || (activeStation === 'maitri' ? "70°46'S 11°44'E" : "69°24'S 76°11'E")}
+              {station.coords}
             </span>
             <span className="hud-sep">|</span>
-            <span className="hud-region-text">{station.location}, {station.region}</span>
+            <span className="hud-region-text">{station.region}</span>
           </div>
         </div>
 
@@ -269,7 +269,7 @@ export default function OverviewHUD({
           </div>
           <div className="hud-meta-pill">
             <LuUsers size={12} className="meta-icon" />
-            <span>{station.personnel} Personnel</span>
+            <span>{station.personnel ?? '—'} winter crew</span>
           </div>
           <div className="hud-meta-pill">
             <LuMountain size={12} className="meta-icon" />

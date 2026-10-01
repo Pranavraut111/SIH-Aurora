@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field, field_validator
 # Import digital twin engines
 sys.path.insert(0, str(Path(__file__).parent))
 import config as app_config
-from ncpor_ingestor import init_db, ingest_live_station, ingest_cached_historical_data, DB_PATH, STATION_INFO
+from ncpor_ingestor import init_db, ingest_live_station, ingest_cached_historical_data, DB_PATH
 from analytics_ai_engine import (
     run_anomaly_detection,
     run_time_series_forecast,
@@ -46,7 +46,8 @@ from analytics_ai_engine import (
     query_observations
 )
 from physics_model import StationPhysicsModel
-from cascade import analyze_dependency_cascade, BUILDING_NAMES
+from cascade import analyze_dependency_cascade
+import station_config
 from offline_explain import offline_explanation
 from twin_inspector import build_twin_inspector
 from units import ms_to_kmh, kmh_to_ms
@@ -54,7 +55,7 @@ from station_store import StationStore
 
 log = logging.getLogger("aurora.backend")
 
-STATIONS = tuple(STATION_INFO.keys())          # ("maitri", "bharati")
+STATIONS = station_config.station_ids()          # from station_config.json
 
 # Physics-fallback models. ONLY advance_fallback() (called by the tick) may
 # call .compute() on these — compute() mutates fuel/temps/water state.
@@ -70,7 +71,7 @@ store = StationStore(STATIONS, history_max_points=app_config.HISTORY_MAX_POINTS)
 def require_station(raw) -> str:
     """Normalise a station id; unknown → 404 with a clear message."""
     sid = str(raw).strip().lower() if raw is not None else ""
-    if sid not in STATION_INFO:
+    if sid not in STATIONS:
         raise HTTPException(
             status_code=404,
             detail=f"Unknown station '{raw}'. Valid stations: {', '.join(STATIONS)}",
@@ -295,7 +296,7 @@ def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts
                    last_batch_age, connected: bool, event_timeline=None, active_patterns=None) -> dict:
     """Pure: sensors → alerts → cascade → health → snapshot dict."""
     alerts, active_alerts = compute_alerts(sid, sensors, ts_ms)
-    dependency_alerts = analyze_dependency_cascade(alerts)
+    dependency_alerts = analyze_dependency_cascade(alerts, sid)
     if any(a["level"] == "critical" for a in active_alerts) or any(d["severity"] == "critical" for d in dependency_alerts):
         health = "critical"
     elif active_alerts or dependency_alerts:
@@ -320,7 +321,8 @@ def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts
 
 
 def _coords(sid: str) -> str:
-    return f"Lat {STATION_INFO[sid]['latitude']}, Lon {STATION_INFO[sid]['longitude']}"
+    c = station_config.coords(sid)
+    return f"Lat {c['lat']}, Lon {c['lon']}"
 
 
 def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
@@ -454,7 +456,7 @@ async def websocket_endpoint(websocket: WebSocket):
     station_filter = None
     if raw is not None:
         station_filter = raw.strip().lower()
-        if station_filter not in STATION_INFO:
+        if station_filter not in STATIONS:
             log.warning("WS rejected: unknown stationId %r", raw)
             await websocket.close(code=1008)
             return
@@ -481,32 +483,30 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/stations")
 def get_stations():
-    return [
-        {
-            "id": "maitri",
-            "name": "Maitri Research Station",
-            "latitude": -70.77,
-            "longitude": 11.73,
-            "elevation": "117m",
-            "region": "Schirmacher Oasis, Dronning Maud Land",
-            "established": 1989,
-            "personnel": 25,
-            "status": "Operational",
-            "dataSources": ["NCPOR AWS Live", "IMD Meteorological", "IIG Geomagnetic", "ERA5 Polar Climate"]
-        },
-        {
-            "id": "bharati",
-            "name": "Bharati Research Station",
-            "latitude": -69.41,
-            "longitude": 76.19,
-            "elevation": "35m",
-            "region": "Larsemann Hills, Prydz Bay",
-            "established": 2012,
-            "personnel": 47,
-            "status": "Operational",
-            "dataSources": ["NCPOR DCWIS Live", "IMD AWS", "IIG Scientific", "ERA5 Polar Climate"]
-        }
-    ]
+    """Station list (plain values) derived from station_config.json."""
+    out = []
+    for sid in STATIONS:
+        m = station_config.metadata_values(sid)
+        out.append({
+            "id": sid,
+            "name": m["fullName"],
+            "shortName": m["name"],
+            "latitude": m["latitude"],
+            "longitude": m["longitude"],
+            "elevation_m": m["elevation_m"],
+            "region": m["region"],
+            "established": m["commissionedYear"],
+            "personnelWinter": m.get("personnelWinter"),
+            "dataSources": ["ERA5 reanalysis (Open-Meteo)", "NCPOR AWS live page (manual ingest)"],
+        })
+    return out
+
+
+@app.get("/api/config/stations")
+def get_station_config():
+    """The full station configuration (metadata with source/confidence notes,
+    buildings, dependency graph, default thresholds, remote-command catalogue)."""
+    return station_config.load()
 
 
 @app.get("/api/sensors/latest")
@@ -666,7 +666,7 @@ def get_ncpor_live(sid: str = Depends(station_param)):
     return {
         "status": "success",
         "stationId": sid,
-        "stationName": STATION_INFO[sid]["name"],
+        "stationName": station_config.meta_value(sid, "fullName"),
         "weather": {
             "temperature_c": weather["temp"],
             "wind_speed_ms": weather["wind"],
@@ -677,8 +677,8 @@ def get_ncpor_live(sid: str = Depends(station_param)):
             # The actual dataset of the latest DB row (was always labelled "NCPOR Live AWS")
             "dataset": weather.get("dataset"),
             "provenance": _weather_provenance(weather),
-            "latitude": STATION_INFO[sid]["latitude"],
-            "longitude": STATION_INFO[sid]["longitude"]
+            "latitude": station_config.meta_value(sid, "latitude"),
+            "longitude": station_config.meta_value(sid, "longitude")
         }
     }
 

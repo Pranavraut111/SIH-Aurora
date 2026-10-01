@@ -10,9 +10,7 @@ Data provenance:
   - Coverage: 1940–present
   - Type: REANALYSIS (not direct station sensor measurements)
 
-Station coordinates:
-  - Maitri:  70°45'S, 11°44'E  (Schirmacher Oasis)
-  - Bharati: 69°24'S, 76°11'E  (Larsemann Hills)
+Station coordinates: from station_config.json (single source of truth).
 """
 
 import os
@@ -24,6 +22,7 @@ import requests
 from datetime import datetime, timedelta
 
 from units import cache_wind_unit, wind_factor_to_kmh
+import station_config
 
 log = logging.getLogger("aurora.weather")
 
@@ -33,11 +32,8 @@ def sim_hours_per_real_minute(speed_factor: float) -> float:
     i.e. speed_factor / 60 simulated hours per real minute (120x -> 2.0 h)."""
     return speed_factor / 60.0
 
-# ── Station Coordinates (documented, real) ────────────────────
-STATION_COORDS = {
-    "maitri":  {"lat": -70.77, "lon": 11.73,  "alt_m": 117, "name": "Maitri",  "region": "Schirmacher Oasis"},
-    "bharati": {"lat": -69.41, "lon": 76.19,  "alt_m": 50,  "name": "Bharati", "region": "Larsemann Hills"},
-}
+# ── Station coordinates — from station_config.json (single source of truth) ──
+STATION_COORDS = {sid: station_config.coords(sid) for sid in station_config.station_ids()}
 
 from config import WEATHER_CACHE_DIR as CACHE_DIR
 

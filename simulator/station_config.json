@@ -1,0 +1,1260 @@
+{
+  "schemaVersion": 1,
+  "description": "Single source of truth for station metadata, building list, dependency graph and default alert thresholds (PROJECT_CONTEXT.md §10.3/§14). Served at GET /api/config/stations. Admin overrides (SQLite alert_threshold_overrides) are applied on top of 'sensors' thresholds. Physics parameters are NOT here — they stay in physics_model.py.",
+  "stations": {
+    "maitri": {
+      "metadata": {
+        "id": "maitri",
+        "name": {
+          "value": "Maitri",
+          "source": "NCPOR station name",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "fullName": {
+          "value": "Maitri Research Station",
+          "source": "NCPOR station name",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "region": {
+          "value": "Schirmacher Oasis, Dronning Maud Land",
+          "source": "public station descriptions",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "latitude": {
+          "value": -70.77,
+          "source": "previous ncpor_ingestor / weather_data / forecast_engine (all agreed); 70°46′S",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "longitude": {
+          "value": 11.73,
+          "source": "previous ncpor_ingestor / weather_data / forecast_engine (all agreed); 11°44′E",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "elevation_m": {
+          "value": 117,
+          "source": "ncpor_ingestor, unified_backend and weather_data said 117 m; stationData.js said 123 m",
+          "confidence": "medium",
+          "needsNcporConfirmation": true,
+          "note": "chose the majority value; confirm with NCPOR"
+        },
+        "personnelWinter": {
+          "value": 25,
+          "source": "physics_model comment 'documented (winter)'; UI and backend agreed",
+          "confidence": "medium",
+          "needsNcporConfirmation": true
+        },
+        "commissionedYear": {
+          "value": 1989,
+          "source": "all sources agreed",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "winterMeanTemp_C": {
+          "value": null,
+          "source": "not established",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "the old UI value (−33 °C) contradicts the ERA5 windows in the DB (monthly means −13 to −19 °C); needs an NCPOR climatology value"
+        },
+        "ncporLiveUrl": "https://data.ncpor.res.in/maitri/live",
+        "ncporSources": [
+          "surface_data",
+          "imd_maitri",
+          "iig_maitri",
+          "dozer_sase",
+          "sankalp_sase"
+        ]
+      },
+      "buildings": [
+        {
+          "id": "generator",
+          "name": "Generator Shed",
+          "type": "power",
+          "module": "energy",
+          "abbr": "GEN",
+          "description": "Primary & backup diesel generators"
+        },
+        {
+          "id": "heating",
+          "name": "Heating Zone A",
+          "type": "heating",
+          "module": "infrastructure",
+          "abbr": "HT-A",
+          "description": "Central heating distribution for living quarters"
+        },
+        {
+          "id": "heatingB",
+          "name": "Heating Zone B",
+          "type": "heating",
+          "module": "infrastructure",
+          "abbr": "HT-B",
+          "description": "Secondary heating for labs and workshops"
+        },
+        {
+          "id": "waterTank",
+          "name": "Water Treatment",
+          "type": "water",
+          "module": "infrastructure",
+          "abbr": "H2O",
+          "description": "Snow-melt water purification and storage"
+        },
+        {
+          "id": "commsMast",
+          "name": "Comms Tower",
+          "type": "communications",
+          "module": "infrastructure",
+          "abbr": "COM",
+          "description": "Satellite uplink & local radio communications"
+        },
+        {
+          "id": "livingQuarters",
+          "name": "Living Quarters",
+          "type": "habitation",
+          "module": "infrastructure",
+          "abbr": "LQ",
+          "description": "Crew dormitories, galley, recreation"
+        },
+        {
+          "id": "storage",
+          "name": "Logistics Store",
+          "type": "storage",
+          "module": "logistics",
+          "abbr": "STR",
+          "description": "Food, fuel drums, spare parts inventory"
+        },
+        {
+          "id": "lab",
+          "name": "Research Lab",
+          "type": "research",
+          "module": "environmental",
+          "abbr": "LAB",
+          "description": "Environmental monitoring & meteorological instruments"
+        }
+      ],
+      "dependencyGraph": {
+        "edges": [
+          {
+            "source": "storage",
+            "target": "generator",
+            "relation": "fuels"
+          },
+          {
+            "source": "generator",
+            "target": "heating",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "heatingB",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "waterTank",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "commsMast",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "livingQuarters",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "lab",
+            "relation": "powers"
+          },
+          {
+            "source": "heating",
+            "target": "livingQuarters",
+            "relation": "heats"
+          },
+          {
+            "source": "heatingB",
+            "target": "lab",
+            "relation": "heats"
+          },
+          {
+            "source": "waterTank",
+            "target": "livingQuarters",
+            "relation": "supplies"
+          },
+          {
+            "source": "waterTank",
+            "target": "lab",
+            "relation": "supplies"
+          }
+        ]
+      },
+      "sensors": {
+        "gen_power": {
+          "building": "generator",
+          "name": "Generator power",
+          "unit": "kW",
+          "thresholdRange": [
+            0,
+            400
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 45,
+            "critical": 30
+          }
+        },
+        "gen_fuel_rate": {
+          "building": "generator",
+          "name": "Generator fuel rate",
+          "unit": "L/hr",
+          "thresholdRange": [
+            0,
+            120
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "high": {
+            "warning": 40,
+            "critical": 50
+          }
+        },
+        "gen_rpm": {
+          "building": "generator",
+          "name": "Engine RPM",
+          "unit": "rpm",
+          "thresholdRange": [
+            0,
+            2500
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 1200,
+            "critical": 900
+          },
+          "high": {
+            "warning": 1650,
+            "critical": 1800
+          }
+        },
+        "gen_temp": {
+          "building": "generator",
+          "name": "Coolant temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            40,
+            140
+          ],
+          "basis": "previous unified-backend rule (88/95 °C); typical diesel coolant alarm band",
+          "high": {
+            "warning": 88,
+            "critical": 95
+          }
+        },
+        "heat_a_flow": {
+          "building": "heating",
+          "name": "Zone A flow",
+          "unit": "L/min",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "high": {
+            "warning": 45,
+            "critical": 55
+          }
+        },
+        "heat_a_temp": {
+          "building": "heating",
+          "name": "Zone A supply temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 55,
+            "critical": 45
+          }
+        },
+        "heat_a_pressure": {
+          "building": "heating",
+          "name": "Zone A pressure",
+          "unit": "bar",
+          "thresholdRange": [
+            0,
+            10
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 2.0,
+            "critical": 1.5
+          },
+          "high": {
+            "warning": 4.5,
+            "critical": 5.5
+          }
+        },
+        "heat_b_flow": {
+          "building": "heatingB",
+          "name": "Zone B flow",
+          "unit": "L/min",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "high": {
+            "warning": 40,
+            "critical": 50
+          }
+        },
+        "heat_b_temp": {
+          "building": "heatingB",
+          "name": "Zone B supply temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 50,
+            "critical": 40
+          }
+        },
+        "water_level": {
+          "building": "waterTank",
+          "name": "Tank level",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 25,
+            "critical": 10
+          }
+        },
+        "water_temp": {
+          "building": "waterTank",
+          "name": "Water temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            40
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 4,
+            "critical": 2
+          },
+          "high": {
+            "warning": 25,
+            "critical": 30
+          }
+        },
+        "water_ph": {
+          "building": "waterTank",
+          "name": "Water pH",
+          "unit": "pH",
+          "thresholdRange": [
+            0,
+            14
+          ],
+          "basis": "drinking-water pH guidance band (6.5–8.5)",
+          "low": {
+            "warning": 6.5,
+            "critical": 6.0
+          },
+          "high": {
+            "warning": 8.5,
+            "critical": 9.0
+          }
+        },
+        "comms_signal": {
+          "building": "commsMast",
+          "name": "Satellite signal",
+          "unit": "dBm",
+          "thresholdRange": [
+            -130,
+            0
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": -75,
+            "critical": -90
+          }
+        },
+        "comms_bandwidth": {
+          "building": "commsMast",
+          "name": "Link bandwidth",
+          "unit": "Mbps",
+          "thresholdRange": [
+            0,
+            20
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 1.0,
+            "critical": 0.5
+          }
+        },
+        "comms_uptime": {
+          "building": "commsMast",
+          "name": "Link uptime",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 95,
+            "critical": 90
+          }
+        },
+        "lq_temp": {
+          "building": "livingQuarters",
+          "name": "Living quarters temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            40
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 16,
+            "critical": 12
+          },
+          "high": {
+            "warning": 27,
+            "critical": 30
+          }
+        },
+        "lq_humidity": {
+          "building": "livingQuarters",
+          "name": "Living quarters humidity",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 20,
+            "critical": 15
+          },
+          "high": {
+            "warning": 60,
+            "critical": 70
+          }
+        },
+        "lq_co2": {
+          "building": "livingQuarters",
+          "name": "Living quarters CO2",
+          "unit": "ppm",
+          "thresholdRange": [
+            400,
+            5000
+          ],
+          "basis": "indoor-air-quality guidance (~1000 ppm comfort limit)",
+          "high": {
+            "warning": 1000,
+            "critical": 1400
+          }
+        },
+        "store_fuel": {
+          "building": "storage",
+          "name": "Fuel stock (model-derived)",
+          "unit": "kL",
+          "thresholdRange": [
+            0,
+            300
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 40,
+            "critical": 15
+          }
+        },
+        "store_food": {
+          "building": "storage",
+          "name": "Food stock (model-derived)",
+          "unit": "days",
+          "thresholdRange": [
+            0,
+            400
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 30,
+            "critical": 14
+          }
+        },
+        "store_spares": {
+          "building": "storage",
+          "name": "Spare parts (model-derived)",
+          "unit": "items",
+          "thresholdRange": [
+            0,
+            1000
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 50,
+            "critical": 20
+          }
+        },
+        "env_temp": {
+          "building": "lab",
+          "name": "Outside temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            -90,
+            20
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": -45,
+            "critical": -55
+          },
+          "high": {
+            "warning": 5,
+            "critical": 10
+          }
+        },
+        "env_wind": {
+          "building": "lab",
+          "name": "Wind speed",
+          "unit": "km/h",
+          "thresholdRange": [
+            0,
+            300
+          ],
+          "basis": "previous unified-backend rule 18/25 m/s converted to km/h (65/90)",
+          "high": {
+            "warning": 65,
+            "critical": 90
+          }
+        },
+        "env_pressure": {
+          "building": "lab",
+          "name": "Barometric pressure",
+          "unit": "hPa",
+          "thresholdRange": [
+            850,
+            1100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 935,
+            "critical": 920
+          },
+          "high": {
+            "warning": 1040,
+            "critical": 1050
+          }
+        },
+        "env_humidity": {
+          "building": "lab",
+          "name": "Outside humidity",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "sensor-plausibility check only (very dry reading suggests a sensor fault)",
+          "low": {
+            "warning": 5,
+            "critical": 2
+          }
+        }
+      }
+    },
+    "bharati": {
+      "metadata": {
+        "id": "bharati",
+        "name": {
+          "value": "Bharati",
+          "source": "NCPOR station name",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "fullName": {
+          "value": "Bharati Research Station",
+          "source": "NCPOR station name",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "region": {
+          "value": "Larsemann Hills, Prydz Bay",
+          "source": "public station descriptions",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "latitude": {
+          "value": -69.41,
+          "source": "previous ncpor_ingestor / weather_data / forecast_engine (all agreed); 69°24.6′S",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "longitude": {
+          "value": 76.19,
+          "source": "previous code (all agreed); 76°11.4′E (stationData.js text said 76°12′E — rounding)",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "elevation_m": {
+          "value": 35,
+          "source": "ncpor_ingestor, unified_backend and stationData.js said 35 m; weather_data said 50 m",
+          "confidence": "medium",
+          "needsNcporConfirmation": true,
+          "note": "chose the majority value; confirm with NCPOR"
+        },
+        "personnelWinter": {
+          "value": 47,
+          "source": "previous UI/backend value",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "the physics model uses 31 occupants (23 living quarters + 8 lab) as an ESTIMATED thermal parameter; that physics parameter is intentionally unchanged. Confirm winter crew size with NCPOR"
+        },
+        "commissionedYear": {
+          "value": 2012,
+          "source": "all sources agreed",
+          "confidence": "high",
+          "needsNcporConfirmation": false
+        },
+        "winterMeanTemp_C": {
+          "value": null,
+          "source": "not established",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "the old UI value (−25 °C) is unverified; ERA5 windows in the DB give monthly means −17 to −22 °C"
+        },
+        "ncporLiveUrl": "https://data.ncpor.res.in/bharati/live",
+        "ncporSources": [
+          "imd_bharati",
+          "iig_bharati"
+        ]
+      },
+      "buildings": [
+        {
+          "id": "generator",
+          "name": "Generator Shed",
+          "type": "power",
+          "module": "energy",
+          "abbr": "GEN",
+          "description": "Primary & backup diesel generators"
+        },
+        {
+          "id": "heating",
+          "name": "Heating Zone A",
+          "type": "heating",
+          "module": "infrastructure",
+          "abbr": "HT-A",
+          "description": "Central heating distribution for living quarters"
+        },
+        {
+          "id": "heatingB",
+          "name": "Heating Zone B",
+          "type": "heating",
+          "module": "infrastructure",
+          "abbr": "HT-B",
+          "description": "Secondary heating for labs and workshops"
+        },
+        {
+          "id": "waterTank",
+          "name": "Water Treatment",
+          "type": "water",
+          "module": "infrastructure",
+          "abbr": "H2O",
+          "description": "Snow-melt water purification and storage"
+        },
+        {
+          "id": "commsMast",
+          "name": "Comms Tower",
+          "type": "communications",
+          "module": "infrastructure",
+          "abbr": "COM",
+          "description": "Satellite uplink & local radio communications"
+        },
+        {
+          "id": "livingQuarters",
+          "name": "Living Quarters",
+          "type": "habitation",
+          "module": "infrastructure",
+          "abbr": "LQ",
+          "description": "Crew dormitories, galley, recreation"
+        },
+        {
+          "id": "storage",
+          "name": "Logistics Store",
+          "type": "storage",
+          "module": "logistics",
+          "abbr": "STR",
+          "description": "Food, fuel drums, spare parts inventory"
+        },
+        {
+          "id": "lab",
+          "name": "Research Lab",
+          "type": "research",
+          "module": "environmental",
+          "abbr": "LAB",
+          "description": "Environmental monitoring & meteorological instruments"
+        }
+      ],
+      "dependencyGraph": {
+        "edges": [
+          {
+            "source": "storage",
+            "target": "generator",
+            "relation": "fuels"
+          },
+          {
+            "source": "generator",
+            "target": "heating",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "heatingB",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "waterTank",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "commsMast",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "livingQuarters",
+            "relation": "powers"
+          },
+          {
+            "source": "generator",
+            "target": "lab",
+            "relation": "powers"
+          },
+          {
+            "source": "heating",
+            "target": "livingQuarters",
+            "relation": "heats"
+          },
+          {
+            "source": "heatingB",
+            "target": "lab",
+            "relation": "heats"
+          },
+          {
+            "source": "waterTank",
+            "target": "livingQuarters",
+            "relation": "supplies"
+          },
+          {
+            "source": "waterTank",
+            "target": "lab",
+            "relation": "supplies"
+          }
+        ]
+      },
+      "sensors": {
+        "gen_power": {
+          "building": "generator",
+          "name": "Generator power",
+          "unit": "kW",
+          "thresholdRange": [
+            0,
+            400
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 45,
+            "critical": 30
+          }
+        },
+        "gen_fuel_rate": {
+          "building": "generator",
+          "name": "Generator fuel rate",
+          "unit": "L/hr",
+          "thresholdRange": [
+            0,
+            120
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "high": {
+            "warning": 40,
+            "critical": 50
+          }
+        },
+        "gen_rpm": {
+          "building": "generator",
+          "name": "Engine RPM",
+          "unit": "rpm",
+          "thresholdRange": [
+            0,
+            2500
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 1200,
+            "critical": 900
+          },
+          "high": {
+            "warning": 1650,
+            "critical": 1800
+          }
+        },
+        "gen_temp": {
+          "building": "generator",
+          "name": "Coolant temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            40,
+            140
+          ],
+          "basis": "previous unified-backend rule (88/95 °C); typical diesel coolant alarm band",
+          "high": {
+            "warning": 88,
+            "critical": 95
+          }
+        },
+        "heat_a_flow": {
+          "building": "heating",
+          "name": "Zone A flow",
+          "unit": "L/min",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "high": {
+            "warning": 45,
+            "critical": 55
+          }
+        },
+        "heat_a_temp": {
+          "building": "heating",
+          "name": "Zone A supply temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 55,
+            "critical": 45
+          }
+        },
+        "heat_a_pressure": {
+          "building": "heating",
+          "name": "Zone A pressure",
+          "unit": "bar",
+          "thresholdRange": [
+            0,
+            10
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 2.0,
+            "critical": 1.5
+          },
+          "high": {
+            "warning": 4.5,
+            "critical": 5.5
+          }
+        },
+        "heat_b_flow": {
+          "building": "heatingB",
+          "name": "Zone B flow",
+          "unit": "L/min",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "high": {
+            "warning": 40,
+            "critical": 50
+          }
+        },
+        "heat_b_temp": {
+          "building": "heatingB",
+          "name": "Zone B supply temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 50,
+            "critical": 40
+          }
+        },
+        "water_level": {
+          "building": "waterTank",
+          "name": "Tank level",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 25,
+            "critical": 10
+          }
+        },
+        "water_temp": {
+          "building": "waterTank",
+          "name": "Water temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            40
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 4,
+            "critical": 2
+          },
+          "high": {
+            "warning": 25,
+            "critical": 30
+          }
+        },
+        "water_ph": {
+          "building": "waterTank",
+          "name": "Water pH",
+          "unit": "pH",
+          "thresholdRange": [
+            0,
+            14
+          ],
+          "basis": "drinking-water pH guidance band (6.5–8.5)",
+          "low": {
+            "warning": 6.5,
+            "critical": 6.0
+          },
+          "high": {
+            "warning": 8.5,
+            "critical": 9.0
+          }
+        },
+        "comms_signal": {
+          "building": "commsMast",
+          "name": "Satellite signal",
+          "unit": "dBm",
+          "thresholdRange": [
+            -130,
+            0
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": -75,
+            "critical": -90
+          }
+        },
+        "comms_bandwidth": {
+          "building": "commsMast",
+          "name": "Link bandwidth",
+          "unit": "Mbps",
+          "thresholdRange": [
+            0,
+            20
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 1.0,
+            "critical": 0.5
+          }
+        },
+        "comms_uptime": {
+          "building": "commsMast",
+          "name": "Link uptime",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 95,
+            "critical": 90
+          }
+        },
+        "lq_temp": {
+          "building": "livingQuarters",
+          "name": "Living quarters temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            0,
+            40
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 16,
+            "critical": 12
+          },
+          "high": {
+            "warning": 27,
+            "critical": 30
+          }
+        },
+        "lq_humidity": {
+          "building": "livingQuarters",
+          "name": "Living quarters humidity",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 20,
+            "critical": 15
+          },
+          "high": {
+            "warning": 60,
+            "critical": 70
+          }
+        },
+        "lq_co2": {
+          "building": "livingQuarters",
+          "name": "Living quarters CO2",
+          "unit": "ppm",
+          "thresholdRange": [
+            400,
+            5000
+          ],
+          "basis": "indoor-air-quality guidance (~1000 ppm comfort limit)",
+          "high": {
+            "warning": 1000,
+            "critical": 1400
+          }
+        },
+        "store_fuel": {
+          "building": "storage",
+          "name": "Fuel stock (model-derived)",
+          "unit": "kL",
+          "thresholdRange": [
+            0,
+            300
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 40,
+            "critical": 15
+          }
+        },
+        "store_food": {
+          "building": "storage",
+          "name": "Food stock (model-derived)",
+          "unit": "days",
+          "thresholdRange": [
+            0,
+            400
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 30,
+            "critical": 14
+          }
+        },
+        "store_spares": {
+          "building": "storage",
+          "name": "Spare parts (model-derived)",
+          "unit": "items",
+          "thresholdRange": [
+            0,
+            1000
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 50,
+            "critical": 20
+          }
+        },
+        "env_temp": {
+          "building": "lab",
+          "name": "Outside temperature",
+          "unit": "°C",
+          "thresholdRange": [
+            -90,
+            20
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": -45,
+            "critical": -55
+          },
+          "high": {
+            "warning": 5,
+            "critical": 10
+          }
+        },
+        "env_wind": {
+          "building": "lab",
+          "name": "Wind speed",
+          "unit": "km/h",
+          "thresholdRange": [
+            0,
+            300
+          ],
+          "basis": "previous unified-backend rule 18/25 m/s converted to km/h (65/90)",
+          "high": {
+            "warning": 65,
+            "critical": 90
+          }
+        },
+        "env_pressure": {
+          "building": "lab",
+          "name": "Barometric pressure",
+          "unit": "hPa",
+          "thresholdRange": [
+            850,
+            1100
+          ],
+          "basis": "engineering estimate; set above/below the physics model's normal range (ERA5 replay 2024-07..2026-09) so normal operation does not alarm",
+          "low": {
+            "warning": 935,
+            "critical": 920
+          },
+          "high": {
+            "warning": 1040,
+            "critical": 1050
+          }
+        },
+        "env_humidity": {
+          "building": "lab",
+          "name": "Outside humidity",
+          "unit": "%",
+          "thresholdRange": [
+            0,
+            100
+          ],
+          "basis": "sensor-plausibility check only (very dry reading suggests a sensor fault)",
+          "low": {
+            "warning": 5,
+            "critical": 2
+          }
+        }
+      }
+    }
+  },
+  "decisionCausalGraph": {
+    "_note": "Abstract causal graph used by decision_engine.py (not the building graph).",
+    "weather": {
+      "description": "Environmental conditions",
+      "affects": [
+        "heating",
+        "building_thermal"
+      ],
+      "provenance": "reanalysis/forecast"
+    },
+    "heating": {
+      "description": "Station heating system",
+      "depends_on": [
+        "weather"
+      ],
+      "affects": [
+        "power_demand",
+        "fuel"
+      ],
+      "provenance": "model-derived"
+    },
+    "building_thermal": {
+      "description": "Building insulation and thermal state",
+      "depends_on": [
+        "weather",
+        "heating"
+      ],
+      "affects": [
+        "indoor_comfort",
+        "heating"
+      ],
+      "provenance": "model-derived"
+    },
+    "power_demand": {
+      "description": "Total electrical demand",
+      "depends_on": [
+        "heating",
+        "base_load"
+      ],
+      "affects": [
+        "generator"
+      ],
+      "provenance": "model-derived"
+    },
+    "generator": {
+      "description": "Diesel generator system",
+      "depends_on": [
+        "power_demand"
+      ],
+      "affects": [
+        "fuel",
+        "electrical_supply"
+      ],
+      "subsystems": [
+        "cooling",
+        "bearings",
+        "fuel_injection"
+      ],
+      "provenance": "model-derived"
+    },
+    "fuel": {
+      "description": "Fuel storage and consumption",
+      "depends_on": [
+        "generator"
+      ],
+      "affects": [
+        "autonomy"
+      ],
+      "provenance": "model-derived"
+    },
+    "cooling": {
+      "description": "Generator cooling system",
+      "depends_on": [
+        "generator"
+      ],
+      "affects": [
+        "generator"
+      ],
+      "provenance": "model-derived"
+    }
+  },
+  "remoteCommands": {
+    "_note": "Catalogue of SIMULATED dispatch commands accepted by POST /api/remote/dispatch.",
+    "Power Grid": [
+      "ENGAGE_BACKUP_GENSET_RUN",
+      "SET_GENSET_STANDBY_HOT"
+    ],
+    "Thermal Grid": [
+      "ENABLE_ZONE_B_HEATING",
+      "DISABLE_ZONE_B_HEATING"
+    ],
+    "Water Treatment": [
+      "ENABLE_SNOWMELT_TRACER",
+      "DISABLE_SNOWMELT_TRACER"
+    ],
+    "Comms Tower": [
+      "SET_RADOME_TRACKING_AUTO",
+      "STOW_DISH_BLIZZARD_MODE"
+    ]
+  }
+}

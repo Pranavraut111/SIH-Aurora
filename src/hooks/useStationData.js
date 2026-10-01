@@ -11,7 +11,6 @@ import {
   getSnapshot,
   getActiveAlerts,
 } from '../data/stationData';
-import { analyzeStation } from '../services/decisionEngine';
 import { WS_URL } from '../config';
 import { apiPost } from '../services/api';
 
@@ -32,7 +31,6 @@ export function useStationData(activeStation = 'maitri') {
     alerts: {},
     history: {},
     activeAlerts: [],
-    incidents: [],
     eventTimeline: [],
     timestamp: Date.now(),
     connected: true,
@@ -121,18 +119,12 @@ export function useStationData(activeStation = 'maitri') {
           }
 
           const history = updateHistory(state.sensors || {});
-          const incidents = analyzeStation(
-            activeStationRef.current,
-            state.sensors || {},
-            state.alerts || {},
-          );
 
           setStationData({
             sensors: state.sensors || {},
             alerts: state.alerts || {},
             history,
             activeAlerts: state.activeAlerts || [],
-            incidents,
             eventTimeline: state.eventTimeline || [],
             timestamp: state.timestamp || Date.now(),
             connected: true,
@@ -221,14 +213,12 @@ export function useStationData(activeStation = 'maitri') {
       const snapshot = getSnapshot(sid);
       const history = updateHistory(snapshot.sensors);
       const alerts = getActiveAlerts(snapshot);
-      const incidents = analyzeStation(sid, snapshot.sensors, snapshot.alerts);
 
       setStationData({
         sensors: snapshot.sensors,
         alerts: snapshot.alerts,
         history,
         activeAlerts: alerts,
-        incidents,
         eventTimeline: snapshot.eventTimeline || [],
         timestamp: snapshot.timestamp,
         connected: true,

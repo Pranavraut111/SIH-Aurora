@@ -7,6 +7,7 @@ import {
 } from 'react-icons/lu';
 import './ReportPanel.css';
 import { apiGet } from '../services/api';
+import { STATION_IDS, stationMeta, stationMetaDetailed, formatCoords } from '../data/stationConfig';
 
 // Each source fails independently; a failed source is reported in the
 // document as unavailable — never replaced with made-up numbers.
@@ -55,9 +56,11 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
 
       setReportData({
         stationId: selectedStation,
-        stationName: selectedStation === 'maitri' ? 'Maitri Antarctic Research Station' : 'Bharati Antarctic Research Station',
-        location: selectedStation === 'maitri' ? '70°46′S, 11°44′E (Schirmacher Oasis, Dronning Maud Land)' : '69°24′S, 76°12′E (Larsemann Hills, Prydz Bay)',
-        elevation: selectedStation === 'maitri' ? '117m MSL' : '35m MSL',
+        stationName: stationMeta(selectedStation).fullName,
+        location: `${formatCoords(selectedStation)} (${stationMeta(selectedStation).region})`,
+        elevation: `${stationMeta(selectedStation).elevation_m} m MSL (${stationMetaDetailed(selectedStation).elevation_m?.confidence} confidence)`,
+        personnel: stationMeta(selectedStation).personnelWinter,
+        personnelConfidence: stationMetaDetailed(selectedStation).personnelWinter?.confidence,
         weather: weatherRes.data?.weather || null,
         risk: riskRes.data || null,
         logistics: logisticsRes.data?.items || null,
@@ -167,8 +170,9 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
               onChange={(e) => setSelectedStation(e.target.value)}
               className="report-select"
             >
-              <option value="maitri">Maitri Station (Schirmacher Oasis)</option>
-              <option value="bharati">Bharati Station (Larsemann Hills)</option>
+              {STATION_IDS.map((sid) => (
+                <option key={sid} value={sid}>{stationMeta(sid).name} Station ({stationMeta(sid).region})</option>
+              ))}
             </select>
           </div>
 
@@ -250,7 +254,7 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
                 </div>
                 <div className="ov-item">
                   <span className="ov-lbl">Wintering Personnel:</span>
-                  <span className="ov-val">{selectedStation === 'maitri' ? '25' : '47'} (HARDCODED-DEMO figure)</span>
+                  <span className="ov-val">{reportData.personnel ?? '—'} ({reportData.personnelConfidence} confidence; station_config.json)</span>
                 </div>
                 <div className="ov-item">
                   <span className="ov-lbl">Primary Telemetry Feed:</span>

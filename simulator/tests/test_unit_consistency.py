@@ -21,10 +21,16 @@ def test_physics_model_units():
 def test_simulator_profiles_units():
     """Parse simulator.py (importing it would start both stations)."""
     tree = ast.parse((SIM_DIR / "simulator.py").read_text())
-    profiles = next(
-        ast.literal_eval(node.value) for node in ast.walk(tree)
+    node = next(
+        node.value for node in ast.walk(tree)
         if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "STATION_PROFILES" for t in node.targets)
     )
+    # "name" is read from station_config.json at import; only the sensor dicts are literals.
+    profiles = {
+        ast.literal_eval(k): {ast.literal_eval(kk): ast.literal_eval(vv)
+                              for kk, vv in zip(v.keys, v.values) if ast.literal_eval(kk) == "sensors"}
+        for k, v in zip(node.keys, node.values)
+    }
     for station, prof in profiles.items():
         sensors = prof["sensors"]
         assert {k: sensors["storage"][k]["unit"] for k in STORE_UNITS} == STORE_UNITS, station
@@ -58,7 +64,13 @@ def test_backend_wind_ms_to_kmh_exactly_once(temp_db):
 
 
 def test_ui_labels_match_convention():
+    """The UI takes sensor names/units from station_config.json (single source)."""
+    import station_config as sc
     src = (SIM_DIR.parent / "src" / "data" / "stationData.js").read_text()
-    assert "id: 'comms_bandwidth', name: 'Bandwidth', unit: 'Mbps'" in src
-    for key, unit in STORE_UNITS.items():
-        assert f"id: '{key}'" in src and f"unit: '{unit}'" in src
+    assert "sensorCatalog(stationId)" in src and "unit: c.unit" in src
+    for sid in sc.station_ids():
+        sensors = sc.sensors(sid)
+        assert sensors["comms_bandwidth"]["unit"] == "Mbps"
+        assert sensors["env_wind"]["unit"] == "km/h"
+        for key, unit in STORE_UNITS.items():
+            assert sensors[key]["unit"] == unit

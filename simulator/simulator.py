@@ -25,6 +25,7 @@ from flask_cors import CORS
 # Import new Phase 1/2 modules
 from weather_data import WeatherDataLayer
 from physics_model import StationPhysicsModel
+import station_config
 import config as app_config  # aliased: 'config' is a loop variable in this module
 import logging
 from weather_data import sim_hours_per_real_minute
@@ -86,7 +87,7 @@ DEFAULT_SPEED = app_config.AURORA_SPEED  # 120x = 2 simulated hours per real min
 
 STATION_PROFILES = {
     "maitri": {
-        "name": "Maitri",
+        "name": station_config.meta_value("maitri", "name"),
         "sensors": {
             "generator": {
                 "gen_power":     {"nominal": 160, "step": 2.0,   "min": 0,    "max": 200,  "unit": "kW"},
@@ -132,7 +133,7 @@ STATION_PROFILES = {
         },
     },
     "bharati": {
-        "name": "Bharati",
+        "name": station_config.meta_value("bharati", "name"),
         "sensors": {
             "generator": {
                 "gen_power":     {"nominal": 172, "step": 2.0,   "min": 0,    "max": 220,  "unit": "kW"},

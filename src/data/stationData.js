@@ -7,119 +7,50 @@
    - Event timeline logging
    ═══════════════════════════════════════════════════════════════ */
 
-// ── Station metadata ────────────────────────────────────────
-export const STATIONS = {
-  maitri: {
-    id: 'maitri',
-    name: 'Maitri',
-    fullName: 'Maitri Research Station',
-    location: '70°46\u2032S 11°44\u2032E',
-    region: 'Schirmacher Oasis, Dronning Maud Land',
-    established: 1989,
-    personnel: 25,
-    winterTemp: '-33°C avg',
-    elevation: '123m',
-  },
-  bharati: {
-    id: 'bharati',
-    name: 'Bharati',
-    fullName: 'Bharati Research Station',
-    location: '69°24\u2032S 76°12\u2032E',
-    region: 'Larsemann Hills, Prydz Bay',
-    established: 2012,
-    personnel: 47,
-    winterTemp: '-25°C avg',
-    elevation: '35m',
-  },
+import {
+  STATION_IDS, stationMeta, formatCoords, buildingList, dependencyGraph, sensorCatalog,
+} from './stationConfig';
+
+// ── Station metadata — from simulator/station_config.json ───
+export const STATIONS = Object.fromEntries(STATION_IDS.map((id) => {
+  const m = stationMeta(id);
+  return [id, {
+    id,
+    name: m.name,
+    fullName: m.fullName,
+    coords: formatCoords(id),
+    region: m.region,
+    established: m.commissionedYear,
+    personnel: m.personnelWinter,
+    elevation: m.elevation_m != null ? `${m.elevation_m} m` : '—',
+    winterTemp: m.winterMeanTemp_C != null ? `${m.winterMeanTemp_C} °C avg` : 'not established',
+  }];
+}));
+
+// ── 3D / 2D layout (rendering only; ids, names and descriptions come from the config) ──
+const BUILDING_LAYOUT = {
+  generator:      { position: [-8, 0, -3], size: [4, 3, 5], icon: 'fuel' },
+  heating:        { position: [0, 0, -6], size: [6, 3.5, 5], icon: 'flame' },
+  heatingB:       { position: [8, 0, -4], size: [4, 3, 4], icon: 'flame' },
+  waterTank:      { position: [-6, 0, 6], size: [3, 4, 3], icon: 'droplets' },
+  commsMast:      { position: [12, 0, 0], size: [2, 8, 2], icon: 'radio-tower' },
+  livingQuarters: { position: [0, 0, 3], size: [10, 4, 6], icon: 'house' },
+  storage:        { position: [-10, 0, 3], size: [5, 3, 4], icon: 'package' },
+  lab:            { position: [8, 0, 5], size: [5, 3.5, 5], icon: 'microscope' },
 };
 
-// ── Station buildings definition ─────────────────────────────
-export const BUILDINGS = {
-  generator: {
-    id: 'generator',
-    name: 'Generator Shed',
-    module: 'energy',
-    position: [-8, 0, -3],
-    size: [4, 3, 5],
-    description: 'Primary & backup diesel generators',
-    icon: 'fuel',
-  },
-  heating: {
-    id: 'heating',
-    name: 'Heating Zone A',
-    module: 'infrastructure',
-    position: [0, 0, -6],
-    size: [6, 3.5, 5],
-    description: 'Central heating distribution for living quarters',
-    icon: 'flame',
-  },
-  heatingB: {
-    id: 'heatingB',
-    name: 'Heating Zone B',
-    module: 'infrastructure',
-    position: [8, 0, -4],
-    size: [4, 3, 4],
-    description: 'Secondary heating for labs and workshops',
-    icon: 'flame',
-  },
-  waterTank: {
-    id: 'waterTank',
-    name: 'Water Treatment',
-    module: 'infrastructure',
-    position: [-6, 0, 6],
-    size: [3, 4, 3],
-    description: 'Snow-melt water purification and storage',
-    icon: 'droplets',
-  },
-  commsMast: {
-    id: 'commsMast',
-    name: 'Comms Tower',
-    module: 'infrastructure',
-    position: [12, 0, 0],
-    size: [2, 8, 2],
-    description: 'Satellite uplink & local radio communications',
-    icon: 'radio-tower',
-  },
-  livingQuarters: {
-    id: 'livingQuarters',
-    name: 'Living Quarters',
-    module: 'infrastructure',
-    position: [0, 0, 3],
-    size: [10, 4, 6],
-    description: 'Crew dormitories, galley, recreation',
-    icon: 'house',
-  },
-  storage: {
-    id: 'storage',
-    name: 'Logistics Store',
-    module: 'logistics',
-    position: [-10, 0, 3],
-    size: [5, 3, 4],
-    description: 'Food, fuel drums, spare parts inventory',
-    icon: 'package',
-  },
-  lab: {
-    id: 'lab',
-    name: 'Research Lab',
-    module: 'environmental',
-    position: [8, 0, 5],
-    size: [5, 3.5, 5],
-    description: 'Environmental monitoring & meteorological instruments',
-    icon: 'microscope',
-  },
-};
+// Both stations share the same building layout in the config.
+export const BUILDINGS = Object.fromEntries(buildingList(STATION_IDS[0]).map((b) => [b.id, {
+  id: b.id,
+  name: b.name,
+  module: b.module,
+  description: b.description,
+  abbr: b.abbr,
+  ...(BUILDING_LAYOUT[b.id] || { position: [0, 0, 0], size: [3, 3, 3], icon: 'box' }),
+}]));
 
-// ── Dependency graph ────────────────────────────────────────
-export const DEPENDENCY_GRAPH = {
-  generator:       { depends: [], feeds: ['heating', 'heatingB', 'waterTank', 'commsMast', 'livingQuarters', 'lab'] },
-  heating:         { depends: ['generator'], feeds: ['livingQuarters'] },
-  heatingB:        { depends: ['generator'], feeds: ['lab'] },
-  waterTank:       { depends: ['generator'], feeds: ['livingQuarters', 'lab'] },
-  commsMast:       { depends: ['generator'], feeds: [] },
-  livingQuarters:  { depends: ['heating', 'waterTank'], feeds: [] },
-  storage:         { depends: [], feeds: [] },
-  lab:             { depends: ['heatingB', 'waterTank'], feeds: [] },
-};
+// ── Dependency graph — from the config edge list ─────────────
+export const DEPENDENCY_GRAPH = dependencyGraph(STATION_IDS[0]);
 
 // ── Station-specific sensor baselines ───────────────────────
 // Bharati is newer, warmer, more personnel → different nominals
@@ -147,50 +78,32 @@ const STATION_PROFILES = {
 };
 
 // ── Sensor definitions per building ─────────────────────────
-function makeSensorDefs(profile) {
-  return {
-    generator: [
-      { id: 'gen_power', name: 'Power Output', unit: 'kW', min: 0, max: 200, nominal: profile.gen_power, step: 2, warningLow: 80, criticalLow: 40 },
-      { id: 'gen_fuel_rate', name: 'Fuel Rate', unit: 'L/hr', min: 0, max: 50, nominal: profile.gen_fuel_rate, step: 0.5 },
-      { id: 'gen_rpm', name: 'Engine RPM', unit: 'rpm', min: 0, max: 2000, nominal: profile.gen_rpm, step: 10, warningLow: 1200, criticalLow: 800 },
-      { id: 'gen_temp', name: 'Engine Temp', unit: '°C', min: 0, max: 120, nominal: profile.gen_temp, step: 0.5, warningHigh: 95, criticalHigh: 105 },
-    ],
-    heating: [
-      { id: 'heat_a_flow', name: 'Flow Rate', unit: 'L/min', min: 0, max: 50, nominal: profile.heat_a_flow, step: 0.3 },
-      { id: 'heat_a_temp', name: 'Output Temp', unit: '°C', min: 0, max: 90, nominal: profile.heat_a_temp, step: 0.4, warningLow: 55, criticalLow: 40 },
-      { id: 'heat_a_pressure', name: 'Pressure', unit: 'bar', min: 0, max: 6, nominal: profile.heat_a_pressure, step: 0.05 },
-    ],
-    heatingB: [
-      { id: 'heat_b_flow', name: 'Flow Rate', unit: 'L/min', min: 0, max: 40, nominal: profile.heat_b_flow, step: 0.3 },
-      { id: 'heat_b_temp', name: 'Output Temp', unit: '°C', min: 0, max: 90, nominal: profile.heat_b_temp, step: 0.4, warningLow: 50, criticalLow: 35 },
-    ],
-    waterTank: [
-      { id: 'water_level', name: 'Tank Level', unit: '%', min: 0, max: 100, nominal: profile.water_level, step: 0.2, warningLow: 25, criticalLow: 10 },
-      { id: 'water_temp', name: 'Water Temp', unit: '°C', min: 0, max: 30, nominal: profile.water_temp, step: 0.2 },
-      { id: 'water_ph', name: 'pH Level', unit: 'pH', min: 5, max: 9, nominal: profile.water_ph, step: 0.02 },
-    ],
-    commsMast: [
-      { id: 'comms_signal', name: 'Signal Strength', unit: 'dBm', min: -120, max: 0, nominal: profile.comms_signal, step: 1, warningLow: -80, criticalLow: -100 },
-      { id: 'comms_bandwidth', name: 'Bandwidth', unit: 'Mbps', min: 0, max: 10, nominal: profile.comms_bandwidth, step: 0.1 },
-      { id: 'comms_uptime', name: 'Uptime', unit: '%', min: 0, max: 100, nominal: profile.comms_uptime, step: 0.05 },
-    ],
-    livingQuarters: [
-      { id: 'lq_temp', name: 'Interior Temp', unit: '°C', min: 10, max: 30, nominal: profile.lq_temp, step: 0.2, warningLow: 16, criticalLow: 12 },
-      { id: 'lq_humidity', name: 'Humidity', unit: '%', min: 10, max: 80, nominal: profile.lq_humidity, step: 0.5 },
-      { id: 'lq_co2', name: 'CO\u2082 Level', unit: 'ppm', min: 300, max: 2000, nominal: profile.lq_co2, step: 5, warningHigh: 1200, criticalHigh: 1500 },
-    ],
-    storage: [
-      { id: 'store_fuel', name: 'Fuel Stock', unit: 'kL', min: 0, max: 200, nominal: profile.store_fuel, step: 0.1, warningLow: 40, criticalLow: 15 },
-      { id: 'store_food', name: 'Food Stores', unit: 'days', min: 0, max: 365, nominal: profile.store_food, step: 0.08, warningLow: 30, criticalLow: 14 },
-      { id: 'store_spares', name: 'Spare Parts', unit: 'items', min: 0, max: 500, nominal: profile.store_spares, step: 0.05, warningLow: 50, criticalLow: 20 },
-    ],
-    lab: [
-      { id: 'env_temp', name: 'Outside Temp', unit: '°C', min: -60, max: 5, nominal: profile.env_temp, step: 0.3 },
-      { id: 'env_wind', name: 'Wind Speed', unit: 'km/h', min: 0, max: 200, nominal: profile.env_wind, step: 1.5, warningHigh: 80, criticalHigh: 120 },
-      { id: 'env_pressure', name: 'Barometric', unit: 'hPa', min: 940, max: 1040, nominal: profile.env_pressure, step: 0.3 },
-      { id: 'env_humidity', name: 'Ext Humidity', unit: '%', min: 10, max: 100, nominal: profile.env_humidity, step: 0.5 },
-    ],
-  };
+// Browser-demo random-walk parameters (nominal/step/min/max) stay here; names,
+// units and alert thresholds come from station_config.json.
+const DEMO_RANGES = {
+  generator: [['gen_power', 0, 200, 2], ['gen_fuel_rate', 0, 50, 0.5], ['gen_rpm', 0, 2000, 10], ['gen_temp', 0, 120, 0.5]],
+  heating: [['heat_a_flow', 0, 50, 0.3], ['heat_a_temp', 0, 90, 0.4], ['heat_a_pressure', 0, 6, 0.05]],
+  heatingB: [['heat_b_flow', 0, 40, 0.3], ['heat_b_temp', 0, 90, 0.4]],
+  waterTank: [['water_level', 0, 100, 0.2], ['water_temp', 0, 30, 0.2], ['water_ph', 5, 9, 0.02]],
+  commsMast: [['comms_signal', -120, 0, 1], ['comms_bandwidth', 0, 10, 0.1], ['comms_uptime', 0, 100, 0.05]],
+  livingQuarters: [['lq_temp', 10, 30, 0.2], ['lq_humidity', 10, 80, 0.5], ['lq_co2', 300, 2000, 5]],
+  storage: [['store_fuel', 0, 200, 0.1], ['store_food', 0, 365, 0.08], ['store_spares', 0, 500, 0.05]],
+  lab: [['env_temp', -60, 5, 0.3], ['env_wind', 0, 200, 1.5], ['env_pressure', 940, 1040, 0.3], ['env_humidity', 10, 100, 0.5]],
+};
+
+function makeSensorDefs(profile, stationId) {
+  const catalog = sensorCatalog(stationId);
+  return Object.fromEntries(Object.entries(DEMO_RANGES).map(([buildingId, sensors]) => [
+    buildingId,
+    sensors.map(([id, min, max, step]) => {
+      const c = catalog[id] || {};
+      return {
+        id, name: c.name || id, unit: c.unit || '', min, max, step, nominal: profile[id],
+        warningLow: c.low?.warning, criticalLow: c.low?.critical,
+        warningHigh: c.high?.warning, criticalHigh: c.high?.critical,
+      };
+    }),
+  ]));
 }
 
 // ── Inventory data (logistics module) ───────────────────────
@@ -343,7 +256,7 @@ const HISTORY_LENGTH = 60;
 
 function createStationState(stationId) {
   const profile = STATION_PROFILES[stationId];
-  const sensorDefs = makeSensorDefs(profile);
+  const sensorDefs = makeSensorDefs(profile, stationId);
   const sensorValues = {};
   const sensorHistory = {};
   const alertStates = {};
@@ -446,10 +359,10 @@ function tickStation(state) {
       if (history.length > HISTORY_LENGTH) history.shift();
 
       // Check thresholds
-      if (sensor.criticalHigh && next >= sensor.criticalHigh) buildingAlertLevel = 'critical';
-      else if (sensor.criticalLow && next <= sensor.criticalLow) buildingAlertLevel = 'critical';
-      else if (sensor.warningHigh && next >= sensor.warningHigh && buildingAlertLevel !== 'critical') buildingAlertLevel = 'warning';
-      else if (sensor.warningLow && next <= sensor.warningLow && buildingAlertLevel !== 'critical') buildingAlertLevel = 'warning';
+      if (sensor.criticalHigh != null && next >= sensor.criticalHigh) buildingAlertLevel = 'critical';
+      else if (sensor.criticalLow != null && next <= sensor.criticalLow) buildingAlertLevel = 'critical';
+      else if (sensor.warningHigh != null && next >= sensor.warningHigh && buildingAlertLevel !== 'critical') buildingAlertLevel = 'warning';
+      else if (sensor.warningLow != null && next <= sensor.warningLow && buildingAlertLevel !== 'critical') buildingAlertLevel = 'warning';
     });
 
     // Log alert state changes
@@ -601,10 +514,10 @@ export function getActiveAlerts(snapshot) {
         for (const stId of Object.keys(stationStates)) {
           const def = stationStates[stId]?.sensorDefs[buildingId]?.find(s => s.id === sensorId);
           if (def) {
-            const isTriggered = (def.criticalHigh && val >= def.criticalHigh) ||
-                                (def.criticalLow && val <= def.criticalLow) ||
-                                (def.warningHigh && val >= def.warningHigh) ||
-                                (def.warningLow && val <= def.warningLow);
+            const isTriggered = (def.criticalHigh != null && val >= def.criticalHigh) ||
+                                (def.criticalLow != null && val <= def.criticalLow) ||
+                                (def.warningHigh != null && val >= def.warningHigh) ||
+                                (def.warningLow != null && val <= def.warningLow);
             if (isTriggered) {
               triggeredSensors.push({ name: def.name, value: val, unit: def.unit });
             }

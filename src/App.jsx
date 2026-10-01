@@ -135,6 +135,7 @@ export default function App() {
             onBuildingClick={handleBuildingClick}
             dependencyAlerts={dependencyAlerts}
             aiHealth={aiHealth}
+            activeStation={activeStation}
           />
         );
       case 'energy':

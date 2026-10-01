@@ -110,6 +110,7 @@ DATA_DIR = SIM_DIR / "data_store"
 DB_PATH = _resolve_path(_get("DB_PATH"), DATA_DIR / "antarctic_observations.db")
 WEATHER_CACHE_DIR = SIM_DIR / "weather_cache"
 BASELINE_DATA_PATH = SIM_DIR / "baseline_data.json"
+STATION_CONFIG_PATH = SIM_DIR / "station_config.json"   # single source of station facts
 FORECAST_ARENA_REPORT_PATH = SIM_DIR / "forecast_arena_results.md"
 
 

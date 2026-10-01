@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 
 from config import DB_PATH, WEATHER_CACHE_DIR
 from units import cache_wind_unit, wind_factor_to_ms
+import station_config
 
 log = logging.getLogger("aurora.ingest")
 
@@ -37,27 +38,19 @@ ERA5_SENSORS = {
 
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# Derived from station_config.json (single source of truth) — do not hardcode here.
 STATION_INFO = {
-    "maitri": {
-        "id": "maitri",
-        "name": "Maitri Research Station",
-        "latitude": -70.77,
-        "longitude": 11.73,
-        "elevation_m": 117,
-        "region": "Schirmacher Oasis, Dronning Maud Land",
-        "live_url": "https://data.ncpor.res.in/maitri/live",
-        "sources": ["surface_data", "imd_maitri", "iig_maitri", "dozer_sase", "sankalp_sase"]
-    },
-    "bharati": {
-        "id": "bharati",
-        "name": "Bharati Research Station",
-        "latitude": -69.41,
-        "longitude": 76.19,
-        "elevation_m": 35,
-        "region": "Larsemann Hills, Prydz Bay",
-        "live_url": "https://data.ncpor.res.in/bharati/live",
-        "sources": ["imd_bharati", "iig_bharati"]
+    sid: {
+        "id": sid,
+        "name": station_config.meta_value(sid, "fullName"),
+        "latitude": station_config.meta_value(sid, "latitude"),
+        "longitude": station_config.meta_value(sid, "longitude"),
+        "elevation_m": station_config.meta_value(sid, "elevation_m"),
+        "region": station_config.meta_value(sid, "region"),
+        "live_url": station_config.meta_value(sid, "ncporLiveUrl"),
+        "sources": station_config.meta_value(sid, "ncporSources"),
     }
+    for sid in station_config.station_ids()
 }
 
 def init_db():

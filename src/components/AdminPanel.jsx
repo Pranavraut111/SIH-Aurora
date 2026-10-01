@@ -6,6 +6,7 @@ import {
 } from 'react-icons/lu';
 import './AdminPanel.css';
 import { apiGet, apiPost } from '../services/api';
+import { STATION_IDS, stationMeta, stationMetaDetailed } from '../data/stationConfig';
 
 
 export default function AdminPanel({ activeStation = 'maitri' }) {
@@ -244,17 +245,29 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
 
         {activeTab === 'system' && (
           <div className="system-config-view">
-            <p className="text-caption text-muted">HARDCODED-DEMO reference text (unverified equipment details; the physics model uses its own estimated parameters — see Twin Inspector).</p>
-            <div className="sys-config-card glass-panel-subtle">
-              <h4>Maitri Research Station (Schirmacher Oasis)</h4>
-              <p>Coordinates: 70.77°S, 11.73°E | Elevation: 117m | Winter Mean Temp: -33°C</p>
-              <p>Primary Genset: 200 kW Volvo Penta | Auxiliary: 160 kW | Living Area Target: +20°C</p>
-            </div>
-            <div className="sys-config-card glass-panel-subtle">
-              <h4>Bharati Research Station (Larsemann Hills)</h4>
-              <p>Coordinates: 69.41°S, 76.19°E | Elevation: 35m | Winter Mean Temp: -25°C</p>
-              <p>Primary Genset: 250 kW MAN Unit | Auxiliary: 200 kW | Architectural Envelope: 3-Storey Monoblock</p>
-            </div>
+            <p className="text-caption text-muted">
+              From simulator/station_config.json (also served at /api/config/stations). Each value shows its source and confidence;
+              values marked “confirm” still need NCPOR confirmation. Physics model parameters are separate (see Twin Inspector).
+            </p>
+            {STATION_IDS.map((sid) => (
+              <div key={sid} className="sys-config-card glass-panel-subtle" data-testid={`station-meta-${sid}`}>
+                <h4>{stationMeta(sid).fullName}</h4>
+                <table className="admin-table font-mono">
+                  <tbody>
+                    {Object.entries(stationMetaDetailed(sid))
+                      .filter(([, v]) => v && typeof v === 'object' && 'value' in v)
+                      .map(([key, v]) => (
+                        <tr key={key}>
+                          <td>{key}</td>
+                          <td><strong>{v.value ?? 'not established'}</strong></td>
+                          <td>{v.confidence}{v.needsNcporConfirmation ? ' · confirm' : ''}</td>
+                          <td className="text-muted">{v.source}{v.note ? ` — ${v.note}` : ''}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
           </div>
         )}
       </div>

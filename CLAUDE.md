@@ -18,6 +18,11 @@
   published snapshot (`dataSource`: `simulator` | `physics-fallback`, plus `provenance`). Never call
   `StationPhysicsModel.compute()` from a request handler.
 - Station ids are validated by one dependency (`station_param` / `require_station`): unknown → 404.
+- **Station facts live in ONE file: `simulator/station_config.json`** (metadata with source/confidence,
+  buildings, dependency graph, default alert thresholds for every sensor, remote-command catalogue).
+  Python reads it via `simulator/station_config.py`; the frontend imports it via `src/data/stationConfig.js`;
+  it is served at `GET /api/config/stations`. Never hardcode coordinates, names, graphs or thresholds elsewhere.
+  Physics parameters stay in `physics_model.py`.
 
 ## Units (one convention everywhere — simulator.py, physics_model.py, unified_backend.py, UI)
 - `storage.store_fuel` = **kL**, `store_food` = **days** of food, `store_spares` = **items**.

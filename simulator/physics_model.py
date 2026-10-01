@@ -17,6 +17,8 @@ The causal chain:
 import math
 import random
 
+import station_config
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Station Physical Parameters
@@ -25,8 +27,9 @@ import random
 
 STATION_PHYSICS = {
     "maitri": {
-        "name": "Maitri",
-        "established": 1989,
+        # name / commissioned year come from station_config.json (metadata only)
+        "name": station_config.meta_value("maitri", "name"),
+        "established": station_config.meta_value("maitri", "commissionedYear"),
 
         # ── Building envelope (estimated) ─────────────────────
         "buildings": {
@@ -104,8 +107,9 @@ STATION_PHYSICS = {
     },
 
     "bharati": {
-        "name": "Bharati",
-        "established": 2012,
+        # name / commissioned year come from station_config.json (metadata only)
+        "name": station_config.meta_value("bharati", "name"),
+        "established": station_config.meta_value("bharati", "commissionedYear"),
 
         "buildings": {
             "livingQuarters": {
