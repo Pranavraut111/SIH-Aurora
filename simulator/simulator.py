@@ -52,6 +52,7 @@ try:
     DECISION_AVAILABLE = True
 except ImportError:
     DECISION_AVAILABLE = False
+from decision_scheduler import DecisionScheduler
 
 # Phase 6: Genuine Chronos forecaster (optional — requires torch + chronos-forecasting).
 # Only "available" if torch AND chronos actually import (B11).
@@ -369,7 +370,9 @@ class StationSimulator:
 
         # ── Phase 5: Decision engine ─────────────────────────
         self.decision_engine = None
-        self._last_decision = None
+        self._last_decision = None      # published decision (+ recentlyResolved)
+        self._base_decision = None      # last evaluated decision
+        self._decision_scheduler = DecisionScheduler(TICK_INTERVAL)
         if DECISION_AVAILABLE:
             try:
                 self.decision_engine = DecisionEngine(station_id)
@@ -497,19 +500,31 @@ class StationSimulator:
             except Exception:
                 self._log_stage_error("forecast")
 
-        # 8. Phase 5: Decision engine (after forecast + anomaly)
-        if (self.decision_engine and self.tick_count % 30 == 0):
-            try:
-                current_state = {
-                    "weather": weather,
-                    "generator": self.values.get("generator", {}),
-                    "meta": meta,
-                }
-                self._last_decision = self.decision_engine.evaluate(
-                    current_state, self._last_anomaly, self._last_forecast
-                )
-            except Exception:
-                self._log_stage_error("decision")
+        # 8. Phase 5: Decision engine — event-driven (decision_scheduler.py):
+        #    anomaly flip / injection start-end / input risk change, 2 s debounce,
+        #    60 s periodic fallback, "recently resolved" hold after it clears.
+        if self.decision_engine:
+            forecast_risk = ((self._last_forecast or {}).get("risk") or {}).get("level")
+            evaluate, reasons = self._decision_scheduler.should_evaluate(
+                self.tick_count, bool(self._last_anomaly.get("is_anomaly")),
+                self.active_injections.keys(), forecast_risk)
+            if evaluate:
+                try:
+                    current_state = {
+                        "weather": weather,
+                        "generator": self.values.get("generator", {}),
+                        "meta": meta,
+                    }
+                    self._base_decision = self.decision_engine.evaluate(
+                        current_state, self._last_anomaly, self._last_forecast
+                    )
+                    self._last_decision = self._decision_scheduler.record(
+                        self.tick_count, self._base_decision, reasons)
+                except Exception:
+                    self._log_stage_error("decision")
+            elif self._base_decision is not None:
+                self._last_decision = self._decision_scheduler.publishable(
+                    self.tick_count, self._decision_scheduler.last_evaluated)
 
         # 9. Phase 6: Genuine Chronos — append telemetry every tick,
         #    run forecast async every 150 ticks (~5 minutes)
