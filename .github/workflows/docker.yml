@@ -166,13 +166,18 @@ jobs:
       # Split into one step per concern: the step name alone says what broke.
       - name: Capture the response headers
         run: |
-          asset=$(curl -fsS http://localhost/ | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -1)
+          # `|| true` because GitHub runs steps with `-o pipefail` and `head` closes the
+          # pipe early.
+          asset=$(curl -fsS http://localhost/ | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -1 || true)
           test -n "$asset" || { echo "::error::could not find the hashed entry asset"; exit 1; }
           echo "ASSET=$asset" >> "$GITHUB_ENV"
           mkdir -p /tmp/hdr
-          curl -fsSI "http://localhost/"            > /tmp/hdr/root.txt
-          curl -fsSI "http://localhost${asset}"     > /tmp/hdr/asset.txt
-          curl -fsSI "http://localhost/api/health"  > /tmp/hdr/api.txt
+          # GET with -D, not -I: FastAPI's @app.get does not register HEAD, so a HEAD on
+          # /api/health is a 405 and `curl -f` would fail. GET is also what a browser does,
+          # so these are the headers that actually reach the app.
+          curl -fsS -o /dev/null -D /tmp/hdr/root.txt  "http://localhost/"
+          curl -fsS -o /dev/null -D /tmp/hdr/asset.txt "http://localhost${asset}"
+          curl -fsS -o /dev/null -D /tmp/hdr/api.txt   "http://localhost/api/health"
           {
             echo '### Response headers'
             for f in root asset api; do
