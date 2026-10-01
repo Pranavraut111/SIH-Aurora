@@ -4,10 +4,11 @@
    panoramic mountain ranges, full-sky snow particle field, aurora borealis,
    and interactive low-poly research station.
    ═══════════════════════════════════════════════════════════════ */
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { BUILDINGS } from '../data/stationData';
+import StationFallback2D from './StationFallback2D';
 
 // ── Color mapping for alert states ──────────────────────────
 const ALERT_COLORS = {
@@ -19,11 +20,41 @@ const ALERT_COLORS = {
 const BASE_BUILDING_COLOR = new THREE.Color(0x2a3648);
 const SELECTED_GLOW = new THREE.Color(0x38bdf8);
 
-export default function StationScene({
+/** True when the browser can create a WebGL context (probe on a throwaway canvas). */
+function hasWebGL() {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) return false;
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
+  } catch (err) {
+    console.warn('[StationScene] WebGL probe failed', err);
+    return false;
+  }
+}
+
+/**
+ * Overview scene: three.js 3D twin when WebGL works, otherwise (no WebGL, or
+ * the renderer throws) a 2D overview with the same buildings and click behaviour.
+ */
+export default function StationScene(props) {
+  const [mode, setMode] = useState(() => (hasWebGL() ? '3d' : '2d'));
+  const [reason, setReason] = useState(() => (mode === '3d' ? null : 'WebGL is not available in this browser'));
+  const handleFatal = useCallback((err) => {
+    setReason(`3D renderer failed: ${err?.message || err}`);
+    setMode('2d');
+  }, []);
+  if (mode === '2d') return <StationFallback2D {...props} reason={reason} />;
+  return <StationScene3D {...props} onFatal={handleFatal} />;
+}
+
+function StationScene3D({
   alertStates = {},
   selectedBuilding,
   onBuildingClick,
   onBuildingHover,
+  onFatal,
 }) {
   const containerRef = useRef(null);
   const sceneRef = useRef(null);
@@ -480,6 +511,7 @@ export default function StationScene({
 
   // ── Animation Loop ──────────────────────────────────────────
   const animate = useCallback(() => {
+    if (!rendererRef.current) return; // 3D init failed or unmounted — nothing to draw
     animationRef.current = requestAnimationFrame(animate);
 
     const elapsed = clockRef.current.getElapsedTime();
@@ -618,7 +650,14 @@ export default function StationScene({
   }, []);
 
   useEffect(() => {
-    initScene();
+    try {
+      initScene();
+    } catch (err) {
+      console.error('[StationScene] 3D init failed — switching to 2D overview', err);
+      rendererRef.current = null;
+      onFatal?.(err);
+      return undefined;
+    }
 
     // ResizeObserver watches container width directly when sidebar expands/collapses
     let resizeObserver = null;

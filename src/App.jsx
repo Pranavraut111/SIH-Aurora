@@ -8,6 +8,7 @@
 import { useState, useCallback } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import StationScene from './components/StationScene';
+import ErrorBoundary from './components/ErrorBoundary';
 import TopBar from './components/TopBar';
 import SidebarNav from './components/SidebarNav';
 import OverviewHUD from './components/OverviewHUD';
@@ -99,7 +100,24 @@ export default function App() {
   }, []);
 
   // ── Render module panel ───────────────────────────────────
+  const MODULE_NAMES = {
+    environmental: 'Environmental panel', infrastructure: 'Infrastructure panel', energy: 'Energy panel',
+    logistics: 'Logistics panel', simulation: 'What-if simulation panel', reports: 'Reports panel',
+    remote: 'Remote commands panel', admin: 'Admin panel', ai: 'AI diagnostics panel',
+  };
+
+  // Each module panel gets its own ErrorBoundary so one crash never blanks the app.
   function renderModulePanel() {
+    const panel = renderModulePanelInner();
+    if (!panel) return null;
+    return (
+      <ErrorBoundary key={activeModule} name={MODULE_NAMES[activeModule]} resetKey={activeStation}>
+        {panel}
+      </ErrorBoundary>
+    );
+  }
+
+  function renderModulePanelInner() {
     switch (activeModule) {
       case 'environmental':
         return (
@@ -216,15 +234,18 @@ export default function App() {
             <div className="overview-stage">
               {/* 3D Twin Scene — Centerpiece */}
               <div className="scene-container">
-                <StationScene
-                  alertStates={stationData.alerts}
-                  selectedBuilding={selectedBuilding}
-                  onBuildingClick={handleBuildingClick}
-                  onBuildingHover={handleBuildingHover}
-                />
+                <ErrorBoundary name="3D station view">
+                  <StationScene
+                    alertStates={stationData.alerts}
+                    selectedBuilding={selectedBuilding}
+                    onBuildingClick={handleBuildingClick}
+                    onBuildingHover={handleBuildingHover}
+                  />
+                </ErrorBoundary>
               </div>
 
               {/* Docked Overview HUD */}
+              <ErrorBoundary name="Overview HUD">
               <OverviewHUD
                 sensorData={stationData.sensors}
                 alerts={stationData.alerts}
@@ -232,6 +253,7 @@ export default function App() {
                 isConnected={isConnected}
                 onOpenTwinInspector={() => setShowTwinInspector(true)}
               />
+              </ErrorBoundary>
             </div>
           ) : (
             <div className="module-content-scroll">

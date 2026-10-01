@@ -1,0 +1,15 @@
+.error-boundary-card {
+  margin: 24px auto; max-width: 560px; padding: 20px 22px; border-radius: 12px;
+  color: #e2e8f0; background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+}
+.error-boundary-card h3 { margin: 0 0 6px; font-size: 1rem; color: #f87171; }
+.error-boundary-card p { margin: 0 0 10px; font-size: 0.85rem; color: #94a3b8; }
+.error-boundary-card code {
+  display: block; margin-bottom: 14px; padding: 8px; border-radius: 6px; font-size: 0.75rem;
+  background: rgba(2, 6, 23, 0.6); color: #fca5a5; white-space: pre-wrap; word-break: break-word;
+}
+.error-boundary-card button {
+  padding: 6px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;
+  color: #0f172a; background: #38bdf8; border: none;
+}
