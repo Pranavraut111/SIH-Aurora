@@ -38,8 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
+      # No setup-buildx-action here on purpose: it switches the default builder to the
+      # docker-container driver, and this job needs the built images in the local image
+      # store (docker image inspect, docker compose up --no-build). Compose uses BuildKit
+      # regardless. The `build` job below does use buildx, because it needs multi-arch.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -107,19 +109,25 @@ jobs:
       - name: Build the frontend image
         run: docker compose build --progress plain frontend
 
+      # Reporting only — it must never block the verification that follows.
       - name: Image sizes
+        continue-on-error: true
         run: |
+          docker images || true
           {
             echo '### Image sizes (amd64, WITH_ML=false)'
             echo
             echo '| Image | Size |'
             echo '|---|---|'
             for img in aurora-frontend:local aurora-backend:local aurora-simulator:local; do
-              size=$(docker image inspect "$img" --format '{{.Size}}')
-              printf '| %s | %s |\n' "$img" "$(numfmt --to=iec --suffix=B "$size")"
+              size=$(docker image inspect "$img" --format '{{.Size}}' 2>/dev/null || echo '')
+              if [ -n "$size" ]; then
+                printf '| %s | %s |\n' "$img" "$(numfmt --to=iec --suffix=B "$size" 2>/dev/null || echo "$size bytes")"
+              else
+                printf '| %s | not in the local image store |\n' "$img"
+              fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
-          docker images aurora-backend aurora-simulator aurora-frontend
 
       - name: Start the stack
         run: |
@@ -341,6 +349,7 @@ jobs:
         run: docker compose build --progress plain simulator
 
       - name: Image size with ML
+        continue-on-error: true
         run: |
           size=$(docker image inspect aurora-simulator:local --format '{{.Size}}')
           {
