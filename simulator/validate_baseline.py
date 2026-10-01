@@ -7,11 +7,14 @@ and validates the physics model's monotonic/correlated behavior.
 Output: correlation checks + baseline_data.json for anomaly training.
 """
 
-import sys, os, json, datetime
+import json
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(__file__))
 
+from config import BASELINE_DATA_PATH, WEATHER_CACHE_DIR
 from physics_model import StationPhysicsModel
-from config import WEATHER_CACHE_DIR, BASELINE_DATA_PATH
 from units import cache_wind_unit, wind_factor_to_kmh
 
 TICK_DT = 120  # 2-minute simulated steps
@@ -60,7 +63,7 @@ def validate_station(station_id: str):
 
     for hour_idx, weather in enumerate(hourly_weather):
         # Run 3 ticks per hour (to let thermal model converge)
-        for sub in range(3):
+        for _ in range(3):
             readings = pm.compute(weather, dt_seconds=TICK_DT)
             meta = readings.pop("_meta", {})
 
@@ -90,7 +93,7 @@ def validate_station(station_id: str):
     print(f"  Processed {n} hours of weather data")
 
     # ── Bounds check ──────────────────────────────────────
-    print(f"\n  BOUNDS CHECK")
+    print("\n  BOUNDS CHECK")
     fields = {
         "env_temp":     ("°C",  -80, 10),
         "env_wind":     ("km/h", 0, 250),
@@ -118,7 +121,7 @@ def validate_station(station_id: str):
     def pearson(xs, ys):
         n = len(xs)
         mx, my = sum(xs)/n, sum(ys)/n
-        cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
         sx = max((sum((x - mx)**2 for x in xs))**0.5, 1e-10)
         sy = max((sum((y - my)**2 for y in ys))**0.5, 1e-10)
         return cov / (sx * sy)
@@ -147,21 +150,21 @@ def validate_station(station_id: str):
         print(f"    {status} {desc:45s}  r={r:+.3f}  (threshold {threshold:+.1f})")
 
     # ── Temperature range statistics ──────────────────────
-    print(f"\n  WEATHER VARIATION")
+    print("\n  WEATHER VARIATION")
     temps = [r["env_temp"] for r in output_records]
     winds = [r["env_wind"] for r in output_records]
     print(f"    Temperature range: {min(temps):.1f}°C to {max(temps):.1f}°C  (Δ={max(temps)-min(temps):.1f}°C)")
     print(f"    Wind range:        {min(winds):.1f} to {max(winds):.1f} km/h  (Δ={max(winds)-min(winds):.1f} km/h)")
 
     # ── Summary statistics ─────────────────────────────────
-    print(f"\n  SUMMARY STATISTICS")
+    print("\n  SUMMARY STATISTICS")
     for field in ["env_temp", "heat_loss", "heat_demand", "total_demand", "gen_load", "gen_temp", "fuel_rate"]:
         vals = [r[field] for r in output_records]
         avg = sum(vals) / len(vals)
         print(f"    {field:15s}: mean={avg:7.1f}  min={min(vals):7.1f}  max={max(vals):7.1f}")
 
     # ── Sample timestamps ──────────────────────────────────
-    print(f"\n  SAMPLE POINTS (every 24h)")
+    print("\n  SAMPLE POINTS (every 24h)")
     for i in range(0, n, 24):
         r = output_records[i]
         print(f"    {r['sim_time'][:16]}  "
@@ -179,7 +182,7 @@ if __name__ == "__main__":
     bharati_records, bharati_ok = validate_station("bharati")
 
     print(f"\n{'='*60}")
-    print(f"  FINAL RESULT")
+    print("  FINAL RESULT")
     print(f"{'='*60}")
     print(f"  Maitri:  {'✅ PASS' if maitri_ok else '❌ FAIL'}")
     print(f"  Bharati: {'✅ PASS' if bharati_ok else '❌ FAIL'}")

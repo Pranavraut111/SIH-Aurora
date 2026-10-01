@@ -13,16 +13,16 @@ Data provenance:
 Station coordinates: from station_config.json (single source of truth).
 """
 
-import os
 import json
 import logging
 import time
-import math
-import requests
 from datetime import datetime, timedelta, timezone
 
-from units import cache_wind_unit, wind_factor_to_kmh
+import requests
+
 import station_config
+from config import WEATHER_CACHE_DIR as CACHE_DIR
+from units import cache_wind_unit, wind_factor_to_kmh
 
 log = logging.getLogger("aurora.weather")
 
@@ -34,8 +34,6 @@ def sim_hours_per_real_minute(speed_factor: float) -> float:
 
 # ── Station coordinates — from station_config.json (single source of truth) ──
 STATION_COORDS = {sid: station_config.coords(sid) for sid in station_config.station_ids()}
-
-from config import WEATHER_CACHE_DIR as CACHE_DIR
 
 CACHE_DIR.mkdir(exist_ok=True)
 

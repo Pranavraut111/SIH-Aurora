@@ -24,7 +24,7 @@ def backend(temp_db, monkeypatch):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(ub, "tick_loop", _no_tick_loop)
-    from station_store import StationStore   # fresh telemetry store: no batches left over from other tests
+    from station_store import StationStore  # fresh telemetry store: no batches left over from other tests
     monkeypatch.setattr(ub, "store", StationStore(ub.STATIONS, history_max_points=50))
     with TestClient(ub.app) as c:
         yield c, ub
@@ -32,7 +32,7 @@ def backend(temp_db, monkeypatch):
 
 @pytest.fixture(scope="module")
 def sim_module():
-    import simulator   # builds the default stations (network is blocked in tests)
+    import simulator  # builds the default stations (network is blocked in tests)
     return simulator
 
 
@@ -214,8 +214,10 @@ def test_migration_005_moves_operator_values_and_drops_old_table(tmp_path):
     conn = sqlite3.connect(str(db_path))   # build a pre-migration DB by hand
     conn.execute("CREATE TABLE station_alerts (id TEXT PRIMARY KEY, station_id TEXT, timestamp INTEGER, severity TEXT, "
                  "subsystem TEXT, parameter TEXT, observed_value REAL, threshold_or_model TEXT, reason TEXT, "
-                 "recommended_action TEXT, status TEXT, acknowledged_by TEXT, acknowledged_at INTEGER, resolved_at INTEGER)")
-    conn.execute("CREATE TABLE admin_thresholds (key TEXT PRIMARY KEY, value REAL, updated_at INTEGER, updated_by TEXT)")
+                 "recommended_action TEXT, status TEXT, acknowledged_by TEXT, "
+                 "acknowledged_at INTEGER, resolved_at INTEGER)")
+    conn.execute("CREATE TABLE admin_thresholds (key TEXT PRIMARY KEY, value REAL, updated_at INTEGER, updated_by "
+                  "TEXT)")
     conn.executemany("INSERT INTO admin_thresholds VALUES (?, ?, ?, ?)", [
         ("generator_temp_warning", 88.0, 1, "default"),
         ("generator_temp_critical", 96.5, 2, "ops"),

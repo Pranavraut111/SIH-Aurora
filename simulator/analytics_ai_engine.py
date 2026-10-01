@@ -10,17 +10,16 @@ Analytical models over the SQLite observation store:
 7. Antarctic Blizzard Risk Assessment
 """
 
+import logging
+import threading
+import time
+from datetime import datetime, timezone
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.svm import OneClassSVM
-import statsmodels.api as sm
 from statsmodels.tsa.arima.model import ARIMA
-import logging
-import json
-import threading
-import time
-from datetime import datetime, timezone
 
 import db
 
@@ -102,14 +101,17 @@ def query_observations(station_id, parameter="temperature", frequency="h", start
         df.attrs["window"] = meta
         return df
     with db.connect() as conn:
-        q = ("SELECT timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude "
-             "FROM observations WHERE station_id = ? AND parameter = ?")
+        q = ("SELECT timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, "
+             "latitude, longitude FROM observations WHERE station_id = ? AND parameter = ?")
         params = [station_id, parameter]
         if start_ts:
-            q += " AND timestamp >= ?"; params.append(start_ts)
+            q += " AND timestamp >= ?"
+            params.append(start_ts)
         if end_ts:
-            q += " AND timestamp <= ?"; params.append(end_ts)
-        q += " ORDER BY timestamp DESC LIMIT ?"; params.append(int(limit))
+            q += " AND timestamp <= ?"
+            params.append(end_ts)
+        q += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(int(limit))
         df = pd.read_sql_query(q, conn, params=params)
     return df.iloc[::-1].reset_index(drop=True)
 
@@ -417,8 +419,10 @@ def assess_blizzard_and_polar_risks(station_id):
             "risk_level": "critical",
             "risk_score": 85,
             "affected_system": "Outdoor Operations & Helipad",
-            "reason": f"Active Blizzard Conditions: Sustained wind at {wind:.1f} m/s ({wind_kmh:.0f} km/h) with ambient temp {temp:.1f}°C.",
-            "recommended_action": "Enforce station lockdown. Restrict outdoor movements to life-line secured corridors. Halt field scientific expeditions."
+            "reason": f"Active Blizzard Conditions: Sustained wind at {wind:.1f} m/s "
+                      f"({wind_kmh:.0f} km/h) with ambient temp {temp:.1f}°C.",
+            "recommended_action": "Enforce station lockdown. Restrict outdoor movements to life-line secured corridors."
+                                  " Halt field scientific expeditions."
         })
     elif wind >= 12.0:
         overall_score += 25
@@ -427,7 +431,8 @@ def assess_blizzard_and_polar_risks(station_id):
             "risk_level": "warning",
             "risk_score": 55,
             "affected_system": "Antenna Mast & External Sensors",
-            "reason": f"High Wind Alert ({wind:.1f} m/s). Increased structural load on communications mast and snow drifting around generator intakes.",
+            "reason": f"High Wind Alert ({wind:.1f} m/s). Increased structural load on communications "
+                      f"mast and snow drifting around generator intakes.",
             "recommended_action": "Inspect mast guy-wire tension telemetry and monitor generator air intake heaters."
         })
 
@@ -439,8 +444,11 @@ def assess_blizzard_and_polar_risks(station_id):
             "risk_level": "critical",
             "risk_score": 80,
             "affected_system": "Primary Diesel Generator & Heating Zone A",
-            "reason": f"Severe Wind Chill ({wind_chill:.1f}°C). Structural heat loss increases by ~42%, requiring continuous auxiliary heating and boosting generator power demand by +28 kW.",
-            "recommended_action": "Engage secondary heating circuit (Zone B) and bring Backup Generator to hot-standby readiness."
+            "reason": f"Severe Wind Chill ({wind_chill:.1f}°C). Structural heat loss increases by ~42%, "
+                      f"requiring continuous auxiliary heating and boosting generator power demand "
+                      f"by +28 kW.",
+            "recommended_action": "Engage secondary heating circuit (Zone B) and bring Backup Generator to hot-standby "
+                                  "readiness."
         })
     elif temp < -25.0:
         overall_score += 15
@@ -449,7 +457,8 @@ def assess_blizzard_and_polar_risks(station_id):
             "risk_level": "warning",
             "risk_score": 45,
             "affected_system": "Water Treatment Snow-Melt Line",
-            "reason": f"Ambient Temperature ({temp:.1f}°C) below glycol heat-exchanger optimal threshold. Risk of line freezing if flow drops below 15 L/min.",
+            "reason": f"Ambient Temperature ({temp:.1f}°C) below glycol heat-exchanger optimal "
+                      f"threshold. Risk of line freezing if flow drops below 15 L/min.",
             "recommended_action": "Verify snow-melt tracer heating current and maintain recirculation pumps."
         })
 
@@ -471,18 +480,21 @@ def assess_blizzard_and_polar_risks(station_id):
         },
         "identified_risks": risks,
         "provenance": ("Rule-based risk engine on the latest values from: " + "; ".join(sorted(used_datasets))
-                       if used_datasets else "Rule-based risk engine on built-in default values (no observations in DB)")
+                       if used_datasets else ("Rule-based risk engine on built-in default values (no observations in "
+                                              "DB)"))
     }
 
 if __name__ == "__main__":
     print("Testing Anomaly Detection...")
     res_anom = run_anomaly_detection("maitri", "temperature", "isf")
-    print(f"Anomaly detection: {res_anom['total_points']} points analyzed, {res_anom['anomalies_count']} anomalies found.")
-    
+    print(f"Anomaly detection: {res_anom['total_points']} points analyzed, "
+          f"{res_anom['anomalies_count']} anomalies found.")
+
     print("\nTesting Forecast Engine...")
     res_fc = run_time_series_forecast("maitri", "temperature", "arima", 12)
     print(f"Forecast generated: {len(res_fc['forecast'])} horizon points.")
 
     print("\nTesting Risk Engine...")
     res_risk = assess_blizzard_and_polar_risks("maitri")
-    print(f"Risk assessment: Health={res_risk['overall_health']}, Score={res_risk['risk_score']}, Identified risks={len(res_risk['identified_risks'])}")
+    print(f"Risk assessment: Health={res_risk['overall_health']}, Score={res_risk['risk_score']}, "
+          f"Identified risks={len(res_risk['identified_risks'])}")

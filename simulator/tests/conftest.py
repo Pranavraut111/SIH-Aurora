@@ -35,9 +35,9 @@ def temp_db(tmp_path, monkeypatch):
     """Fresh SQLite DB created by the real init_db() (schema + seed + migrations),
     with the shared db helper pointed at it."""
     db_path = tmp_path / "obs.db"
+    import analytics_ai_engine
     import db
     import ncpor_ingestor
-    import analytics_ai_engine
     monkeypatch.setattr(db, "DB_PATH", db_path)     # the one SQLite helper reads DB_PATH at call time
     ncpor_ingestor.init_db()
     analytics_ai_engine.MODEL_CACHE.clear()

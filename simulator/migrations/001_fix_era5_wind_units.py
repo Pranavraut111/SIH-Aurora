@@ -87,8 +87,8 @@ if __name__ == "__main__":
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # simulator/
-    from config import DB_PATH
     import db
+    from config import DB_PATH
     from migrations import run_migrations
 
     ap = argparse.ArgumentParser(description=DESCRIPTION)

@@ -3,9 +3,8 @@
 import sqlite3
 
 import pytest
-
 from conftest import insert_obs
-from migrations import run_migrations, applied_ids
+from migrations import applied_ids, run_migrations
 
 MIG_ID = "001_fix_era5_wind_units"
 OLD_SOURCE = "NCPOR / ECMWF Polar Climate Reanalysis"
@@ -59,7 +58,7 @@ def test_converts_wind_and_relabels(legacy_db):
     era5 = _rows(legacy_db, ERA5)
     winds = {ts: v for ts, p, v, *_ in era5 if p == "wind_speed"}
     assert winds == {1_000: pytest.approx(10.0), 2_000: pytest.approx(20.0)}
-    for _, param, value, unit, source, sensor, quality, _ in era5:
+    for _, param, value, _unit, source, sensor, quality, _ in era5:
         assert source == "Open-Meteo ERA5 reanalysis"
         assert quality == "reanalysis"
         assert sensor.startswith("ERA5 ")

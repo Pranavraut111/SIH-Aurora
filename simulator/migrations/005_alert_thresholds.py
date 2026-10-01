@@ -75,7 +75,8 @@ def apply(conn):
                 sensor, direction, level, factor = KEY_MAP[key]
                 conn.execute(
                     "INSERT OR REPLACE INTO alert_threshold_overrides "
-                    "(station_id, sensor, direction, level, value, updated_at, updated_by) VALUES ('*', ?, ?, ?, ?, ?, ?)",
+                    "(station_id, sensor, direction, level, value, updated_at, updated_by) "
+                    "VALUES ('*', ?, ?, ?, ?, ?, ?)",
                     (sensor, direction, level, round(value * factor, 2), updated_at or now, updated_by))
                 migrated.append(f"{key} -> {sensor}.{direction}.{level}")
             elif key not in KEY_MAP:

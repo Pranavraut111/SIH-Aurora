@@ -56,7 +56,8 @@ def _event_line(decision):
 def _evidence_lines(decision, limit=3):
     out = []
     for ev in [e for e in decision.get("evidence", []) if e.get("type") == "anomaly_evidence"][:limit]:
-        out.append(f"{ev.get('sensor')} = {ev.get('value')} vs physics-expected {ev.get('expected')} ({ev.get('deviation')}).")
+        out.append(f"{ev.get('sensor')} = {ev.get('value')} vs physics-expected "
+                   f"{ev.get('expected')} ({ev.get('deviation')}).")
     return out
 
 
@@ -80,7 +81,8 @@ def offline_explanation(decision, question: str, free_text: str, station: str, s
     elif intent == "why" and decision:
         rules = (decision.get("risk") or {}).get("triggered_rules") or []
         if rules:
-            lines.append("Risk rules triggered: " + "; ".join(f"{r['id']} {r['name']} — {r['rationale']}" for r in rules))
+            lines.append("Risk rules triggered: "
+                         + "; ".join(f"{r['id']} {r['name']} — {r['rationale']}" for r in rules))
         else:
             lines.append("No risk rules are currently triggered.")
         ev = _evidence_lines(decision)
@@ -108,11 +110,13 @@ def offline_explanation(decision, question: str, free_text: str, station: str, s
                      f"{_num(_sensor(snapshot, 'generator', 'gen_rpm'), ' rpm', 0)}, "
                      f"coolant {_num(_sensor(snapshot, 'generator', 'gen_temp'), ' °C')}.")
         if decision:
-            lines += _evidence_lines(decision) or ["Generator readings match the physics prediction (no ≥3σ residuals)."]
+            lines += _evidence_lines(decision) or [("Generator readings match the physics prediction (no ≥3σ "
+                                                    "residuals).")]
     elif intent == "forecast" and decision:
         fc = decision.get("forecast") or {}
         if fc.get("available"):
-            lines.append(f"Physics forecast (live Open-Meteo weather): temperature change {_num(fc.get('temperature_change'), ' °C')}, "
+            lines.append("Physics forecast (live Open-Meteo weather): "
+                         f"temperature change {_num(fc.get('temperature_change'), ' °C')}, "
                          f"generator load change {_num(fc.get('load_change_pp'), ' pp')}, "
                          f"generator {_num(fc.get('gen_temp_predicted_24h'), ' °C')} at the last horizon.")
         else:
@@ -120,7 +124,8 @@ def offline_explanation(decision, question: str, free_text: str, station: str, s
     if not lines:
         lines.append("No data available to summarise.")
     return {
-        "explanation": f"**{OFFLINE_LABEL} — {station.upper()}, {intent}**\n\n" + "\n".join(f"• {l}" for l in lines),
+        "explanation": (f"**{OFFLINE_LABEL} — {station.upper()}, {intent}**\n\n"
+                        + "\n".join(f"• {line}" for line in lines)),
         "intent": intent,
         "llmAvailable": False,
         "mode": "offline-summary",

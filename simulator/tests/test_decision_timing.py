@@ -76,7 +76,7 @@ def test_recently_resolved_hold():
 
 @pytest.fixture(scope="module")
 def simulator_module():
-    import simulator   # builds the default stations (network is blocked → forecast unavailable)
+    import simulator  # builds the default stations (network is blocked → forecast unavailable)
     return simulator
 
 

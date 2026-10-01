@@ -139,7 +139,7 @@ def test_no_print_in_service_code():
     for name in SERVICE_MODULES:
         tree = ast.parse((SIM_DIR / name).read_text())
 
-        def visit(node, allowed):
+        def visit(node, allowed, name=name):
             for child in ast.iter_child_nodes(node):
                 ok = allowed
                 if isinstance(child, ast.If) and getattr(getattr(child.test, "left", None), "id", "") == "__name__":
@@ -175,7 +175,9 @@ def test_no_empty_or_comment_only_catch_in_js():
 def test_legacy_simulator_env_is_not_read(monkeypatch):
     """E: config.py loads ONLY the root .env; simulator/.env is never passed to load_dotenv."""
     import importlib
+
     import dotenv
+
     import config as app_config
     loaded = []
     monkeypatch.setattr(dotenv, "load_dotenv", lambda path=None, **kw: loaded.append(Path(path)) or True)

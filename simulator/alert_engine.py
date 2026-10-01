@@ -22,7 +22,6 @@ in a request thread; one lock guards the in-memory state and its DB writes.
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
 
 import db
 import station_config
@@ -37,7 +36,7 @@ class AlertNotFound(KeyError):
     pass
 
 
-def classify(value: float, thresholds: dict) -> Tuple[str, Optional[str], Optional[float]]:
+def classify(value: float, thresholds: dict) -> tuple[str, str | None, float | None]:
     """(level, direction, threshold) for one value. Critical beats warning."""
     for level in ("critical", "warning"):
         low = thresholds.get("low", {}).get(level)
@@ -51,7 +50,7 @@ def classify(value: float, thresholds: dict) -> Tuple[str, Optional[str], Option
 
 # ── threshold overrides (admin) ───────────────────────────────
 
-def load_overrides(station_id: Optional[str] = None) -> List[dict]:
+def load_overrides(station_id: str | None = None) -> list[dict]:
     with db.connect() as conn:
         if station_id is None:
             rows = conn.execute("SELECT * FROM alert_threshold_overrides ORDER BY station_id, sensor").fetchall()
@@ -62,7 +61,7 @@ def load_overrides(station_id: Optional[str] = None) -> List[dict]:
              "value": r["value"], "updatedAt": r["updated_at"], "updatedBy": r["updated_by"]} for r in rows]
 
 
-def effective_thresholds(station_id: str, overrides: Optional[List[dict]] = None) -> dict:
+def effective_thresholds(station_id: str, overrides: list[dict] | None = None) -> dict:
     """Defaults from station_config.json with '*' then station-specific overrides applied."""
     th = station_config.default_thresholds(station_id)
     ov = load_overrides(station_id) if overrides is None else overrides
@@ -73,7 +72,7 @@ def effective_thresholds(station_id: str, overrides: Optional[List[dict]] = None
     return th
 
 
-def validate_threshold_update(station_id: str, updates: Dict[str, dict]) -> List[str]:
+def validate_threshold_update(station_id: str, updates: dict[str, dict]) -> list[str]:
     """updates: {sensor: {direction: {level: value}}}. Returns a list of errors (empty = OK).
     station_id may be '*' (all stations): every station is checked."""
     errors = []
@@ -93,7 +92,8 @@ def validate_threshold_update(station_id: str, updates: Dict[str, dict]) -> List
                     continue
                 for level, value in levels.items():
                     if not (lo <= value <= hi):
-                        errors.append(f"{sensor}.{direction}.{level} must be between {lo} and {hi} {unit} (got {value})")
+                        errors.append(f"{sensor}.{direction}.{level} must be between "
+                                      f"{lo} and {hi} {unit} (got {value})")
                     merged[sensor][direction][level] = value
         for sensor, dirs in merged.items():
             if sensor not in updates:
@@ -107,21 +107,22 @@ def validate_threshold_update(station_id: str, updates: Dict[str, dict]) -> List
     return sorted(set(errors))
 
 
-def save_overrides(station_id: str, updates: Dict[str, dict], updated_by: str) -> int:
+def save_overrides(station_id: str, updates: dict[str, dict], updated_by: str) -> int:
     now = int(time.time() * 1000)
     rows = [(station_id, sensor, direction, level, float(value), now, updated_by)
             for sensor, dirs in updates.items() for direction, levels in dirs.items()
             for level, value in levels.items()]
     with db.connect() as conn:
         conn.executemany(
-            "INSERT INTO alert_threshold_overrides (station_id, sensor, direction, level, value, updated_at, updated_by) "
+            "INSERT INTO alert_threshold_overrides "
+            "(station_id, sensor, direction, level, value, updated_at, updated_by) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(station_id, sensor, direction, level) "
             "DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
             rows)
     return len(rows)
 
 
-def reset_overrides(station_id: str, sensor: Optional[str] = None) -> int:
+def reset_overrides(station_id: str, sensor: str | None = None) -> int:
     with db.connect() as conn:
         if sensor is None:
             cur = conn.execute("DELETE FROM alert_threshold_overrides WHERE station_id = ?", (station_id,))
@@ -138,7 +139,7 @@ class AlertEngine:
         self.stations = tuple(stations)
         self.resolve_ticks = max(1, int(resolve_ticks))
         self._lock = threading.Lock()
-        self._open: Dict[str, Dict[str, dict]] = {sid: {} for sid in self.stations}
+        self._open: dict[str, dict[str, dict]] = {sid: {} for sid in self.stations}
 
     # Called at startup (and by tests) so acknowledgements survive restarts.
     def load_open(self) -> int:
@@ -163,7 +164,7 @@ class AlertEngine:
             "clearTicks": 0, "lowerTicks": 0, "message": r["reason"],
         }
 
-    def evaluate(self, station_id: str, sensors: dict, ts_ms: int) -> Tuple[Dict[str, str], List[dict]]:
+    def evaluate(self, station_id: str, sensors: dict, ts_ms: int) -> tuple[dict[str, str], list[dict]]:
         """Check every configured sensor; persist raises/escalations/resolutions.
         Returns ({building: level}, [open alert dicts for the UI])."""
         th = effective_thresholds(station_id)
@@ -277,7 +278,7 @@ class AlertEngine:
         return {**dict(row), "alreadyAcknowledged": False}
 
     @staticmethod
-    def history(station_id: str, limit: int = 100) -> List[dict]:
+    def history(station_id: str, limit: int = 100) -> list[dict]:
         with db.connect() as conn:
             rows = conn.execute("SELECT * FROM station_alerts WHERE station_id = ? ORDER BY timestamp DESC, id DESC "
                                 "LIMIT ?", (station_id, limit)).fetchall()

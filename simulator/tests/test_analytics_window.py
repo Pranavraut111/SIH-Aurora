@@ -2,8 +2,8 @@
 honest provenance, and a TTL cache for fitted models."""
 
 import pytest
-
 from conftest import insert_obs
+
 import analytics_ai_engine as ae
 
 H = 3_600_000  # 1 hour in ms

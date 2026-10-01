@@ -31,8 +31,8 @@ Provenance:
 
 import collections
 import logging
-import time
 import threading
+import time
 
 log = logging.getLogger("aurora.chronos")
 
@@ -288,7 +288,8 @@ class GenuineChronosForecaster:
                     "horizon_minutes": [i + 1 for i in range(pred_len)],
                 }
             except Exception as e:
-                log.warning("[Chronos] predict_quantiles failed for %s/%s (%s); trying point forecast", station_id, signal, e)
+                log.warning("[Chronos] predict_quantiles failed for %s/%s (%s); trying point forecast",
+                            station_id, signal, e)
                 # Fallback: try predict() which returns point forecasts
                 try:
                     with _inference_lock:
@@ -433,7 +434,7 @@ if __name__ == "__main__":
         print("  Install with: pip install chronos-forecasting torch")
         exit(1)
 
-    print(f"\n  ✓ chronos-forecasting available")
+    print("\n  ✓ chronos-forecasting available")
     print(f"  Model: {MODEL_NAME}")
 
     # Create forecaster and fill with synthetic data
@@ -457,9 +458,9 @@ if __name__ == "__main__":
 
     print(f"  Buffer status: {forecaster.status()}")
 
-    print(f"\n  Running forecast...")
+    print("\n  Running forecast...")
     result = forecaster.run_forecast("maitri")
 
-    print(f"\n  Result:")
+    print("\n  Result:")
     import json
     print(json.dumps(result, indent=2))

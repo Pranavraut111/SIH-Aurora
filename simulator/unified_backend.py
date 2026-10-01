@@ -17,47 +17,47 @@ inspector, what-if, logistics, remote commands and admin config.
 """
 
 import asyncio
-import re
+import json
 import logging
+import re
 import sys
 import threading
 import time
-import json
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Literal, Union
+from pathlib import Path
+from typing import Any, Literal
 
 import requests
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Import digital twin engines
 sys.path.insert(0, str(Path(__file__).parent))
-import config as app_config
-from ncpor_ingestor import init_db, ingest_live_station, ingest_cached_historical_data
-import db
-from validation import OperatorName, StationIdStr, Identifier
-from analytics_ai_engine import (
-    run_anomaly_detection,
-    run_time_series_forecast,
-    run_correlation_matrix,
-    assess_blizzard_and_polar_risks,
-    query_observations
-)
-from physics_model import StationPhysicsModel
-from cascade import analyze_dependency_cascade
-import station_config
-from offline_explain import offline_explanation
-from twin_inspector import build_twin_inspector
-from units import ms_to_kmh, kmh_to_ms
-from station_store import StationStore
 import alert_engine
+import config as app_config
+import db
+import station_config
 from alert_engine import AlertEngine, AlertNotFound
+from analytics_ai_engine import (
+    assess_blizzard_and_polar_risks,
+    query_observations,
+    run_anomaly_detection,
+    run_correlation_matrix,
+    run_time_series_forecast,
+)
+from cascade import analyze_dependency_cascade
+from ncpor_ingestor import ingest_live_station, init_db
+from offline_explain import offline_explanation
+from physics_model import StationPhysicsModel
+from station_store import StationStore
+from twin_inspector import build_twin_inspector
+from units import kmh_to_ms, ms_to_kmh
+from validation import Identifier, OperatorName, StationIdStr
 
 log = logging.getLogger("aurora.backend")
 
@@ -87,13 +87,13 @@ def require_station(raw) -> str:
     return sid
 
 
-def station_param(stationId: Optional[str] = Query(None), station: Optional[str] = Query(None)) -> str:
+def station_param(stationId: str | None = Query(None), station: str | None = Query(None)) -> str:
     """Query-string station dependency. Missing → 'maitri' (backward compatible)."""
     raw = stationId if stationId is not None else station
     return require_station("maitri" if raw is None else raw)
 
 
-def optional_station_param(stationId: Optional[str] = Query(None), station: Optional[str] = Query(None)) -> Optional[str]:
+def optional_station_param(stationId: str | None = Query(None), station: str | None = Query(None)) -> str | None:
     """Like station_param, but missing means 'all stations' (None)."""
     raw = stationId if stationId is not None else station
     return None if raw is None else require_station(raw)
@@ -107,9 +107,9 @@ class ConnectionManager:
     """All methods run on the event loop, so the dict needs no lock."""
 
     def __init__(self):
-        self._conns: Dict[WebSocket, Optional[str]] = {}
+        self._conns: dict[WebSocket, str | None] = {}
 
-    async def connect(self, websocket: WebSocket, station_filter: Optional[str]):
+    async def connect(self, websocket: WebSocket, station_filter: str | None):
         await websocket.accept()
         self._conns[websocket] = station_filter
 
@@ -144,7 +144,7 @@ def get_latest_weather_for_station(station_id: str):
 
     res = {"temp": -15.0, "wind": 12.0, "pressure": 985.0, "humidity": 65.0,
            "source": "built-in default (no observations in DB)", "dataset": None}
-    for param, val, ts, src, ds in rows:
+    for param, val, _ts, src, ds in rows:
         if param == "temperature" and "temp_read" not in res:
             res["temp"] = val
             res["temp_read"] = True
@@ -194,7 +194,8 @@ def advance_fallback(sid: str) -> dict:
 
     sensors = {
         "generator": {
-            "gen_power": round(float(meta.get("power_breakdown", {}).get("total_demand_kW", _val(readings, "generator", "gen_power", 160))), 1),
+            "gen_power": round(float(meta.get("power_breakdown", {}).get(
+                "total_demand_kW", _val(readings, "generator", "gen_power", 160))), 1),
             "gen_fuel_rate": round(_val(readings, "generator", "gen_fuel_rate", 28), 1),
             "gen_rpm": round(_val(readings, "generator", "gen_rpm", 1500), 0),
             "gen_temp": round(_val(readings, "generator", "gen_temp", 82), 1),
@@ -256,7 +257,8 @@ def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts
     Only the tick calls this (via select_snapshot), so alert state advances once per tick."""
     alerts, active_alerts = ALERTS.evaluate(sid, sensors, ts_ms)
     dependency_alerts = analyze_dependency_cascade(alerts, sid)
-    if any(a["level"] == "critical" for a in active_alerts) or any(d["severity"] == "critical" for d in dependency_alerts):
+    if (any(a["level"] == "critical" for a in active_alerts)
+            or any(d["severity"] == "critical" for d in dependency_alerts)):
         health = "critical"
     elif active_alerts or dependency_alerts:
         health = "warning"
@@ -510,20 +512,20 @@ def get_station_state(station_id: str):
 class SensorValue(BaseModel):
     value: float = Field(allow_inf_nan=False)
     unit: str = Field("", max_length=16)
-    sourceType: Optional[str] = Field(None, max_length=32)
+    sourceType: str | None = Field(None, max_length=32)
 
 
 class SensorBatch(BaseModel):
     """Superset of the legacy Java SensorBatchDTO (new fields are optional)."""
     stationId: str = Field(max_length=32)
-    timestamp: Optional[int] = None
-    readings: Dict[str, Dict[str, SensorValue]]
-    eventTimeline: Optional[List[Dict[str, Any]]] = None
-    activePatterns: Optional[List[str]] = None
-    mode: Optional[str] = Field(None, max_length=32)
-    activeScenario: Optional[str] = Field(None, max_length=64)
-    injectedSensors: Optional[List[str]] = None
-    weatherSource: Optional[str] = Field(None, max_length=200)
+    timestamp: int | None = None
+    readings: dict[str, dict[str, SensorValue]]
+    eventTimeline: list[dict[str, Any]] | None = None
+    activePatterns: list[str] | None = None
+    mode: str | None = Field(None, max_length=32)
+    activeScenario: str | None = Field(None, max_length=64)
+    injectedSensors: list[str] | None = None
+    weatherSource: str | None = Field(None, max_length=200)
 
     @field_validator("readings")
     @classmethod
@@ -667,7 +669,7 @@ def get_ncpor_live(sid: str = Depends(station_param)):
     }
 
 @app.post("/api/ncpor/ingest")
-def trigger_ncpor_ingestion(sid: Optional[str] = Depends(optional_station_param)):
+def trigger_ncpor_ingestion(sid: str | None = Depends(optional_station_param)):
     results = {}
     if sid:
         results[sid] = ingest_live_station(sid)
@@ -783,14 +785,14 @@ def run_what_if_simulation(req: WhatIfRequest):
     gen = base["sensors"]["generator"]
     heat = base["sensors"]["heating"]
     comms = base["sensors"]["commsMast"]
-    
+
     sim_weather = dict(weather)
     sim_gen = dict(gen)
     sim_heat = dict(heat)
     sim_comms = dict(comms)
     impacts = []
     affected_subsystems = []
-    
+
     if req.scenarioId == "extreme_cold":
         temp_drop = 20.0 * req.intensity
         sim_weather["env_temp"] -= temp_drop
@@ -800,12 +802,14 @@ def run_what_if_simulation(req: WhatIfRequest):
         sim_gen["gen_temp"] += 6.5
         sim_heat["heat_a_flow"] += 12.0 * req.intensity
         sim_heat["heat_a_temp"] = max(55.0, sim_heat["heat_a_temp"] - 6.0)
-        
-        impacts.append(f"Outside temperature drops to {sim_weather['env_temp']:.1f}°C ({temp_drop:.1f}°C below current NCPOR observation).")
-        impacts.append(f"Heating circuit load increases by +{power_spike:.1f} kW (+{power_spike/max(1, gen['gen_power'])*100:.0f}% total demand).")
+
+        impacts.append(f"Outside temperature drops to {sim_weather['env_temp']:.1f}°C "
+                       f"({temp_drop:.1f}°C below current NCPOR observation).")
+        impacts.append(f"Heating circuit load increases by +{power_spike:.1f} kW "
+                       f"(+{power_spike/max(1, gen['gen_power'])*100:.0f}% total demand).")
         impacts.append(f"Fuel consumption rises by +{power_spike * 0.18 * 24:.0f} Liters/day.")
         impacts.append("Trace heating on perimeter greywater discharge pipes running at 100% capacity.")
-        
+
         affected_subsystems = ["Primary Heating Circuit", "Power Generation", "Fuel Logistics", "Water Utility"]
         risk_score = min(95, int(65 + 15 * req.intensity))
         risk_level = "critical" if risk_score > 75 else "warning"
@@ -817,83 +821,96 @@ def run_what_if_simulation(req: WhatIfRequest):
         sim_weather["env_temp"] -= 8.0 * req.intensity
         sim_comms["comms_signal"] = -92.0
         sim_comms["comms_bandwidth"] = 0.4
-        
-        impacts.append(f"Sustained wind accelerates to {sim_weather['env_wind']:.0f} km/h ({kmh_to_ms(sim_weather['env_wind']):.1f} m/s gale force).")
+
+        impacts.append(f"Sustained wind accelerates to {sim_weather['env_wind']:.0f} km/h "
+                       f"({kmh_to_ms(sim_weather['env_wind']):.1f} m/s gale force).")
         impacts.append("Building aerodynamic buffeting doubles thermal convection loss across unshielded facades.")
         impacts.append("Satellite dish azimuth drives automatically locked in stow position to prevent gimbal shear.")
         impacts.append("Life-line secured transit corridors mandated between living module and generator block.")
-        
+
         affected_subsystems = ["Communications Tower", "Outdoor Structural Safety", "HVAC Air Intakes", "Helipad"]
         risk_score = min(98, int(72 + 16 * req.intensity))
         risk_level = "critical"
-        action = "Enforce Station Condition Red lockdown, stow steerable antenna dishes, and switch primary communications to Iridium SBD backup."
+        action = ("Enforce Station Condition Red lockdown, stow steerable antenna dishes, and switch primary "
+                  "communications to Iridium SBD backup.")
 
     elif req.scenarioId == "gen_failure":
         sim_gen["gen_power"] = 0.0
         sim_gen["gen_rpm"] = 0.0
         sim_gen["gen_fuel_rate"] = 0.0
         sim_gen["gen_temp"] = 32.0
-        
+
         impacts.append("Primary Volvo Penta Diesel Genset #1 tripped offline (0 kW output, 0 RPM).")
-        impacts.append("Automatic Static Transfer Switch (STS) transferred critical bus to 120 kWh Station Battery Bank.")
+        impacts.append("Automatic Static Transfer Switch (STS) transferred critical bus to 120 kWh Station Battery "
+                        "Bank.")
         impacts.append("Battery autonomy calculated at 3.8 hours under essential load profile (18 kW).")
         impacts.append("HVAC circulation pumps running on emergency inverter sub-panel.")
-        
+
         affected_subsystems = ["Electrical Power Grid", "Heating Distribution", "Scientific Labs", "Life Support"]
         risk_score = 95
         risk_level = "critical"
-        action = "Execute immediate non-essential load shedding (isolate scientific instruments, garage heaters) and dispatch auto-start sequence for Genset #2."
+        action = ("Execute immediate non-essential load shedding (isolate scientific instruments, garage heaters) and "
+                  "dispatch auto-start sequence for Genset #2.")
 
     elif req.scenarioId == "battery_failure":
         sim_gen["gen_power"] = gen["gen_power"] * 1.15
         sim_gen["gen_fuel_rate"] = gen["gen_fuel_rate"] * 1.18
-        
+
         impacts.append("Station Battery Bank (UPS) disconnected following internal cell thermal runaway fault.")
-        impacts.append("Grid peak-shaving lost; primary generator operating without electrical buffer against inductive transient spikes.")
+        impacts.append("Grid peak-shaving lost; primary generator operating without electrical buffer against "
+                        "inductive transient spikes.")
         impacts.append("Emergency transition time in the event of generator trip reduced from 4 hours to 0 seconds.")
-        
+
         affected_subsystems = ["UPS Power Buffer", "DC Distribution Bus", "Instrumentation Protection"]
         risk_score = 82
         risk_level = "critical"
-        action = "Synchronize auxiliary Genset #2 in hot standby mode to eliminate single-point-of-failure risk on the primary grid."
+        action = ("Synchronize auxiliary Genset #2 in hot standby mode to eliminate single-point-of-failure risk on the"
+                  " primary grid.")
 
     elif req.scenarioId == "fuel_leak":
         extra_burn = 16.0 * req.intensity
         sim_gen["gen_fuel_rate"] += extra_burn
-        
+
         impacts.append(f"Abnormal fuel flow detected in feeder header (+{extra_burn:.1f} L/hr unmetered loss).")
         impacts.append("Estimated fuel supply longevity reduced from 180 days to 58 days if unaddressed.")
         impacts.append("Combustible vapor sensors in fuel trench reporting elevated hydrocarbon ppm.")
-        
+
         affected_subsystems = ["Fuel Storage Manifold", "Generator Supply Line", "Environmental Containment"]
         risk_score = min(92, int(70 + 15 * req.intensity))
         risk_level = "critical"
-        action = "Actuate solenoid isolation valve SV-04 to isolate Main Fuel Line Trench and switch generator feed to Day Tank #2."
+        action = ("Actuate solenoid isolation valve SV-04 to isolate Main Fuel Line Trench and switch generator feed to"
+                  " Day Tank #2.")
 
     elif req.scenarioId == "comms_outage":
         sim_comms["comms_signal"] = -120.0
         sim_comms["comms_bandwidth"] = 0.0
         sim_comms["comms_uptime"] = 0.0
-        
+
         impacts.append("Primary Geostationary VSAT uplink lost (Geomagnetic solar storm / RF transponder loss).")
-        impacts.append("Mission Control high-bandwidth telemetry stream disconnected; station operating in autonomous edge mode.")
-        impacts.append("Autonomous PLC edge controllers executing fail-safe thermal and power governing routines locally.")
-        
+        impacts.append("Mission Control high-bandwidth telemetry stream disconnected; station operating in autonomous "
+                        "edge mode.")
+        impacts.append("Autonomous PLC edge controllers executing fail-safe thermal and power governing routines "
+                        "locally.")
+
         affected_subsystems = ["Satellite Comms", "Remote Telemetry Uplink", "Science Data Relay"]
         risk_score = 70
         risk_level = "warning"
-        action = "Engage Iridium Short Burst Data (SBD) emergency low-bandwidth transceiver and verify local autonomous edge controllers."
+        action = ("Engage Iridium Short Burst Data (SBD) emergency low-bandwidth transceiver and verify local "
+                  "autonomous edge controllers.")
 
     elif req.scenarioId == "resupply_delay":
         days_delay = int(60 * req.intensity)
-        impacts.append(f"MV Vasiliy Golovnin expedition arrival delayed by {days_delay} days due to dense fast-ice pack in Prydz Bay.")
+        impacts.append(f"MV Vasiliy Golovnin expedition arrival delayed by {days_delay} days "
+                       f"due to dense fast-ice pack in Prydz Bay.")
         impacts.append("Station wintering reserve margin compressed from 240 days to nominal winter length.")
-        impacts.append("Mandatory conservation protocol: thermal setpoint reduced by -1.5°C to save ~14% monthly diesel consumption.")
-        
+        impacts.append("Mandatory conservation protocol: thermal setpoint reduced by -1.5°C to save ~14% monthly "
+                        "diesel consumption.")
+
         affected_subsystems = ["Fuel Autonomy", "Food Rations", "Spare Parts Reserve"]
         risk_score = 65
         risk_level = "warning"
-        action = "Enact Level-2 Fuel & Rations Conservation: lower indoor corridor temperature to 19°C and optimize generator load scheduling."
+        action = ("Enact Level-2 Fuel & Rations Conservation: lower indoor corridor temperature to 19°C and optimize "
+                  "generator load scheduling.")
 
     else:
         impacts.append("Baseline nominal operating envelope.")
@@ -930,7 +947,8 @@ def run_what_if_simulation(req: WhatIfRequest):
             "level": risk_level,
             "recommendedAction": action
         },
-        "provenance": f"Calculated by Antarctic Digital Twin Causal Simulation Engine on {station_id.upper()} NCPOR AWS baseline"
+        "provenance": ("Calculated by Antarctic Digital Twin Causal Simulation Engine on "
+                       f"{station_id.upper()} NCPOR AWS baseline")
     }
 
 # ═══════════════════════════════════════════════════════════════
@@ -957,8 +975,8 @@ def acknowledge_alert(alert_id: str, req: AcknowledgeRequest):
         raise HTTPException(status_code=422, detail=["alert id too long"])
     try:
         row = ALERTS.acknowledge(alert_id, req.acknowledgedBy)
-    except AlertNotFound:
-        raise HTTPException(status_code=404, detail=f"Unknown alert '{alert_id}'")
+    except AlertNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown alert '{alert_id}'") from exc
     return {"status": "success", "alertId": alert_id, "acknowledged": True,
             "acknowledgedBy": row["acknowledged_by"], "acknowledgedAt": row["acknowledged_at"],
             "alertStatus": row["status"], "alreadyAcknowledged": row["alreadyAcknowledged"]}
@@ -1013,7 +1031,7 @@ class InventoryUpdateRequest(BaseModel):
     stationId: StationIdStr
     itemId: Identifier
     current: float = Field(ge=0, le=1e9, allow_inf_nan=False)
-    dailyConsumption: Optional[float] = Field(None, ge=0, le=1e7, allow_inf_nan=False)
+    dailyConsumption: float | None = Field(None, ge=0, le=1e7, allow_inf_nan=False)
     updatedBy: OperatorName
 
 
@@ -1050,12 +1068,13 @@ def update_inventory_item(req: InventoryUpdateRequest):
 
 @app.get("/api/logistics/history")
 def get_logistics_history(sid: str = Depends(station_param),
-                          itemId: Optional[str] = Query(None, max_length=64),
+                          itemId: str | None = Query(None, max_length=64),
                           limit: int = Query(100, ge=1, le=500)):
     with db.connect() as conn:
         if itemId:
             rows = conn.execute(
-                "SELECT * FROM logistics_audit WHERE station_id = ? AND item_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+                "SELECT * FROM logistics_audit WHERE station_id = ? AND item_id = ? "
+                "ORDER BY updated_at DESC, id DESC LIMIT ?",
                 (sid, itemId, limit)).fetchall()
         else:
             rows = conn.execute(
@@ -1078,7 +1097,7 @@ class DispatchCommandRequest(BaseModel):
     stationId: StationIdStr
     subsystem: str = Field(min_length=1, max_length=40)
     command: Identifier
-    parameters: Optional[Dict[str, Union[str, float, int, bool]]] = Field(None, max_length=10)
+    parameters: dict[str, str | float | int | bool] | None = Field(None, max_length=10)
     issuedBy: OperatorName
 
 
@@ -1111,7 +1130,7 @@ def dispatch_remote_command(req: DispatchCommandRequest):
     }
 
 
-def promote_remote_commands(now_ms: Optional[int] = None) -> int:
+def promote_remote_commands(now_ms: int | None = None) -> int:
     """Lifecycle step run by the tick: queued (simulated) → acknowledged (simulated)
     after REMOTE_ACK_DELAY_S. Never 'executed' — there is no station link."""
     now_ms = now_ms or int(time.time() * 1000)
@@ -1176,10 +1195,14 @@ def get_admin_config(sid: str = Depends(station_param)):
         # HARDCODED-DEMO: example roles only — there is no authentication or RBAC yet (P1-8).
         "usersProvenance": "HARDCODED-DEMO (no authentication / RBAC implemented)",
         "users": [
-            {"id": "usr-01", "name": "Station Commander", "role": "Commander", "station": "All", "access": "Full Control"},
-            {"id": "usr-02", "name": "Chief Electrical Engineer", "role": "Engineer", "station": "Maitri", "access": "C&C Dispatch"},
-            {"id": "usr-03", "name": "Scientific Observer", "role": "Observer", "station": "Bharati", "access": "Read-Only Analytics"},
-            {"id": "usr-04", "name": "Logistics Officer", "role": "Logistics", "station": "All", "access": "Inventory Management"}
+            {"id": "usr-01", "name": "Station Commander", "role": "Commander",
+             "station": "All", "access": "Full Control"},
+            {"id": "usr-02", "name": "Chief Electrical Engineer", "role": "Engineer",
+             "station": "Maitri", "access": "C&C Dispatch"},
+            {"id": "usr-03", "name": "Scientific Observer", "role": "Observer",
+             "station": "Bharati", "access": "Read-Only Analytics"},
+            {"id": "usr-04", "name": "Logistics Officer", "role": "Logistics",
+             "station": "All", "access": "Inventory Management"}
         ],
         "stationId": sid,
         # Effective thresholds used by the alert engine for this station.
@@ -1196,20 +1219,20 @@ def get_admin_config(sid: str = Depends(station_param)):
 
 class ThresholdLevels(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    warning: Optional[float] = Field(None, allow_inf_nan=False)
-    critical: Optional[float] = Field(None, allow_inf_nan=False)
+    warning: float | None = Field(None, allow_inf_nan=False)
+    critical: float | None = Field(None, allow_inf_nan=False)
 
 
 class SensorThresholdUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    low: Optional[ThresholdLevels] = None
-    high: Optional[ThresholdLevels] = None
+    low: ThresholdLevels | None = None
+    high: ThresholdLevels | None = None
 
 
 class ConfigUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stationId: StationIdStr                      # a station id, or "*" for every station
-    thresholds: Dict[str, SensorThresholdUpdate] = Field(min_length=1, max_length=40)
+    thresholds: dict[str, SensorThresholdUpdate] = Field(min_length=1, max_length=40)
     updatedBy: OperatorName
 
 
@@ -1242,7 +1265,7 @@ def update_admin_config(req: ConfigUpdateRequest):
 class ThresholdResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stationId: StationIdStr
-    sensor: Optional[Identifier] = None
+    sensor: Identifier | None = None
     updatedBy: OperatorName
 
 
@@ -1269,16 +1292,22 @@ def _sim_request(method: str, path: str, *, params=None, json_body=None, timeout
     url = f"{app_config.SIMULATOR_URL}{path}"
     try:
         r = requests.request(method, url, params=params, json=json_body, timeout=timeout)
-    except requests.Timeout:
-        raise HTTPException(status_code=503, detail=f"Simulator offline: no response from {app_config.SIMULATOR_URL} within {timeout:g} s")
+    except requests.Timeout as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Simulator offline: no response from {app_config.SIMULATOR_URL} within {timeout:g} s",
+        ) from exc
     except requests.RequestException as exc:
-        raise HTTPException(status_code=503, detail=f"Simulator offline: cannot reach {app_config.SIMULATOR_URL} ({type(exc).__name__})")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Simulator offline: cannot reach {app_config.SIMULATOR_URL} ({type(exc).__name__})",
+        ) from exc
     if r.status_code >= 500:
         raise HTTPException(status_code=503, detail=f"Simulator error: HTTP {r.status_code} from {path}")
     try:
         data = r.json()
-    except ValueError:
-        raise HTTPException(status_code=502, detail=f"Simulator returned invalid JSON from {path}")
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Simulator returned invalid JSON from {path}") from exc
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=data)
     return data
@@ -1326,7 +1355,7 @@ def sim_reset(sid: str = Depends(station_param)):
 class ModeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["reanalysis", "simulation"] = "reanalysis"
-    date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    date: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     speed: float = Field(120.0, ge=1.0, le=3600.0, allow_inf_nan=False)
 
     @field_validator("date")
@@ -1348,8 +1377,8 @@ def sim_mode(req: ModeRequest):
 
 class ExplainRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    station: Optional[StationIdStr] = None
-    stationId: Optional[StationIdStr] = None
+    station: StationIdStr | None = None
+    stationId: StationIdStr | None = None
     question: str = Field("status", min_length=1, max_length=32, pattern=r"^[A-Za-z_]+$")
     freeText: str = Field("", max_length=2000)
 
@@ -1385,7 +1414,8 @@ def get_ai_explanation(req: ExplainRequest):
         log.info("Explain: decision unavailable (%s)", exc.detail)
         decision = None
     out = offline_explanation(decision, req.question, req.freeText, sid, store.get_published(sid))
-    out.update({"station": sid, "reason": reason, "sources": ["decision_engine"] if decision else ["telemetry_snapshot"]})
+    out.update({"station": sid, "reason": reason,
+                "sources": ["decision_engine"] if decision else ["telemetry_snapshot"]})
     return out
 
 if __name__ == "__main__":

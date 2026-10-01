@@ -3,10 +3,9 @@
 import sqlite3
 
 import pytest
-
 from conftest import write_cache
-import units
 
+import units
 
 # ── helpers ───────────────────────────────────────────────────
 
@@ -56,7 +55,7 @@ def _ingest(temp_db, tmp_path, monkeypatch, wind_unit, wind_value):
 def test_era5_ingest_stores_ms(temp_db, tmp_path, monkeypatch, wind_unit, raw, expected_ms):
     rows = _ingest(temp_db, tmp_path, monkeypatch, wind_unit, raw)
     assert rows, "no wind rows ingested"
-    for value, unit, source, sensor, quality, dataset in rows:
+    for value, unit, _source, _sensor, _quality, dataset in rows:
         assert value == pytest.approx(expected_ms)
         assert unit == "m/s"
         assert dataset == "Antarctic-ERA5-Reanalysis"

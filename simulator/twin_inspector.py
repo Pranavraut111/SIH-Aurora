@@ -34,8 +34,10 @@ def model_assumptions(params: dict) -> dict:
         "generator": {
             "max_power_kW": {"value": g["max_power_kW"], "unit": "kW", "basis": "estimated"},
             "nominal_rpm": {"value": g["nominal_rpm"], "unit": "rpm", "basis": "documented"},
-            "fuel_coeff_a": {"value": g["fuel_coeff_a"], "unit": "L/hr", "basis": "assumed", "note": "Willans line intercept"},
-            "fuel_coeff_b": {"value": g["fuel_coeff_b"], "unit": "L/kWh", "basis": "assumed", "note": "Willans line slope"},
+            "fuel_coeff_a": {"value": g["fuel_coeff_a"], "unit": "L/hr", "basis": "assumed",
+                             "note": "Willans line intercept"},
+            "fuel_coeff_b": {"value": g["fuel_coeff_b"], "unit": "L/kWh", "basis": "assumed",
+                             "note": "Willans line slope"},
             "cooling_efficiency": {"value": g["cooling_efficiency"], "unit": "ratio", "basis": "assumed"},
         },
     }

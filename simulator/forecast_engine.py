@@ -21,21 +21,27 @@ Weather provenance:
     - Labeled as: 🟠 FORECAST
 """
 
-import os, json, time, copy, math, random, logging
-import requests
-from datetime import datetime, timedelta, timezone
+import json
+import logging
+import os
 
 # Local imports
 import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+import requests
+
 sys.path.insert(0, os.path.dirname(__file__))
-from physics_model import StationPhysicsModel
+# These sibling modules are only importable once simulator/ is on sys.path (hence E402).
+import station_config  # noqa: E402
+from config import WEATHER_CACHE_DIR as CACHE_DIR  # noqa: E402
+from config import forecast_cache_path  # noqa: E402
+from physics_model import StationPhysicsModel  # noqa: E402
+from units import cache_wind_unit, wind_factor_to_kmh  # noqa: E402
 
 # ── Station coordinates — from station_config.json (single source of truth) ──
-import station_config  # noqa: E402
 STATION_COORDS = {sid: station_config.coords(sid) for sid in station_config.station_ids()}
-
-from config import WEATHER_CACHE_DIR as CACHE_DIR, forecast_cache_path
-from units import cache_wind_unit, wind_factor_to_kmh
 
 log = logging.getLogger("aurora.forecast")
 
@@ -121,10 +127,12 @@ class WeatherForecast:
                 self._offline_logged = True
                 if self.data:
                     age_h = (time.time() - (self.fetch_time or 0)) / 3600
-                    log.warning("[%s] Forecast refresh failed (%s); using cached forecast (%.1f h old) until the network returns",
+                    log.warning("[%s] Forecast refresh failed (%s); using cached forecast (%.1f h old) until the "
+                                "network returns",
                                 self.station_id, e, age_h)
                 else:
-                    log.warning("[%s] Forecast unavailable (%s) and no cache; forecasts disabled until the network returns",
+                    log.warning("[%s] Forecast unavailable (%s) and no cache; forecasts disabled until the network "
+                                "returns",
                                 self.station_id, e)
             return False
 
@@ -351,8 +359,10 @@ class ForecastEngine:
                 "weatherType": "forecast",
                 "alignment": ("live forecast, not aligned with replay date"
                               if self.replay_mode else "live forecast, aligned with current time"),
-                "forecastFetchedAt": (datetime.fromtimestamp(self.weather_forecast.fetch_time, tz=timezone.utc).isoformat()
-                                      if self.weather_forecast.fetch_time else None),
+                "forecastFetchedAt": (
+                    datetime.fromtimestamp(self.weather_forecast.fetch_time, tz=timezone.utc).isoformat()
+                    if self.weather_forecast.fetch_time else None
+                ),
                 "physicsModel": "Aurora digital twin forward run",
                 "note": "Predictions assume current equipment condition continues. "
                         "Uncertainty increases with forecast horizon.",
@@ -397,14 +407,14 @@ class ForecastEngine:
             if load_delta > 5:
                 factors.append({
                     "type": "load_increase",
-                    "description": f"Generator load: {load_now_pred:.1f}% → {load_future:.1f}% (+{load_delta:.1f} percentage points)",
+                    "description": f"Generator load: {load_now_pred:.1f}% → {load_future:.1f}% "
+                                   f"(+{load_delta:.1f} percentage points)",
                     "severity": min(1.0, load_delta / 20),
                     "impact": "Higher fuel consumption and generator temperature",
                 })
 
         # Generator temperature trend
         if len(predictions) >= 2:
-            temp_now = predictions[0]["predicted"]["gen_temp_C"]
             temp_future = predictions[-1]["predicted"]["gen_temp_C"]
             if temp_future > 85:
                 factors.append({
@@ -521,7 +531,7 @@ if __name__ == "__main__":
 
             result = engine.predict(pm, weather)
 
-            print(f"\n  Predictions:")
+            print("\n  Predictions:")
             for p in result.get("predictions", []):
                 pred = p["predicted"]
                 w = p["weather"]
@@ -535,7 +545,7 @@ if __name__ == "__main__":
             print(f"\n  Risk level: {risk.get('level', '?')}")
             for f in risk.get("factors", []):
                 print(f"    [{f['type']}] {f['description']}")
-            print(f"\n  Recommendation:")
+            print("\n  Recommendation:")
             print(f"    {risk.get('recommendation', '—')}")
         else:
             print("  ⚠ Running without real forecast — using synthetic test")
@@ -546,7 +556,7 @@ if __name__ == "__main__":
                 readings = pm.compute(weather, dt_seconds=120)
                 meta = readings.pop("_meta", {})
 
-            print(f"\n  Synthetic forecast (temperature dropping):")
+            print("\n  Synthetic forecast (temperature dropping):")
             for delta_h, delta_t in [(0.5, -2), (1, -4), (2, -8), (4, -12), (6, -15)]:
                 fw = dict(weather)
                 fw["env_temp"] += delta_t

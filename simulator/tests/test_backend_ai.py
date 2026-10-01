@@ -11,7 +11,8 @@ DECISION = {
     "event": {"type": "generator_output_loss", "description": "Possible generator output loss"},
     "risk": {"level": "high", "triggered_rules": [
         {"id": "R005", "name": "Anomaly without load change", "rationale": "Equipment anomaly under stable load."}]},
-    "evidence": [{"type": "anomaly_evidence", "sensor": "gen_rpm", "value": 1230.6, "expected": 1498.0, "deviation": "-53.5σ"}],
+    "evidence": [{"type": "anomaly_evidence", "sensor": "gen_rpm", "value": 1230.6,
+                  "expected": 1498.0, "deviation": "-53.5σ"}],
     "recommendation": {"action": "Check generator output", "monitoring": "Every 5 min", "escalation": "Start backup",
                        "action_type": "operator_review", "confidence": "high"},
     "currentState": {"env_temp": -12.0, "gen_load_pct": 34.0, "gen_temp_C": 71.0, "fuel_rate_Lhr": 15.0},

@@ -10,28 +10,31 @@ Each station runs independently. Manual injection works in both modes.
 Internal Flask control API on SIM_PORT (default 8001); the browser never calls it.
 """
 
-import time
-import math
-import random
-import requests
 import json
-import sys
+import logging
+import math
 import os
+import random
 import threading
+import time
 from datetime import datetime
-from flask import Flask, jsonify, request as flask_request
+
+import requests
+from flask import Flask, jsonify
+from flask import request as flask_request
 from flask_cors import CORS
 
-# Import new Phase 1/2 modules
-from weather_data import WeatherDataLayer
-from physics_model import StationPhysicsModel
-import station_config
 import config as app_config  # aliased: 'config' is a loop variable in this module
-import logging
-from weather_data import sim_hours_per_real_minute
+import station_config
+from config import ALLOWED_ORIGINS, HOST
+from decision_scheduler import DecisionScheduler
+from physics_model import StationPhysicsModel
+from twin_inspector import build_twin_inspector
+
+# Import new Phase 1/2 modules
+from weather_data import WeatherDataLayer, sim_hours_per_real_minute
 
 log = logging.getLogger("aurora.simulator")
-from config import ALLOWED_ORIGINS, HOST
 
 # Phase 3: Anomaly detection
 try:
@@ -56,8 +59,6 @@ try:
 except ImportError:
     DECISION_AVAILABLE = False
     logging.getLogger("aurora.simulator").warning("Decision engine unavailable (import failed)", exc_info=True)
-from decision_scheduler import DecisionScheduler
-from twin_inspector import build_twin_inspector
 
 # Phase 6: Genuine Chronos forecaster (optional — requires torch + chronos-forecasting).
 # Only "available" if torch AND chronos actually import (B11).
@@ -66,7 +67,8 @@ try:
     CHRONOS_AVAILABLE = chronos_available()
 except ImportError:
     CHRONOS_AVAILABLE = False
-    logging.getLogger("aurora.simulator").info("Chronos forecaster module not importable; Chronos disabled", exc_info=True)
+    logging.getLogger("aurora.simulator").info(
+        "Chronos forecaster module not importable; Chronos disabled", exc_info=True)
 if CHRONOS_AVAILABLE:
     log.info("Chronos available (torch + chronos-forecasting installed)")
 else:
@@ -340,7 +342,7 @@ class StationSimulator:
                 self.weather_available = self.weather_layer.fetch_and_cache()
                 if self.weather_available:
                     self.physics_model = StationPhysicsModel(station_id)
-                    self.log_event("mode", f"ERA5 reanalysis mode — physics digital twin active")
+                    self.log_event("mode", "ERA5 reanalysis mode — physics digital twin active")
                 else:
                     log.warning(f"[{station_id}] Weather data unavailable, falling back to simulation")
                     self.mode = "simulation"
@@ -779,8 +781,8 @@ def inject_single():
     try:
         target = float(data.get("target", 0))
         duration = float(data.get("duration", 20))
-    except (TypeError, ValueError):
-        raise RequestError(422, "target and duration must be numbers")
+    except (TypeError, ValueError) as exc:
+        raise RequestError(422, "target and duration must be numbers") from exc
     if not (math.isfinite(target) and 1 <= duration <= 600):
         raise RequestError(422, "target must be finite and duration 1–600 s")
     with stations_lock:
@@ -917,7 +919,7 @@ def chronos_status():
         })
 
     # Get the shared forecaster from any station
-    for sid, sim in stations.items():
+    for sim in stations.values():
         forecaster = getattr(sim, '_chronos_forecaster', None)
         if forecaster:
             return jsonify(forecaster.status())
@@ -936,12 +938,12 @@ def set_mode():
     if date is not None:
         try:
             datetime.strptime(str(date), "%Y-%m-%d")
-        except ValueError:
-            raise RequestError(422, "date must be YYYY-MM-DD")
+        except ValueError as exc:
+            raise RequestError(422, "date must be YYYY-MM-DD") from exc
     try:
         speed = float(data.get("speed", 120))
-    except (TypeError, ValueError):
-        raise RequestError(422, "speed must be a number")
+    except (TypeError, ValueError) as exc:
+        raise RequestError(422, "speed must be a number") from exc
     if not (1.0 <= speed <= 3600.0):
         raise RequestError(422, "speed must be between 1 and 3600")
 
@@ -1023,27 +1025,37 @@ def _json_body() -> dict:
     data = flask_request.get_json(silent=True)
     return data if isinstance(data, dict) else {}
 
-AURORA_SYSTEM_PROMPT = """You are Aurora, the AI operations assistant for Indian Antarctic Research Stations (Maitri and Bharati), operated by NCPOR under the Ministry of Earth Sciences.
-
-CRITICAL RULES:
-1. You ONLY describe facts provided in the DECISION_DATA JSON. NEVER invent sensor values, predictions, or risk assessments.
-2. Your job is to EXPLAIN the decision engine's output in clear language — not to diagnose equipment yourself.
-3. Every claim you make must trace to a specific field in the provided data.
-4. Use Celsius, kW, km/h, kL, L/hr as units. Use precise numbers from the data.
-5. Distinguish provenance: say "the physics model predicts" not "I predict". Say "the anomaly detector indicates" not "I detected".
-6. Keep responses concise: 3-5 sentences for status, up to 8 for detailed explanations.
-7. If asked "why", explain the evidence and triggered risk rules from the data.
-8. If asked "what should I do", read the recommendation from the data — do not generate your own.
-9. You can respond in Hindi, English, or mixed Hindi-English if the user asks in Hindi.
-10. Always end with the confidence level and action type from the recommendation.
-11. Candidate causes are POSSIBLE explanations, not confirmed failures. Use words like "possible", "candidate", "indicated".
-12. All degradation assessments are against synthetic prototype signatures — do not claim production-validated diagnosis."""
+AURORA_SYSTEM_PROMPT = (
+    "You are Aurora, the AI operations assistant for Indian Antarctic Research Stations (Maitri and Bharati), "
+    "operated by NCPOR under the Ministry of Earth Sciences.\n"
+    "\n"
+    "CRITICAL RULES:\n"
+    "1. You ONLY describe facts provided in the DECISION_DATA JSON. NEVER invent sensor values, predictions, or risk "
+    "assessments.\n"
+    "2. Your job is to EXPLAIN the decision engine's output in clear language — not to diagnose equipment yourself.\n"
+    "3. Every claim you make must trace to a specific field in the provided data.\n"
+    "4. Use Celsius, kW, km/h, kL, L/hr as units. Use precise numbers from the data.\n"
+    "5. Distinguish provenance: say \"the physics model predicts\" not \"I predict\". Say \"the anomaly detector "
+    "indicates\" not \"I detected\".\n"
+    "6. Keep responses concise: 3-5 sentences for status, up to 8 for detailed explanations.\n"
+    "7. If asked \"why\", explain the evidence and triggered risk rules from the data.\n"
+    "8. If asked \"what should I do\", read the recommendation from the data — do not generate your own.\n"
+    "9. You can respond in Hindi, English, or mixed Hindi-English if the user asks in Hindi.\n"
+    "10. Always end with the confidence level and action type from the recommendation.\n"
+    '11. Candidate causes are POSSIBLE explanations, not confirmed failures. Use words like "possible", '
+    '"candidate", '
+    "\"indicated\".\n"
+    "12. All degradation assessments are against synthetic prototype signatures — do not claim production-validated "
+    "diagnosis."
+)
 
 QUESTION_PROMPTS = {
     "status": "Provide a brief operational status summary for this station based on the decision data.",
     "why": "Explain WHY the risk level is what it is. Reference the specific triggered rules and evidence.",
-    "action": "What should the operator do? Read the recommendation from the decision data. Do not generate your own actions.",
-    "detail": "Provide a detailed explanation of the current situation, including evidence, forecast, impact, and recommendation.",
+    "action": "What should the operator do? Read the recommendation from the decision data. Do not generate your own "
+              "actions.",
+    "detail": "Provide a detailed explanation of the current situation, including evidence, forecast, impact, and "
+              "recommendation.",
 }
 
 
@@ -1235,7 +1247,8 @@ def main():
     log.info(f"Mode: {DEFAULT_MODE.upper()}")
     if DEFAULT_DATE:
         log.info(f"Replay date: {DEFAULT_DATE} (source: {app_config.AURORA_DATE_SOURCE})")
-    log.info(f"Speed: {DEFAULT_SPEED}x ({sim_hours_per_real_minute(DEFAULT_SPEED):.1f} simulated hours per real minute)")
+    log.info(f"Speed: {DEFAULT_SPEED}x "
+             f"({sim_hours_per_real_minute(DEFAULT_SPEED):.1f} simulated hours per real minute)")
     log.info(f"Stations: {', '.join(STATION_PROFILES.keys())}")
     log.info(f"Backend: {BACKEND_URL}")
     log.info(f"Control API: http://{HOST}:{CONTROL_PORT}  (CORS: {', '.join(ALLOWED_ORIGINS)})")

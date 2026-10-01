@@ -478,7 +478,7 @@ def collect_normal(station_id: str, date: str, seed: int):
     rng = np.random.default_rng(seed)
     fe, conv = FeatureEngine(station_id), ConvergenceTracker(station_id)
     X, n_warmup = [], 0
-    for t, weather, readings, meta, pm in replay_states(station_id, date, seed=seed):
+    for _t, _weather, readings, meta, pm in replay_states(station_id, date, seed=seed):
         if not conv.update(pm, meta):
             n_warmup += 1
             continue
@@ -540,7 +540,7 @@ def main(argv=None):
               f"({len(md['windows'])} windows), threshold={detectors[sid].threshold:.3f} "
               f"in {time.time() - t0:.1f}s")
 
-    from evaluate_anomaly import evaluate, criteria_pass, format_report
+    from evaluate_anomaly import criteria_pass, evaluate, format_report
     metrics = evaluate(detectors)
     print(format_report(metrics))
     if args.metrics_out:

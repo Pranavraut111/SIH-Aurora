@@ -14,11 +14,9 @@ The causal chain:
   Generator load → Fuel consumption → Generator temperature
 """
 
-import math
 import random
 
 import station_config
-
 
 # ═══════════════════════════════════════════════════════════════
 #  Station Physical Parameters

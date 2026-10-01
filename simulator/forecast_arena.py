@@ -24,20 +24,26 @@ IMPORTANT NOTES:
     similar patterns from history alone.
 """
 
-import sys, os, math, json, time, copy, collections
+import math
+import os
+import sys
+import time
+
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from config import FORECAST_ARENA_REPORT_PATH
 from physics_model import StationPhysicsModel
 from weather_data import WeatherDataLayer
-from config import FORECAST_ARENA_REPORT_PATH
 
 # Try to import Chronos
 try:
-    from chronos_forecaster import (
-        GenuineChronosForecaster, FORECAST_SIGNALS,
-        MIN_CONTEXT_LENGTH, PREDICTION_LENGTH,
+    from chronos_forecaster import (  # noqa: F401  — imported to probe availability + for the Chronos path
+        FORECAST_SIGNALS,
+        MIN_CONTEXT_LENGTH,
+        PREDICTION_LENGTH,
+        GenuineChronosForecaster,
     )
     CHRONOS_OK = True
 except ImportError:
@@ -148,9 +154,9 @@ def run_evaluation(station_id: str) -> dict:
     chronos = None
     if CHRONOS_OK and TORCH_OK:
         chronos = GenuineChronosForecaster()
-        print(f"  ✓ Chronos-Bolt loaded")
+        print("  ✓ Chronos-Bolt loaded")
     else:
-        print(f"  ⚠ Chronos not available — evaluating physics vs baseline only")
+        print("  ⚠ Chronos not available — evaluating physics vs baseline only")
 
     # ── Generate ground truth timeline ────────────────────────
     # Run physics model tick-by-tick, record signals every minute
@@ -194,7 +200,6 @@ def run_evaluation(station_id: str) -> dict:
             # Feed Chronos history
             if chronos:
                 buf = chronos.get_buffer(station_id)
-                now = time.time()
                 for sig in SIGNALS:
                     buf._downsampled[sig].append(minute_signals[sig])
 
@@ -257,7 +262,6 @@ def run_evaluation(station_id: str) -> dict:
 
             for sig in SIGNALS:
                 actual = timeline[target_t][sig]
-                current = timeline[t][sig]
                 # Physics prediction = actual + weather uncertainty noise
                 # Uncertainty grows with horizon (1-4°C weather error propagation)
                 uncertainty_scale = 0.5 + (horizon_min / 1440) * 2.0
@@ -313,7 +317,7 @@ def run_evaluation(station_id: str) -> dict:
         if (eval_idx + 1) % 5 == 0:
             print(f"    ... {eval_idx + 1}/{len(eval_points)} eval points")
 
-    print(f"  ✓ Evaluation complete")
+    print("  ✓ Evaluation complete")
     print(f"  Chronos forecasts run: {chronos_forecasts_run}")
 
     return results
@@ -327,13 +331,13 @@ def mae(predicted, actual):
     if not predicted or not actual:
         return None
     n = min(len(predicted), len(actual))
-    return sum(abs(p - a) for p, a in zip(predicted[:n], actual[:n])) / n
+    return sum(abs(p - a) for p, a in zip(predicted[:n], actual[:n], strict=True)) / n
 
 def rmse(predicted, actual):
     if not predicted or not actual:
         return None
     n = min(len(predicted), len(actual))
-    return math.sqrt(sum((p - a)**2 for p, a in zip(predicted[:n], actual[:n])) / n)
+    return math.sqrt(sum((p - a)**2 for p, a in zip(predicted[:n], actual[:n], strict=True)) / n)
 
 def coverage(p10, p90, actual):
     """Fraction of actuals within p10-p90 interval."""
@@ -347,6 +351,11 @@ def coverage(p10, p90, actual):
 # ═══════════════════════════════════════════════════════════════
 #  Report
 # ═══════════════════════════════════════════════════════════════
+
+def _num(value) -> str:
+    """Metric cell: an em dash when the metric could not be computed."""
+    return f"{value:.2f}" if value is not None else "—"
+
 
 def generate_report(all_results: dict) -> str:
     """Generate markdown report from results."""
@@ -365,7 +374,8 @@ def generate_report(all_results: dict) -> str:
 
         for sig in SIGNALS:
             lines.append(f"\n### Signal: `{sig}`\n")
-            lines.append("| Horizon | Baseline MAE | Physics MAE | Chronos MAE | Baseline RMSE | Physics RMSE | Chronos RMSE | Chronos Coverage |")
+            lines.append("| Horizon | Baseline MAE | Physics MAE | Chronos MAE | Baseline RMSE | Physics RMSE | Chronos"
+                         " RMSE | Chronos Coverage |")
             lines.append("|---------|-------------|-------------|-------------|---------------|--------------|--------------|-----------------|")
 
             for h_name in HORIZONS:
@@ -381,10 +391,8 @@ def generate_report(all_results: dict) -> str:
 
                 ch_cov = coverage(r["chronos_p10"], r["chronos_p90"], r["actual"])
 
-                fmt = lambda v: f"{v:.2f}" if v is not None else "—"
-
-                lines.append(f"| {h_name:>5s} | {fmt(bl_mae):>11s} | {fmt(ph_mae):>11s} | {fmt(ch_mae):>11s} | "
-                             f"{fmt(bl_rmse):>13s} | {fmt(ph_rmse):>12s} | {fmt(ch_rmse):>12s} | "
+                lines.append(f"| {h_name:>5s} | {_num(bl_mae):>11s} | {_num(ph_mae):>11s} | {_num(ch_mae):>11s} | "
+                             f"{_num(bl_rmse):>13s} | {_num(ph_rmse):>12s} | {_num(ch_rmse):>12s} | "
                              f"{(f'{ch_cov*100:.0f}%' if ch_cov is not None else '—'):>15s} |")
 
             # Sample counts
@@ -399,7 +407,7 @@ def generate_report(all_results: dict) -> str:
     lines.append("- **Ground truth**: Physics model output driven by cached ERA5 reanalysis weather")
     lines.append(f"- **Warmup**: {WARMUP_MINUTES} minutes before evaluation starts")
     lines.append(f"- **Evaluation interval**: Every {EVAL_INTERVAL_MINUTES} minutes")
-    lines.append(f"- **Chronos context**: Up to 512 downsampled 1-minute observations")
+    lines.append("- **Chronos context**: Up to 512 downsampled 1-minute observations")
     lines.append("- **Physics forecast**: Cloned physics model run forward with weather perturbation (±1-4°C)")
     lines.append("- **Baseline**: Holt's linear trend method (α=0.3, β=0.1) extrapolated forward\n")
 
@@ -424,10 +432,10 @@ if __name__ == "__main__":
     print("=" * 60)
 
     if CHRONOS_OK and TORCH_OK:
-        print(f"  ✓ Chronos-Bolt available")
+        print("  ✓ Chronos-Bolt available")
     else:
-        print(f"  ⚠ Chronos not available — will compare physics vs baseline only")
-        print(f"  Install: pip install chronos-forecasting torch")
+        print("  ⚠ Chronos not available — will compare physics vs baseline only")
+        print("  Install: pip install chronos-forecasting torch")
 
     all_results = {}
 

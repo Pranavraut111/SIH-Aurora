@@ -6,12 +6,12 @@ import re
 import warnings
 from pathlib import Path
 
+import evaluate_anomaly as ev
 import numpy as np
 import pytest
 
 import anomaly_engine as ae
 import config as app_config
-import evaluate_anomaly as ev
 
 SIM_DIR = Path(__file__).resolve().parents[1]
 STATIONS = ("maitri", "bharati")
@@ -117,7 +117,8 @@ def test_evidence_expected_is_the_physics_prediction(detectors, converged):
     assert r["is_anomaly"] is True
     top = r["evidence"][0]
     assert top["sensor"] == "gen_temp"
-    assert top["expected"] == pytest.approx(pred["generator"]["gen_temp"], abs=0.01)   # not a training mean (old 44 °C bug)
+    # not a training mean (the old 44 °C bug)
+    assert top["expected"] == pytest.approx(pred["generator"]["gen_temp"], abs=0.01)
     assert top["value"] == pytest.approx(obs["generator"]["gen_temp"], abs=0.01)
     assert top["expectedSource"] == "physics model prediction (same tick)"
     assert r["candidateCauses"][0]["cause"] == "cooling_degradation"
@@ -155,7 +156,7 @@ def test_training_and_live_features_identical():
     train_fe = ae.FeatureEngine("skewtest")
     sim_values = {}
     n = 0
-    for t, weather, readings, meta, pm in ae.replay_states("maitri", date, seed=99):
+    for _t, weather, readings, meta, _pm in ae.replay_states("maitri", date, seed=99):
         # training path
         a = ae.features_to_array(train_fe.extract(ae.observed_from_readings(readings), readings))
         # live path — exactly what simulator._tick_reanalysis does
@@ -180,7 +181,7 @@ def test_live_and_training_weather_units_identical(monkeypatch):
     layer.start_time = 1_000_000.0
     for k in (0, 7, 123):
         elapsed_real = k * ae.PHYSICS_TICK_DT_S
-        monkeypatch.setattr(weather_data.time, "time", lambda: 1_000_000.0 + elapsed_real)
+        monkeypatch.setattr(weather_data.time, "time", lambda t=elapsed_real: 1_000_000.0 + t)
         live = layer.get_current_weather()
         train = layer.sample_at(k * ae.PHYSICS_TICK_DT_S * ae.TRAIN_SPEED / 3600.0)
         assert live == train

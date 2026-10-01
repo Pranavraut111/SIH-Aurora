@@ -26,8 +26,10 @@ from the physics model, anomaly detector, and forecast engine into
 structured decisions with provenance.
 """
 
-import sys, os, json
+import json
 import logging
+import os
+import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -378,7 +380,8 @@ class DecisionEngine:
         if forecast_temp_delta < -5:
             impact_statements.append({
                 "system": "heating",
-                "statement": f"Heating demand expected to increase as temperature drops {abs(forecast_temp_delta):.1f}°C",
+                "statement": ("Heating demand expected to increase as temperature drops "
+                              f"{abs(forecast_temp_delta):.1f}°C"),
                 "source": "forecast + dependency_graph",
                 "dependency_chain": ["weather", "heating", "power_demand", "generator"],
             })
@@ -539,7 +542,7 @@ if __name__ == "__main__":
     print(f"{'='*60}")
     print(f"\n  EVENT: {result['event']['description']}")
     print(f"  RISK:  {result['risk']['level'].upper()}")
-    print(f"\n  EVIDENCE:")
+    print("\n  EVIDENCE:")
     for ev in result["evidence"]:
         if ev["type"] == "anomaly_evidence":
             print(f"    {ev['sensor']:22s}: {ev['value']:>8.1f} "
@@ -548,15 +551,15 @@ if __name__ == "__main__":
             print(f"    {ev['horizon']:>8s}: temp={ev.get('predicted_temp', '?'):>6}°C  "
                   f"load={ev['predicted_load']:>5.1f}%  "
                   f"gen={ev['predicted_gen_temp']:>5.1f}°C")
-    print(f"\n  IMPACT:")
+    print("\n  IMPACT:")
     for imp in result["impact"]:
         print(f"    [{imp['system']}] {imp['statement']}")
         print(f"      chain: {' → '.join(imp['dependency_chain'])}")
-    print(f"\n  TRIGGERED RISK RULES:")
+    print("\n  TRIGGERED RISK RULES:")
     for r in result["risk"]["triggered_rules"]:
         print(f"    [{r['id']}] {r['name']} ({r['severity']}, weight={r['weight']})")
         print(f"      {r['rationale']}")
-    print(f"\n  RECOMMENDATION:")
+    print("\n  RECOMMENDATION:")
     rec = result["recommendation"]
     print(f"    Action:     {rec['action']}")
     print(f"    Monitor:    {rec['monitoring']}")

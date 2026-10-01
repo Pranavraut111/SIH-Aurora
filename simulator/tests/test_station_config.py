@@ -38,12 +38,16 @@ def test_every_physics_sensor_has_default_thresholds():
         assert emitted <= set(th), emitted - set(th)
         for name, t in th.items():
             assert t, name
-            for d, levels in t.items():
+            for levels in t.values():
                 assert set(levels) == {"warning", "critical"}
 
 
 def test_consumers_read_the_config():
-    import ncpor_ingestor, weather_data, forecast_engine, physics_model, decision_engine
+    import decision_engine
+    import forecast_engine
+    import ncpor_ingestor
+    import physics_model
+    import weather_data
     for sid in sc.station_ids():
         c = sc.coords(sid)
         assert ncpor_ingestor.STATION_INFO[sid]["latitude"] == c["lat"]
@@ -66,7 +70,8 @@ def test_cascade_uses_config_graph():
 
 def test_invalid_config_is_rejected(tmp_path, monkeypatch):
     cfg = json.loads(json.dumps(sc.load()))
-    cfg["stations"]["maitri"]["dependencyGraph"]["edges"].append({"source": "generator", "target": "nope", "relation": "x"})
+    cfg["stations"]["maitri"]["dependencyGraph"]["edges"].append(
+        {"source": "generator", "target": "nope", "relation": "x"})
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps(cfg))
     import config as app_config

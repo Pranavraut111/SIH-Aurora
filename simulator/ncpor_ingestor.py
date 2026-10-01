@@ -7,19 +7,19 @@ Connects to official National Centre for Polar and Ocean Research (NCPOR) portal
   station_id, station_name, timestamp, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude
 """
 
-import requests
 import json
 import logging
 import re
-import time
 import sqlite3
-import os
-from datetime import datetime, timezone, timedelta
+import time
+from datetime import datetime, timezone
 
-from config import WEATHER_CACHE_DIR
+import requests
+
 import db
-from units import cache_wind_unit, wind_factor_to_ms
 import station_config
+from config import WEATHER_CACHE_DIR
+from units import cache_wind_unit, wind_factor_to_ms
 
 log = logging.getLogger("aurora.ingest")
 
@@ -154,21 +154,32 @@ def init_db():
         if c.fetchone()[0] == 0:
             now_ts = int(time.time() * 1000)
             seed_items = [
-                ("maitri-fuel", "maitri", "Energy", "Polar Diesel (A-1 Grade)", 68400, 100000, "L", 280, 25000, now_ts, "Station Commander"),
-                ("maitri-food", "maitri", "Life Support", "Preserved Rations & Provisions", 14200, 20000, "rations", 75, 4000, now_ts, "Logistics Officer"),
-                ("maitri-med", "maitri", "Medical", "Emergency Medical Packs", 380, 500, "kits", 1.2, 100, now_ts, "Chief Medical Officer"),
-                ("maitri-spares", "maitri", "Maintenance", "Generator Spare Kits & Filters", 92, 150, "units", 0.4, 30, now_ts, "Lead Engineer"),
-                ("maitri-water", "maitri", "Water", "Potable Snow-Melt Reserves", 45000, 60000, "L", 850, 15000, now_ts, "Environmental Officer"),
+                ("maitri-fuel", "maitri", "Energy", "Polar Diesel (A-1 Grade)",
+                 68400, 100000, "L", 280, 25000, now_ts, "Station Commander"),
+                ("maitri-food", "maitri", "Life Support", "Preserved Rations & Provisions",
+                 14200, 20000, "rations", 75, 4000, now_ts, "Logistics Officer"),
+                ("maitri-med", "maitri", "Medical", "Emergency Medical Packs",
+                 380, 500, "kits", 1.2, 100, now_ts, "Chief Medical Officer"),
+                ("maitri-spares", "maitri", "Maintenance", "Generator Spare Kits & Filters",
+                 92, 150, "units", 0.4, 30, now_ts, "Lead Engineer"),
+                ("maitri-water", "maitri", "Water", "Potable Snow-Melt Reserves",
+                 45000, 60000, "L", 850, 15000, now_ts, "Environmental Officer"),
 
-                ("bharati-fuel", "bharati", "Energy", "Polar Diesel (A-1 Grade)", 112000, 150000, "L", 340, 35000, now_ts, "Station Commander"),
-                ("bharati-food", "bharati", "Life Support", "Preserved Rations & Provisions", 24500, 35000, "rations", 140, 6000, now_ts, "Logistics Officer"),
-                ("bharati-med", "bharati", "Medical", "Emergency Medical Packs", 620, 800, "kits", 2.0, 150, now_ts, "Chief Medical Officer"),
-                ("bharati-spares", "bharati", "Maintenance", "Generator Spare Kits & Filters", 160, 250, "units", 0.6, 50, now_ts, "Lead Engineer"),
-                ("bharati-water", "bharati", "Water", "Potable Snow-Melt Reserves", 72000, 90000, "L", 1200, 20000, now_ts, "Environmental Officer"),
+                ("bharati-fuel", "bharati", "Energy", "Polar Diesel (A-1 Grade)",
+                 112000, 150000, "L", 340, 35000, now_ts, "Station Commander"),
+                ("bharati-food", "bharati", "Life Support", "Preserved Rations & Provisions",
+                 24500, 35000, "rations", 140, 6000, now_ts, "Logistics Officer"),
+                ("bharati-med", "bharati", "Medical", "Emergency Medical Packs",
+                 620, 800, "kits", 2.0, 150, now_ts, "Chief Medical Officer"),
+                ("bharati-spares", "bharati", "Maintenance", "Generator Spare Kits & Filters",
+                 160, 250, "units", 0.6, 50, now_ts, "Lead Engineer"),
+                ("bharati-water", "bharati", "Water", "Potable Snow-Melt Reserves",
+                 72000, 90000, "L", 1200, 20000, now_ts, "Environmental Officer"),
             ]
             c.executemany("""
-                INSERT INTO logistics_inventory 
-                (id, station_id, category, name, current, max_capacity, unit, daily_consumption, reorder_threshold, last_updated, updated_by)
+                INSERT INTO logistics_inventory
+                (id, station_id, category, name, current, max_capacity, unit,
+                 daily_consumption, reorder_threshold, last_updated, updated_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, seed_items)
 
@@ -209,7 +220,7 @@ def ingest_live_station(station_id: str):
         resp = requests.get(url, headers=headers, timeout=12)
         if resp.status_code != 200:
             raise Exception(f"HTTP {resp.status_code}")
-        
+
         series_map = parse_canvasjs_series(resp.text)
         if not series_map:
             raise Exception("No data series parsed from page")
@@ -235,7 +246,7 @@ def ingest_live_station(station_id: str):
                     if k in key:
                         match = meta
                         break
-            
+
                 if not match:
                     param, unit, sensor = key.replace(" ", "_"), "units", "Station Instrument"
                 else:
@@ -245,8 +256,9 @@ def ingest_live_station(station_id: str):
                     iso_time = datetime.fromtimestamp(pt_ts / 1000.0, tz=timezone.utc).isoformat()
                     try:
                         c.execute("""
-                            INSERT OR REPLACE INTO observations 
-                            (station_id, station_name, timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude, created_at)
+                            INSERT OR REPLACE INTO observations
+                            (station_id, station_name, timestamp, iso_time, parameter, value, unit,
+                             source, dataset, sensor, quality, latitude, longitude, created_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             info["id"],
@@ -275,7 +287,8 @@ def ingest_live_station(station_id: str):
             c.execute("""
                 INSERT INTO ingestion_logs (station_id, source_url, status, records_ingested, message, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (station_id, url, "success", ingested_count, f"Ingested {ingested_count} observations from NCPOR AWS", now_ts))
+            """, (station_id, url, "success", ingested_count,
+                  f"Ingested {ingested_count} observations from NCPOR AWS", now_ts))
 
         return {
             "status": "success",
@@ -310,11 +323,11 @@ def ingest_cached_historical_data():
         for json_file in cache_dir.glob("*.json"):
             if "forecast" in json_file.name:
                 continue
-        
+
             try:
-                with open(json_file, "r") as f:
+                with open(json_file) as f:
                     data = json.load(f)
-            
+
                 # Determine station
                 st_id = "maitri" if "maitri" in json_file.name.lower() else "bharati"
                 info = STATION_INFO[st_id]
@@ -350,8 +363,9 @@ def ingest_cached_historical_data():
                             if param == "wind_speed":
                                 val = round(val * wind_to_ms, 2)
                             c.execute("""
-                                INSERT OR IGNORE INTO observations 
-                                (station_id, station_name, timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude, created_at)
+                                INSERT OR IGNORE INTO observations
+                                (station_id, station_name, timestamp, iso_time, parameter, value, unit,
+                             source, dataset, sensor, quality, latitude, longitude, created_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
                                 info["id"],

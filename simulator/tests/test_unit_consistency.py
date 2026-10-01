@@ -4,8 +4,7 @@ physics_model.py, simulator.py and unified_backend.py; backend wind is m/s → k
 import ast
 
 import pytest
-
-from conftest import insert_obs, SIM_DIR
+from conftest import SIM_DIR, insert_obs
 
 STORE_UNITS = {"store_fuel": "kL", "store_food": "days", "store_spares": "items"}
 
@@ -28,8 +27,9 @@ def test_simulator_profiles_units():
     # "name" is read from station_config.json at import; only the sensor dicts are literals.
     profiles = {
         ast.literal_eval(k): {ast.literal_eval(kk): ast.literal_eval(vv)
-                              for kk, vv in zip(v.keys, v.values) if ast.literal_eval(kk) == "sensors"}
-        for k, v in zip(node.keys, node.values)
+                              for kk, vv in zip(v.keys, v.values, strict=True)
+                              if ast.literal_eval(kk) == "sensors"}
+        for k, v in zip(node.keys, node.values, strict=True)
     }
     for station, prof in profiles.items():
         sensors = prof["sensors"]

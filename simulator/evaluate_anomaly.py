@@ -31,8 +31,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config as app_config
 import anomaly_engine as ae
+import config as app_config
 
 EVAL_SEED_OFFSET = 1000          # physics/noise seeds differ from training
 FPR_MAX = 0.02                   # acceptance: FPR < 2 % per station/date
@@ -67,7 +67,7 @@ def converged_states(station: str, date: str, seed: int) -> list:
     """Predicted readings (floats) for every converged tick of one window."""
     conv = ae.ConvergenceTracker(station)
     out = []
-    for t, weather, readings, meta, pm in ae.replay_states(station, date, seed=seed):
+    for _t, _weather, readings, meta, pm in ae.replay_states(station, date, seed=seed):
         if conv.update(pm, meta):
             out.append(ae.observed_from_readings(readings))
     return out
@@ -210,6 +210,11 @@ def criteria_pass(metrics: dict):
     return (not failures), failures
 
 
+def _ticks(value) -> str:
+    """Time-to-detect cell: an em dash when the scenario was never detected."""
+    return "—" if value is None else f"{value:.0f}"
+
+
 def format_report(metrics: dict) -> str:
     lines = ["", "## False-positive rate (un-injected replay, full converged window)", "",
              "| Station | Date | Ticks | Sim. minutes | FPR live | FPR noisy | Max IF score | Max \\|z\\| (noisy) |",
@@ -223,14 +228,14 @@ def format_report(metrics: dict) -> str:
     for kind, title in (("degradations", "Synthetic degradations (ramp over 30 ticks, sensor noise on)"),
                         ("scenarios", "Demo Control scenarios (live-exact injection)")):
         lines += ["", f"## {title}", "",
-                  "| Station | Scenario | Detected | Rate | TTD median (ticks) | TTD p90 (ticks) | TTD median (real s) | TTD median (sim min) |",
+                  "| Station | Scenario | Detected | Rate | TTD median (ticks) | TTD p90 (ticks) | TTD median (real s) "
+                  "| TTD median (sim min) |",
                   "|---|---|---:|---:|---:|---:|---:|---:|"]
         for station, items in metrics[kind].items():
             for name, r in items.items():
-                fmt = lambda v: "—" if v is None else f"{v:.0f}"
                 lines.append(f"| {station} | {name} | {r['detected']}/{r['runs']} | {r['detection_rate']:.0%} | "
-                             f"{fmt(r['ttd_ticks_median'])} | {fmt(r['ttd_ticks_p90'])} | "
-                             f"{fmt(r['ttd_real_s_median'])} | {fmt(r['ttd_sim_min_median'])} |")
+                             f"{_ticks(r['ttd_ticks_median'])} | {_ticks(r['ttd_ticks_p90'])} | "
+                             f"{_ticks(r['ttd_real_s_median'])} | {_ticks(r['ttd_sim_min_median'])} |")
     lines.append(f"\n_evaluation took {metrics.get('evaluation_seconds')} s_")
     return "\n".join(lines)
 
