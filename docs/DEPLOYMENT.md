@@ -277,6 +277,10 @@ ingest. Reads and the WebSocket stay public, so anyone can view the whole dashbo
 UI shows a **READ-ONLY** pill in the top bar; clicking it asks for the token and turns it
 into **OPERATOR**. The token is kept in memory only, so a page refresh signs you out.
 
+**Telemetry ingest is internal only.** nginx answers `404` for `/api/sensors/batch`
+whatever the token: the simulator posts to `backend:8080` on the Docker network, so the
+route never needs to be public, and a leaked token still cannot inject telemetry.
+
 Two POSTs stay public because they change nothing: `/api/simulation/whatif` (read-only
 against the published snapshot) and the explain routes. They are rate-limited instead.
 

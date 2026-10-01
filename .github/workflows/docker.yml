@@ -369,6 +369,23 @@ jobs:
           docker compose logs --tail=40 simulator | grep -i "401" \
             && { echo "::error::the simulator was rejected with 401"; exit 1; } || true
 
+      # nginx answers 404 for the ingest route before the backend sees it, so even the
+      # RIGHT token must not get through: a 401 here would mean the request reached the
+      # backend. The simulator posts to backend:8080 directly and is unaffected — the
+      # previous step already proved telemetry still flows.
+      - name: Telemetry ingest is not reachable through nginx
+        env:
+          ADMIN_TOKEN: ci-operator-token
+        run: |
+          for path in /api/sensors/batch /api/sensors/batch/ /api/sensors/%62atch /api//sensors/batch; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --path-as-is -X POST \
+              -H 'Content-Type: application/json' -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+              -d '{"stationId":"maitri","timestamp":"2026-01-01T00:00:00Z","readings":{}}' \
+              "http://localhost${path}")
+            echo "POST ${path} (with token) -> ${code}"
+            test "$code" = "404" || { echo "::error::POST ${path} returned ${code}, expected 404 from nginx"; exit 1; }
+          done
+
       - name: Browser smoke test with write protection on
         env:
           E2E_BASE_URL: http://localhost
