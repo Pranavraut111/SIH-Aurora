@@ -14,12 +14,14 @@ services:
   frontend:
     networks: [aurora, aurora-internal]
 
+  # `!override` replaces the base file's network list instead of merging with it.
+  # (`!reset` would discard the value given here and leave them with no network at all.)
   backend:
-    networks: !reset
+    networks: !override
       - aurora-internal
 
   simulator:
-    networks: !reset
+    networks: !override
       - aurora-internal
 
 networks:

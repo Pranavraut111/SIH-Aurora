@@ -32,6 +32,10 @@ RUN npm ci
 COPY index.html vite.config.js ./
 COPY public/ ./public/
 COPY src/ ./src/
+# Station facts live in ONE file (CLAUDE.md), and src/data/stationConfig.js imports it
+# at build time as ../../simulator/station_config.json — so it must sit beside src/ at
+# the same relative depth, or the bundle cannot resolve it.
+COPY simulator/station_config.json ./simulator/station_config.json
 
 RUN npm run build
 
