@@ -146,7 +146,8 @@ def test_thresholds_persist_and_validate(client):
 
 def test_remote_dispatch_is_simulated(client):
     c, _ = client
-    r = c.post("/api/remote/dispatch", json={"stationId": "maitri", "subsystem": "generator", "command": "START_GENSET_2"})
+    r = c.post("/api/remote/dispatch", json={"stationId": "maitri", "subsystem": "Power Grid",
+                                             "command": "ENGAGE_BACKUP_GENSET_RUN", "issuedBy": "test operator"})
     body = r.json()
     assert body["status"] == "queued (simulated)" and body["simulated"] is True
     cmds = c.get("/api/remote/commands?stationId=maitri").json()["commands"]

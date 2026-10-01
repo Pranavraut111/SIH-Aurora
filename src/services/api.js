@@ -75,3 +75,17 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
 export const apiGet = (path, opts) => request(joinUrl(API_PREFIX, path), { ...opts, method: 'GET' });
 export const apiPost = (path, body, opts) => request(joinUrl(API_PREFIX, path), { ...opts, method: 'POST', body });
 
+/** Human-readable message for an ApiError (FastAPI 422 detail lists, 404/503 detail strings). */
+export function describeApiError(err) {
+  if (!err) return '';
+  if (err.kind === 'http') {
+    const detail = err.body?.detail;
+    if (Array.isArray(detail)) {
+      return detail.map((d) => (typeof d === 'string' ? d : `${(d.loc || []).slice(1).join('.')}: ${d.msg}`)).join('; ');
+    }
+    if (typeof detail === 'string') return detail;
+    return `HTTP ${err.status}`;
+  }
+  if (err.kind === 'timeout') return 'request timed out';
+  return 'backend unreachable';
+}

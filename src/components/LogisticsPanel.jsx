@@ -6,7 +6,9 @@ import {
   LuCheck, LuShieldCheck, LuSparkles
 } from 'react-icons/lu';
 import './LogisticsPanel.css';
-import { apiGet, apiPost } from '../services/api';
+import { apiGet, apiPost, describeApiError } from '../services/api';
+import { stationMeta } from '../data/stationConfig';
+import { getOperatorName, setOperatorName as persistOperatorName, OPERATOR_NAME_RE } from '../services/operator';
 
 const CATEGORY_ICONS = {
   Energy: LuFuel,
@@ -22,16 +24,24 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
   const [editingItem, setEditingItem] = useState(null);
   const [formCurrent, setFormCurrent] = useState('');
   const [formDaily, setFormDaily] = useState('');
-  const [operatorName, setOperatorName] = useState('Station Commander');
-  const [saveStatus, setSaveStatus] = useState(null);
+  const [operatorName, setOperatorName] = useState(getOperatorName);
+  const [saveStatus, setSaveStatus] = useState(null);   // { ok, text }
+  const [loadError, setLoadError] = useState(null);
+  const [history, setHistory] = useState([]);
 
   const fetchInventory = async () => {
     setLoading(true);
     try {
-      const d = await apiGet(`/logistics?stationId=${activeStation}`);
+      const [d, h] = await Promise.all([
+        apiGet(`/logistics?stationId=${activeStation}`),
+        apiGet(`/logistics/history?stationId=${activeStation}&limit=10`),
+      ]);
       setItems(d?.items || []);
+      setHistory(h?.history || []);
+      setLoadError(null);
     } catch (e) {
-      console.warn('Failed to fetch logistics:', e);
+      console.error('Failed to fetch logistics:', e);
+      setLoadError(describeApiError(e));
     } finally {
       setLoading(false);
     }
@@ -50,6 +60,10 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
   const handleSaveItem = async (e) => {
     e.preventDefault();
     if (!editingItem) return;
+    if (!OPERATOR_NAME_RE.test(operatorName.trim())) {
+      setSaveStatus({ ok: false, text: 'Operator name: 2–60 letters, digits, spaces or . , \' ( ) _ -' });
+      return;
+    }
 
     try {
       await apiPost('/logistics/update', {
@@ -57,15 +71,17 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
         itemId: editingItem.id,
         current: Number(formCurrent),
         dailyConsumption: Number(formDaily),
-        updatedBy: operatorName
+        updatedBy: operatorName.trim(),
       });
-      setSaveStatus(`Updated ${editingItem.name} successfully.`);
+      persistOperatorName(operatorName);
+      setSaveStatus({ ok: true, text: `Saved ${editingItem.name} to the backend database (audited).` });
       setEditingItem(null);
       fetchInventory();
     } catch (err) {
-      console.error(err);
+      console.error('[Logistics] update failed', err);
+      setSaveStatus({ ok: false, text: `Not saved: ${describeApiError(err)}` });
     } finally {
-      setTimeout(() => setSaveStatus(null), 4000);
+      setTimeout(() => setSaveStatus(null), 6000);
     }
   };
 
@@ -83,16 +99,16 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
           <div className="logistics-title-row">
             <LuPackage size={22} className="logistics-title-icon" />
             <h2 className="logistics-title font-display">
-              {activeStation === 'maitri' ? 'Maitri' : 'Bharati'} Station Logistics & Critical Supplies
+              {stationMeta(activeStation).name} Station Logistics & Critical Supplies
             </h2>
           </div>
           <p className="logistics-subtitle text-caption">
-            Polar inventory monitoring, autonomy calculations, and authenticated operator entry.
+            Operator-entered inventory ledger (no authentication; every edit is audited with the entered name).
           </p>
         </div>
 
         <div className="provenance-badge-operational">
-          <LuShieldCheck size={14} /> Operator-Managed Station Telemetry
+          <LuShieldCheck size={14} /> OPERATOR-ENTERED (not telemetry)
         </div>
       </div>
 
@@ -103,9 +119,10 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
           animate={{ opacity: 1, height: 'auto' }}
           exit={{ opacity: 0, height: 0 }}
         >
-          <LuCheck size={14} /> {saveStatus}
+          <LuCheck size={14} /> <span className={saveStatus.ok ? 'text-success' : 'text-danger'} data-testid="logistics-save-status">{saveStatus.text}</span>
         </motion.div>
       )}
+      {loadError && <div className="save-success-banner text-danger" role="status">Inventory unavailable: {loadError}</div>}
 
       {/* Inventory Grid */}
       <div className="logistics-cards-grid">
@@ -148,7 +165,7 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
                 <div className="num-col right">
                   <span className="num-label">Autonomy</span>
                   <span className={`num-val font-mono ${item.daysRemaining < 45 ? 'urgent' : ''}`}>
-                    {item.daysRemaining > 900 ? '∞' : `${item.daysRemaining} days`}
+                    {item.daysRemaining == null ? 'no consumption' : `${item.daysRemaining} days`}
                   </span>
                 </div>
               </div>
@@ -164,11 +181,34 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
               {/* Footer */}
               <div className="card-footer-row">
                 <span className="footer-burn text-caption">Burn: {item.dailyUse} {item.unit}/day</span>
-                <span className="footer-updated text-caption">By: {item.updatedBy || 'Commander'}</span>
+                <span className="footer-updated text-caption">By: {item.updatedBy || '—'}</span>
               </div>
             </motion.div>
           );
         })}
+      </div>
+
+      {/* Edit audit log (GET /api/logistics/history) */}
+      <div className="logistics-history glass-panel-subtle" data-testid="logistics-history">
+        <h3 className="section-heading font-display">Recent edits (audit log)</h3>
+        {history.length === 0 ? (
+          <p className="text-caption text-muted">No edits recorded for this station yet.</p>
+        ) : (
+          <table className="logistics-history-table font-mono">
+            <thead><tr><th>When</th><th>Item</th><th>Field</th><th>Old → New</th><th>By</th></tr></thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.id}>
+                  <td>{new Date(h.updatedAt).toLocaleString()}</td>
+                  <td>{h.itemId}</td>
+                  <td>{h.field}</td>
+                  <td>{h.oldValue} → {h.newValue}</td>
+                  <td>{h.updatedBy}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* Edit Item Modal */}
@@ -193,6 +233,8 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
                   <input
                     type="number"
                     step="any"
+                    min="0"
+                    max={editingItem.max}
                     value={formCurrent}
                     onChange={(e) => setFormCurrent(e.target.value)}
                     className="form-input font-mono"
@@ -205,6 +247,7 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
                   <input
                     type="number"
                     step="any"
+                    min="0"
                     value={formDaily}
                     onChange={(e) => setFormDaily(e.target.value)}
                     className="form-input font-mono"
@@ -213,17 +256,15 @@ export default function LogisticsPanel({ activeStation = 'maitri', sensorData })
                 </div>
 
                 <div className="form-group">
-                  <label>Logging Operator Identity:</label>
-                  <select
+                  <label htmlFor="logistics-operator">Operator name (recorded in the audit log; not authenticated):</label>
+                  <input
+                    id="logistics-operator"
                     value={operatorName}
+                    maxLength={60}
                     onChange={(e) => setOperatorName(e.target.value)}
                     className="form-input"
-                  >
-                    <option value="Station Commander">Station Commander</option>
-                    <option value="Lead Logistics Officer">Lead Logistics Officer</option>
-                    <option value="Chief Medical Officer">Chief Medical Officer</option>
-                    <option value="Principal Electrical Engineer">Principal Electrical Engineer</option>
-                  </select>
+                    required
+                  />
                 </div>
 
                 <div className="modal-actions">

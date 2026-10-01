@@ -6,7 +6,9 @@ import {
   LuShieldAlert, LuTerminal, LuRefreshCw
 } from 'react-icons/lu';
 import './RemoteControlPanel.css';
-import { apiGet, apiPost } from '../services/api';
+import { apiGet, apiPost, describeApiError } from '../services/api';
+import { getOperatorName } from '../services/operator';
+import { stationMeta } from '../data/stationConfig';
 
 export default function RemoteControlPanel({ activeStation = 'maitri', sensorData, onAcknowledgeAlert }) {
   const [commands, setCommands] = useState([]);
@@ -48,13 +50,13 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
         subsystem,
         command,
         parameters: params,
-        issuedBy: 'Operator (demo)'
+        issuedBy: getOperatorName()
       });
       setDispatchMsg(`${command}: ${d?.status ?? 'queued (simulated)'} — ${d?.message ?? 'simulated dispatch, no equipment actuated'}`);
       fetchState();
     } catch (err) {
       console.error('[Remote] dispatch failed', err);
-      setDispatchError(err?.kind === 'http' ? `Dispatch rejected: HTTP ${err.status}` : 'Dispatch failed: backend unreachable');
+      setDispatchError(`Dispatch rejected: ${describeApiError(err)}`);
     } finally {
       setDispatching(false);
       setTimeout(() => setDispatchMsg(null), 4000);
@@ -75,7 +77,7 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
           <div className="remote-title-row">
             <LuRadioTower size={22} className="remote-title-icon" />
             <h2 className="remote-title font-display">
-              {activeStation === 'maitri' ? 'Maitri' : 'Bharati'} Remote Commands — Simulated dispatch
+              {stationMeta(activeStation).name} Remote Commands — Simulated dispatch
             </h2>
           </div>
           <p className="remote-subtitle text-caption">
@@ -269,7 +271,9 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                     </div>
                     <div className="cmd-name">{cmd.command}</div>
                     <div className="cmd-footer text-caption">
-                      <span>{new Date(cmd.created_at).toLocaleTimeString()}</span>
+                      <span>
+                        {(cmd.lifecycle || []).map((l) => `${l.state} ${new Date(l.at).toLocaleTimeString()}`).join(' → ')}
+                      </span>
                       <span>By: {cmd.issued_by}</span>
                     </div>
                   </div>

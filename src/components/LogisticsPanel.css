@@ -286,3 +286,9 @@
   font-weight: 600;
   cursor: pointer;
 }
+
+/* ── edit audit log ─────────────────────────────────────────── */
+.logistics-history { margin-top: 18px; padding: 14px 16px; border-radius: 12px; }
+.logistics-history-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.logistics-history-table th, .logistics-history-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid rgba(148, 163, 184, 0.15); }
+.logistics-history-table th { color: var(--text-muted, #94a3b8); font-weight: 500; }

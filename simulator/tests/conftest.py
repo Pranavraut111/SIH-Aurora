@@ -7,7 +7,6 @@ Tests never touch the committed DB, caches or models, and never use the network.
 
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -34,17 +33,12 @@ def no_network(monkeypatch):
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
     """Fresh SQLite DB created by the real init_db() (schema + seed + migrations),
-    with every module that holds a DB_PATH reference pointed at it."""
+    with the shared db helper pointed at it."""
     db_path = tmp_path / "obs.db"
+    import db
     import ncpor_ingestor
     import analytics_ai_engine
-    monkeypatch.setattr(ncpor_ingestor, "DB_PATH", db_path)
-    monkeypatch.setattr(analytics_ai_engine, "DB_PATH", db_path)
-    try:
-        import unified_backend
-        monkeypatch.setattr(unified_backend, "DB_PATH", db_path)
-    except ImportError:
-        pass
+    monkeypatch.setattr(db, "DB_PATH", db_path)     # the one SQLite helper reads DB_PATH at call time
     ncpor_ingestor.init_db()
     analytics_ai_engine.MODEL_CACHE.clear()
     yield db_path
@@ -53,8 +47,8 @@ def temp_db(tmp_path, monkeypatch):
 
 def insert_obs(db_path, rows):
     """rows: iterable of (station, ts_ms, parameter, value, unit, source, dataset[, sensor, quality])."""
-    conn = sqlite3.connect(str(db_path))
-    try:
+    import db
+    with db.connect(db_path) as conn:
         for r in rows:
             station, ts, param, value, unit, source, dataset = r[:7]
             sensor = r[7] if len(r) > 7 else "test"
@@ -65,9 +59,6 @@ def insert_obs(db_path, rows):
                    VALUES (?, ?, ?, datetime(?/1000, 'unixepoch'), ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)""",
                 (station, station.title(), ts, ts, param, value, unit, source, dataset, sensor, quality),
             )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def write_cache(path: Path, times, winds, wind_unit="km/h", temps=None, extra_hourly=None):

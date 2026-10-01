@@ -83,24 +83,21 @@ def apply(conn):
 
 if __name__ == "__main__":
     import argparse
-    import sqlite3
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # simulator/
     from config import DB_PATH
+    import db
     from migrations import run_migrations
 
     ap = argparse.ArgumentParser(description=DESCRIPTION)
     ap.add_argument("--db", default=str(DB_PATH), help="SQLite DB path (default: config DB_PATH)")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(args.db)
-    try:
+    with db.connect(args.db) as conn:
         for mid, status, details in run_migrations(conn, only={ID}):
             print(f"{mid}: {status}")
             if details:
                 for k, v in details.items():
                     print(f"  {k}: {v}")
-    finally:
-        conn.close()

@@ -39,12 +39,12 @@ def legacy_db(tmp_path):
     return db
 
 
-def _rows(db, where=""):
+def _rows(db, dataset):
     conn = sqlite3.connect(str(db))
     try:
         return conn.execute(
-            f"SELECT timestamp, parameter, value, unit, source, sensor, quality, dataset FROM observations {where} "
-            "ORDER BY dataset, parameter, timestamp").fetchall()
+            "SELECT timestamp, parameter, value, unit, source, sensor, quality, dataset FROM observations "
+            "WHERE dataset = ? ORDER BY dataset, parameter, timestamp", (dataset,)).fetchall()
     finally:
         conn.close()
 
@@ -56,7 +56,7 @@ def test_converts_wind_and_relabels(legacy_db):
     finally:
         conn.close()
     assert results[0][:2] == (MIG_ID, "applied")
-    era5 = _rows(legacy_db, f"WHERE dataset = '{ERA5}'")
+    era5 = _rows(legacy_db, ERA5)
     winds = {ts: v for ts, p, v, *_ in era5 if p == "wind_speed"}
     assert winds == {1_000: pytest.approx(10.0), 2_000: pytest.approx(20.0)}
     for _, param, value, unit, source, sensor, quality, _ in era5:
@@ -68,13 +68,13 @@ def test_converts_wind_and_relabels(legacy_db):
 
 
 def test_ncpor_rows_untouched(legacy_db):
-    before = _rows(legacy_db, "WHERE dataset = 'NCPOR-AWS-Live'")
+    before = _rows(legacy_db, "NCPOR-AWS-Live")
     conn = sqlite3.connect(str(legacy_db))
     try:
         run_migrations(conn, only={MIG_ID})
     finally:
         conn.close()
-    assert _rows(legacy_db, "WHERE dataset = 'NCPOR-AWS-Live'") == before
+    assert _rows(legacy_db, "NCPOR-AWS-Live") == before
 
 
 def test_idempotent_via_ledger(legacy_db):
@@ -86,7 +86,7 @@ def test_idempotent_via_ledger(legacy_db):
     finally:
         conn.close()
     assert second[0][:2] == (MIG_ID, "already-applied")
-    winds = [v for _, p, v, *_ in _rows(legacy_db, f"WHERE dataset = '{ERA5}'") if p == "wind_speed"]
+    winds = [v for _, p, v, *_ in _rows(legacy_db, ERA5) if p == "wind_speed"]
     assert winds == [pytest.approx(10.0), pytest.approx(20.0)]
 
 
@@ -103,7 +103,7 @@ def test_never_converts_twice_even_without_ledger(legacy_db):
         conn.close()
     assert rerun[0][1] == "applied"
     assert rerun[0][2]["converted_wind_rows"] == 0
-    winds = [v for _, p, v, *_ in _rows(legacy_db, f"WHERE dataset = '{ERA5}'") if p == "wind_speed"]
+    winds = [v for _, p, v, *_ in _rows(legacy_db, ERA5) if p == "wind_speed"]
     assert winds == [pytest.approx(10.0), pytest.approx(20.0)]
 
 

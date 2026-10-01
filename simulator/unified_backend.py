@@ -20,24 +20,26 @@ import asyncio
 import re
 import logging
 import math
-import sqlite3
 import sys
 import threading
 import time
 import json
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 import requests
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Import digital twin engines
 sys.path.insert(0, str(Path(__file__).parent))
 import config as app_config
-from ncpor_ingestor import init_db, ingest_live_station, ingest_cached_historical_data, DB_PATH
+from ncpor_ingestor import init_db, ingest_live_station, ingest_cached_historical_data
+import db
+from validation import OperatorName, StationIdStr, Identifier
 from analytics_ai_engine import (
     run_anomaly_detection,
     run_time_series_forecast,
@@ -126,18 +128,13 @@ manager = ConnectionManager()
 # ═══════════════════════════════════════════════════════════════
 
 def get_latest_weather_for_station(station_id: str):
-    conn = sqlite3.connect(str(DB_PATH))
-    try:
-        c = conn.cursor()
-        c.execute("""
+    with db.connect() as conn:
+        rows = conn.execute("""
             SELECT parameter, value, timestamp, source, dataset
             FROM observations
             WHERE station_id = ?
             ORDER BY timestamp DESC LIMIT 30
-        """, (station_id,))
-        rows = c.fetchall()
-    finally:
-        conn.close()
+        """, (station_id,)).fetchall()
 
     res = {"temp": -15.0, "wind": 12.0, "pressure": 985.0, "humidity": 65.0,
            "source": "built-in default (no observations in DB)", "dataset": None}
@@ -403,6 +400,12 @@ async def run_tick():
             await manager.broadcast(sid, snap)
         except Exception:
             log.exception("Tick failed for station %s", sid)
+    try:
+        promoted = await asyncio.to_thread(promote_remote_commands)
+        if promoted:
+            log.info("Simulated remote commands acknowledged: %d", promoted)
+    except Exception:
+        log.exception("Remote-command lifecycle step failed")
 
 
 async def tick_loop():
@@ -581,15 +584,12 @@ _sim_probe_cache = {"at": 0.0, "value": None}
 
 def _check_db() -> dict:
     try:
-        conn = sqlite3.connect(str(DB_PATH), timeout=2)
-        try:
+        with db.connect() as conn:
             conn.execute("SELECT 1 FROM observations LIMIT 1").fetchall()
-        finally:
-            conn.close()
-        return {"ok": True, "path": str(DB_PATH), "error": None}
+        return {"ok": True, "path": str(db.DB_PATH), "error": None}
     except Exception as exc:
         log.warning("Health: DB check failed: %s", exc)
-        return {"ok": False, "path": str(DB_PATH), "error": str(exc)}
+        return {"ok": False, "path": str(db.DB_PATH), "error": str(exc)}
 
 
 def _probe_simulator() -> dict:
@@ -965,119 +965,167 @@ def acknowledge_alert(alert_id: str):
 #  Logistics & Operational Inventory APIs
 # ═══════════════════════════════════════════════════════════════
 
+def _inventory_item(r) -> dict:
+    current = r["current"]
+    daily = r["daily_consumption"]
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "category": r["category"],
+        "current": current,
+        "max": r["max_capacity"],
+        "unit": r["unit"],
+        "dailyUse": daily,
+        "reorderAt": r["reorder_threshold"],
+        "daysRemaining": round(current / daily, 1) if daily > 0 else None,
+        "isLow": current <= r["reorder_threshold"],
+        "lastUpdated": r["last_updated"],
+        "updatedBy": r["updated_by"],
+        "provenance": r["provenance"],
+    }
+
+
 @app.get("/api/logistics")
 def get_logistics(sid: str = Depends(station_param)):
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT * FROM logistics_inventory WHERE station_id = ?", (sid,))
-    rows = [dict(r) for r in c.fetchall()]
-    conn.close()
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM logistics_inventory WHERE station_id = ? ORDER BY id", (sid,)).fetchall()
+    return {"stationId": sid, "items": [_inventory_item(r) for r in rows]}
 
-    items = []
-    for r in rows:
-        current = r["current"]
-        daily = r["daily_consumption"]
-        days = round(current / daily, 1) if daily > 0 else 999
-        items.append({
-            "id": r["id"],
-            "name": r["name"],
-            "category": r["category"],
-            "current": current,
-            "max": r["max_capacity"],
-            "unit": r["unit"],
-            "dailyUse": daily,
-            "reorderAt": r["reorder_threshold"],
-            "daysRemaining": days,
-            "isLow": current <= r["reorder_threshold"],
-            "lastUpdated": r["last_updated"],
-            "updatedBy": r["updated_by"],
-            "provenance": r["provenance"]
-        })
-    return {"stationId": sid, "items": items}
 
 class InventoryUpdateRequest(BaseModel):
-    stationId: str
-    itemId: str
-    current: float
-    dailyConsumption: Optional[float] = None
-    updatedBy: str = "Operator"
+    model_config = ConfigDict(extra="forbid")
+    stationId: StationIdStr
+    itemId: Identifier
+    current: float = Field(ge=0, le=1e9, allow_inf_nan=False)
+    dailyConsumption: Optional[float] = Field(None, ge=0, le=1e7, allow_inf_nan=False)
+    updatedBy: OperatorName
+
 
 @app.post("/api/logistics/update")
 def update_inventory_item(req: InventoryUpdateRequest):
-    req.stationId = require_station(req.stationId)
-    conn = sqlite3.connect(str(DB_PATH))
-    c = conn.cursor()
+    sid = require_station(req.stationId)
     now_ts = int(time.time() * 1000)
-    if req.dailyConsumption is not None:
-        c.execute("""
-            UPDATE logistics_inventory 
-            SET current = ?, daily_consumption = ?, last_updated = ?, updated_by = ?
-            WHERE id = ? AND station_id = ?
-        """, (req.current, req.dailyConsumption, now_ts, req.updatedBy, req.itemId, req.stationId))
-    else:
-        c.execute("""
-            UPDATE logistics_inventory 
-            SET current = ?, last_updated = ?, updated_by = ?
-            WHERE id = ? AND station_id = ?
-        """, (req.current, now_ts, req.updatedBy, req.itemId, req.stationId))
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": f"Updated {req.itemId}"}
+    with db.connect() as conn:
+        row = conn.execute("SELECT * FROM logistics_inventory WHERE id = ? AND station_id = ?",
+                           (req.itemId, sid)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Unknown inventory item '{req.itemId}' for station '{sid}'")
+        if req.current > row["max_capacity"]:
+            raise HTTPException(status_code=422, detail=[
+                f"current ({req.current}) exceeds max capacity ({row['max_capacity']} {row['unit']}) of {req.itemId}"])
+        changes = [("current", row["current"], req.current)]
+        if req.dailyConsumption is not None:
+            changes.append(("daily_consumption", row["daily_consumption"], req.dailyConsumption))
+        changes = [(f, old, new) for f, old, new in changes if float(old) != float(new)]
+        conn.execute(
+            "UPDATE logistics_inventory SET current = ?, daily_consumption = ?, last_updated = ?, updated_by = ? "
+            "WHERE id = ? AND station_id = ?",
+            (req.current, req.dailyConsumption if req.dailyConsumption is not None else row["daily_consumption"],
+             now_ts, req.updatedBy, req.itemId, sid))
+        conn.executemany(
+            "INSERT INTO logistics_audit (station_id, item_id, field, old_value, new_value, updated_by, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(sid, req.itemId, f, str(old), str(new), req.updatedBy, now_ts) for f, old, new in changes])
+        updated = conn.execute("SELECT * FROM logistics_inventory WHERE id = ?", (req.itemId,)).fetchone()
+    log.info("Inventory %s/%s updated by %s: %s", sid, req.itemId, req.updatedBy,
+             ", ".join(f"{f} {old}→{new}" for f, old, new in changes) or "no change")
+    return {"status": "success", "item": _inventory_item(updated), "changes": len(changes)}
+
+
+@app.get("/api/logistics/history")
+def get_logistics_history(sid: str = Depends(station_param),
+                          itemId: Optional[str] = Query(None, max_length=64),
+                          limit: int = Query(100, ge=1, le=500)):
+    with db.connect() as conn:
+        if itemId:
+            rows = conn.execute(
+                "SELECT * FROM logistics_audit WHERE station_id = ? AND item_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (sid, itemId, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM logistics_audit WHERE station_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (sid, limit)).fetchall()
+    return {"stationId": sid, "history": [
+        {"id": r["id"], "itemId": r["item_id"], "field": r["field"], "oldValue": r["old_value"],
+         "newValue": r["new_value"], "updatedBy": r["updated_by"], "updatedAt": r["updated_at"]} for r in rows]}
 
 # ═══════════════════════════════════════════════════════════════
-#  Remote Command & Control APIs
+#  Remote Command & Control APIs (SIMULATED dispatch — no station link)
 # ═══════════════════════════════════════════════════════════════
+
+CMD_QUEUED = "queued (simulated)"
+CMD_ACKNOWLEDGED = "acknowledged (simulated)"
+
 
 class DispatchCommandRequest(BaseModel):
-    stationId: str
-    subsystem: str
-    command: str
-    parameters: Optional[Dict[str, Any]] = None
-    issuedBy: str = "Mission Control Operator"
+    model_config = ConfigDict(extra="forbid")
+    stationId: StationIdStr
+    subsystem: str = Field(min_length=1, max_length=40)
+    command: Identifier
+    parameters: Optional[Dict[str, Union[str, float, int, bool]]] = Field(None, max_length=10)
+    issuedBy: OperatorName
+
 
 @app.post("/api/remote/dispatch")
 def dispatch_remote_command(req: DispatchCommandRequest):
-    req.stationId = require_station(req.stationId)
-    cmd_id = f"CMD-{int(time.time())}-{req.stationId[:3].upper()}"
-    conn = sqlite3.connect(str(DB_PATH))
-    c = conn.cursor()
+    sid = require_station(req.stationId)
+    catalog = station_config.remote_command_catalog()
+    if req.subsystem not in catalog:
+        raise HTTPException(status_code=422, detail=[
+            f"unknown subsystem '{req.subsystem}'. Known: {', '.join(catalog)}"])
+    if req.command not in catalog[req.subsystem]:
+        raise HTTPException(status_code=422, detail=[
+            f"unknown command '{req.command}' for {req.subsystem}. Known: {', '.join(catalog[req.subsystem])}"])
     now_ts = int(time.time() * 1000)
-    c.execute("""
-        INSERT INTO remote_commands 
-        (id, station_id, subsystem, command, parameters, status, created_at, dispatched_at, issued_by, response_log)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        cmd_id,
-        req.stationId,
-        req.subsystem,
-        req.command,
-        json.dumps(req.parameters or {}),
-        "queued (simulated)",
-        now_ts,
-        None,
-        req.issuedBy,
-        "SIMULATED dispatch: recorded only. No station actuation link exists; nothing was executed."
-    ))
-    conn.commit()
-    conn.close()
+    cmd_id = f"CMD-{now_ts}-{sid[:3].upper()}-{uuid.uuid4().hex[:6]}"
+    with db.connect() as conn:
+        conn.execute("""
+            INSERT INTO remote_commands
+            (id, station_id, subsystem, command, parameters, status, created_at, dispatched_at, issued_by, response_log)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cmd_id, sid, req.subsystem, req.command, json.dumps(req.parameters or {}), CMD_QUEUED, now_ts,
+              None, req.issuedBy,
+              "SIMULATED dispatch: recorded only. No station actuation link exists; nothing will be executed."))
     return {
-        "status": "queued (simulated)",
+        "status": CMD_QUEUED,
         "simulated": True,
         "commandId": cmd_id,
-        "message": (f"Simulated dispatch: '{req.command}' for {req.stationId} {req.subsystem} was recorded. "
+        "message": (f"Simulated dispatch: '{req.command}' for {sid} {req.subsystem} was recorded. "
                     "No real actuation link exists."),
     }
 
+
+def promote_remote_commands(now_ms: Optional[int] = None) -> int:
+    """Lifecycle step run by the tick: queued (simulated) → acknowledged (simulated)
+    after REMOTE_ACK_DELAY_S. Never 'executed' — there is no station link."""
+    now_ms = now_ms or int(time.time() * 1000)
+    cutoff = now_ms - int(app_config.REMOTE_ACK_DELAY_S * 1000)
+    with db.connect() as conn:
+        cur = conn.execute(
+            "UPDATE remote_commands SET status = ?, acknowledged_at = ?, "
+            "response_log = response_log || ' | Simulated acknowledgement (no station link; not executed).' "
+            "WHERE status = ? AND created_at <= ?",
+            (CMD_ACKNOWLEDGED, now_ms, CMD_QUEUED, cutoff))
+    return cur.rowcount
+
+
+def _command_out(r) -> dict:
+    d = dict(r)
+    lifecycle = [{"state": CMD_QUEUED, "at": r["created_at"]}]
+    if r["acknowledged_at"]:
+        lifecycle.append({"state": CMD_ACKNOWLEDGED, "at": r["acknowledged_at"]})
+    d["lifecycle"] = lifecycle
+    d["simulated"] = True
+    return d
+
+
 @app.get("/api/remote/commands")
-def get_remote_commands(sid: str = Depends(station_param)):
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT * FROM remote_commands WHERE station_id = ? ORDER BY created_at DESC LIMIT 50", (sid,))
-    rows = [dict(r) for r in c.fetchall()]
-    conn.close()
-    return {"stationId": sid, "commands": rows}
+def get_remote_commands(sid: str = Depends(station_param), limit: int = Query(50, ge=1, le=200)):
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM remote_commands WHERE station_id = ? ORDER BY created_at DESC LIMIT ?",
+                            (sid, limit)).fetchall()
+    return {"stationId": sid, "commands": [_command_out(r) for r in rows],
+            "catalog": station_config.remote_command_catalog()}
 
 # ═══════════════════════════════════════════════════════════════
 #  Alert Management APIs
@@ -1111,11 +1159,8 @@ THRESHOLD_ORDER = [("generator_temp_warning", "generator_temp_critical"),
 
 
 def load_thresholds() -> dict:
-    conn = sqlite3.connect(str(DB_PATH))
-    try:
+    with db.connect() as conn:
         rows = conn.execute("SELECT key, value, updated_at, updated_by FROM admin_thresholds").fetchall()
-    finally:
-        conn.close()
     return {k: {"value": v, "updatedAt": ts, "updatedBy": by} for k, v, ts, by in rows}
 
 
@@ -1167,14 +1212,10 @@ def update_admin_config(req: ConfigUpdateRequest):
     if errors:
         raise HTTPException(status_code=422, detail=errors)
     now = int(time.time() * 1000)
-    conn = sqlite3.connect(str(DB_PATH))
-    try:
-        with conn:
-            for k, v in req.thresholds.items():
-                conn.execute("UPDATE admin_thresholds SET value = ?, updated_at = ?, updated_by = ? WHERE key = ?",
-                             (float(v), now, req.updatedBy, k))
-    finally:
-        conn.close()
+    with db.connect() as conn:
+        for k, v in req.thresholds.items():
+            conn.execute("UPDATE admin_thresholds SET value = ?, updated_at = ?, updated_by = ? WHERE key = ?",
+                         (float(v), now, req.updatedBy, k))
     return {"status": "saved", "updatedAt": now,
             "thresholds": {k: v["value"] for k, v in load_thresholds().items()},
             "thresholdsUsedByAlerts": False}

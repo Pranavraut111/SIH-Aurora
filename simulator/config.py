@@ -155,6 +155,8 @@ SIM_BATCH_FRESH_S = _get_float("SIM_BATCH_FRESH_S", 10.0)
 HISTORY_MAX_POINTS = _get_int("HISTORY_MAX_POINTS", 300)
 # Background tick interval (seconds). The tick is the ONLY code that advances physics state.
 TICK_INTERVAL_S = _get_float("TICK_INTERVAL_S", 2.0)
+# Simulated remote commands move queued → acknowledged (simulated) after this many seconds.
+REMOTE_ACK_DELAY_S = _get_float("REMOTE_ACK_DELAY_S", 5.0)
 
 # ── LLM (Groq) — server-side only ─────────────────────────────
 GROQ_API_KEY = _get("GROQ_API_KEY", "")

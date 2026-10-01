@@ -17,13 +17,12 @@ from sklearn.svm import OneClassSVM
 import statsmodels.api as sm
 from statsmodels.tsa.arima.model import ARIMA
 import logging
-import sqlite3
 import json
 import threading
 import time
 from datetime import datetime, timezone
 
-from config import DB_PATH
+import db
 
 log = logging.getLogger("aurora.analytics")
 
@@ -31,10 +30,6 @@ log = logging.getLogger("aurora.analytics")
 # analytics never concatenate disjoint periods (PROJECT_CONTEXT.md B8).
 GAP_FACTOR = 3.0
 MODEL_CACHE_TTL_S = 300  # fitted ISF/SVM/ARIMA models are reused for 5 minutes
-
-
-def get_db_connection():
-    return sqlite3.connect(str(DB_PATH))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -65,8 +60,7 @@ def latest_window(station_id, parameter="temperature", limit=500, dataset=None):
     - newest `limit` rows (ORDER BY timestamp DESC), then reversed to ascending
     - cut at the last gap > GAP_FACTOR × median interval
     Returns (df ascending with reset index, meta dict)."""
-    conn = get_db_connection()
-    try:
+    with db.connect() as conn:
         if dataset is None:
             row = conn.execute(
                 "SELECT dataset FROM observations WHERE station_id = ? AND parameter = ? "
@@ -84,8 +78,6 @@ def latest_window(station_id, parameter="temperature", limit=500, dataset=None):
             ORDER BY timestamp DESC
             LIMIT ?
             """, conn, params=[station_id, parameter, dataset, int(limit)])
-    finally:
-        conn.close()
 
     df = df.iloc[::-1].reset_index(drop=True)          # ascending
     df, interval_ms, cut = _cut_at_last_gap(df)
@@ -109,8 +101,7 @@ def query_observations(station_id, parameter="temperature", frequency="h", start
         df, meta = latest_window(station_id, parameter, limit=limit)
         df.attrs["window"] = meta
         return df
-    conn = get_db_connection()
-    try:
+    with db.connect() as conn:
         q = ("SELECT timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude "
              "FROM observations WHERE station_id = ? AND parameter = ?")
         params = [station_id, parameter]
@@ -120,8 +111,6 @@ def query_observations(station_id, parameter="temperature", frequency="h", start
             q += " AND timestamp <= ?"; params.append(end_ts)
         q += " ORDER BY timestamp DESC LIMIT ?"; params.append(int(limit))
         df = pd.read_sql_query(q, conn, params=params)
-    finally:
-        conn.close()
     return df.iloc[::-1].reset_index(drop=True)
 
 
@@ -346,8 +335,7 @@ def run_correlation_matrix(station_id):
     if cached is not None:
         return {**cached, "modelCache": "hit"}
 
-    conn = get_db_connection()
-    try:
+    with db.connect() as conn:
         df = pd.read_sql_query("""
             SELECT timestamp, parameter, value
             FROM observations
@@ -355,8 +343,6 @@ def run_correlation_matrix(station_id):
             ORDER BY timestamp ASC
         """, conn, params=[station_id, meta["dataset"],
                            int(pd.Timestamp(meta["start"]).timestamp() * 1000), meta["endTimestamp"]])
-    finally:
-        conn.close()
 
     if df.empty:
         return {"status": "error", "message": "No data"}
@@ -387,8 +373,7 @@ def assess_blizzard_and_polar_risks(station_id):
     - Comms Degradation: Wind > 25 m/s or Severe solar/auroral activity
     - Thermal Overload on Station Generators: Building heating demand spike
     """
-    conn = get_db_connection()
-    try:
+    with db.connect() as conn:
         df = pd.read_sql_query("""
             SELECT parameter, value, unit, timestamp, dataset, source
             FROM observations
@@ -396,8 +381,6 @@ def assess_blizzard_and_polar_risks(station_id):
             ORDER BY timestamp DESC
             LIMIT 100
         """, conn, params=[station_id])
-    finally:
-        conn.close()
 
     used_datasets = set()
     if df.empty:
