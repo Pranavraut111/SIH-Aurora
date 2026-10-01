@@ -53,6 +53,7 @@ try:
 except ImportError:
     DECISION_AVAILABLE = False
 from decision_scheduler import DecisionScheduler
+from twin_inspector import build_twin_inspector
 
 # Phase 6: Genuine Chronos forecaster (optional — requires torch + chronos-forecasting).
 # Only "available" if torch AND chronos actually import (B11).
@@ -765,83 +766,24 @@ def reset():
 
 @control_app.route("/api/twin-inspector", methods=["GET"])
 def twin_inspector():
-    """Digital Twin Inspector — exposes full causal-chain breakdown."""
+    """Digital Twin Inspector — full causal-chain breakdown (schema: twin_inspector.py)."""
     station_id = flask_request.args.get("station", "maitri")
     sim = stations.get(station_id, stations["maitri"])
-
-    meta = getattr(sim, '_last_meta', {})
     weather = getattr(sim, '_last_weather', None)
-
-    # Build model assumptions from physics params if available
-    assumptions = {}
-    if sim.physics_model:
-        p = sim.physics_model.params
-        h = p["heating"]
-        g = p["generator"]
-        assumptions = {
-            "buildings": {
-                bld_id: {
-                    "u_value_W_m2K": {"value": bld["u_value_W_m2K"], "unit": "W/m²K", "basis": "estimated"},
-                    "surface_area_m2": {"value": bld["surface_area_m2"], "unit": "m²", "basis": "estimated"},
-                    "target_temp_C": {"value": bld["target_temp_C"], "unit": "°C", "basis": "assumed"},
-                    "volume_m3": {"value": bld["volume_m3"], "unit": "m³", "basis": "estimated"},
-                    "occupants": {"value": bld["occupants"], "unit": "persons", "basis": "documented" if bld_id == "livingQuarters" else "estimated"},
-                    "base_electrical_kW": {"value": bld["base_electrical_kW"], "unit": "kW", "basis": "estimated"},
-                }
-                for bld_id, bld in p["buildings"].items()
-            },
-            "heating": {
-                "efficiency": {"value": h["efficiency"], "unit": "ratio", "basis": "estimated",
-                               "note": "Thermal distribution efficiency (losses in pipes/ducts)"},
-                "max_output_kW": {"value": h["max_output_kW"], "unit": "kW", "basis": "estimated"},
-                "waste_heat_recovery": {"value": h.get("waste_heat_recovery", 0.15), "unit": "ratio", "basis": "estimated",
-                                        "note": "Fraction of heating demand met by generator waste heat recovery; remainder requires dedicated electrical input"},
-            },
-            "generator": {
-                "max_power_kW": {"value": g["max_power_kW"], "unit": "kW", "basis": "estimated"},
-                "nominal_rpm": {"value": g["nominal_rpm"], "unit": "rpm", "basis": "documented"},
-                "fuel_coeff_a": {"value": g["fuel_coeff_a"], "unit": "L/hr", "basis": "assumed", "note": "Willans line intercept"},
-                "fuel_coeff_b": {"value": g["fuel_coeff_b"], "unit": "L/kWh", "basis": "assumed", "note": "Willans line slope"},
-                "cooling_efficiency": {"value": g["cooling_efficiency"], "unit": "ratio", "basis": "assumed"},
-            },
-        }
-
-    result = {
-        "stationId": station_id,
-        "mode": sim.mode,
-        "tickCount": sim.tick_count,
-        "environment": {
-            "source": "ERA5 reanalysis (ECMWF)" if sim.mode == "reanalysis" else "Synthetic simulation",
-            "sourceType": "reanalysis" if sim.mode == "reanalysis" else "synthetic",
-            "temperature_C": sim.values.get("lab", {}).get("env_temp"),
-            "wind_kmh": sim.values.get("lab", {}).get("env_wind"),
-            "pressure_hPa": sim.values.get("lab", {}).get("env_pressure"),
-            "humidity_pct": sim.values.get("lab", {}).get("env_humidity"),
-            "simulatedTime": weather.get("simulated_time") if weather else None,
-        },
-        "thermalModel": meta.get("thermal_breakdown", {}),
-        "totalHeatLoss_kW": meta.get("total_heat_loss_kW"),
-        "heatingDemand_kW": meta.get("heating_demand_kW"),
-        "heatingEfficiency": assumptions.get("heating", {}).get("efficiency", {}).get("value"),
-        "wasteHeatRecovery": h.get("waste_heat_recovery", 0.15) if sim.physics_model else 0.15,
-        "powerBreakdown": meta.get("power_breakdown", {}),
-        "generatorModel": {
-            "sourceType": "model-derived",
-            "power_kW": sim.values.get("generator", {}).get("gen_power"),
-            "temperature_C": sim.values.get("generator", {}).get("gen_temp"),
-            "rpm": sim.values.get("generator", {}).get("gen_rpm"),
-            "fuelRate_Lhr": sim.values.get("generator", {}).get("gen_fuel_rate"),
-            "loadFactor_pct": meta.get("gen_load_pct"),
-            "maxPower_kW": assumptions.get("generator", {}).get("max_power_kW", {}).get("value"),
-        },
-        "provenance": meta.get("provenance", {
-            "environment": "synthetic" if sim.mode == "simulation" else "ERA5 reanalysis",
-            "equipment": "physics model" if sim.mode == "reanalysis" else "random walk simulation",
-        }),
-        "modelAssumptions": assumptions,
-        "dataSource": sim.get_data_source_info(),
-    }
-    return jsonify(result)
+    reanalysis = sim.mode == "reanalysis"
+    return jsonify(build_twin_inspector(
+        station_id=station_id,
+        mode=sim.mode,
+        tick_count=sim.tick_count,
+        values=sim.values,
+        meta=getattr(sim, '_last_meta', {}),
+        params=sim.physics_model.params if sim.physics_model else None,
+        environment_source="ERA5 reanalysis (Open-Meteo)" if reanalysis else "Synthetic simulation",
+        environment_source_type="reanalysis" if reanalysis else "synthetic",
+        simulated_time=weather.get("simulated_time") if weather else None,
+        data_source=sim.get_data_source_info(),
+        telemetry_source="simulator",
+    ))
 
 
 @control_app.route("/api/anomaly", methods=["GET"])

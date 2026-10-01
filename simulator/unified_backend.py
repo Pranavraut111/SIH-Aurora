@@ -17,6 +17,7 @@ inspector, what-if, logistics, remote commands and admin config.
 """
 
 import asyncio
+import re
 import logging
 import math
 import sqlite3
@@ -46,6 +47,8 @@ from analytics_ai_engine import (
 )
 from physics_model import StationPhysicsModel
 from cascade import analyze_dependency_cascade, BUILDING_NAMES
+from offline_explain import offline_explanation
+from twin_inspector import build_twin_inspector
 from units import ms_to_kmh, kmh_to_ms
 from station_store import StationStore
 
@@ -654,34 +657,8 @@ def get_ai_analysis(sid: str = Depends(station_param)):
         "provenance": risk["provenance"]
     }
 
-@app.get("/api/predictions")
-def get_predictions(sid: str = Depends(station_param)):
-    sensors = published_snapshot(sid)["sensors"]
-    preds = {}
-    for b_id, s_map in sensors.items():
-        preds[b_id] = {}
-        for s_id, val in s_map.items():
-            expected = val * 0.98
-            diff = val - expected
-            is_anom = abs(diff) > (abs(expected) * 0.15 + 2.0)
-            preds[b_id][s_id] = {
-                "actual": val,
-                "predicted": round(expected, 2),
-                "expected": round(expected, 2),
-                "residual": round(diff, 2),
-                "is_anomaly": is_anom,
-                "anomaly_score": round(min(1.0, abs(diff) / (abs(expected) + 1.0)), 3),
-                "confidence": 0.95
-            }
-    return {
-        "stationId": sid,
-        "forecasterCount": sum(len(m) for m in sensors.values()),
-        "predictions": preds
-    }
-
-# ═══════════════════════════════════════════════════════════════
-#  NCPOR Data Ingestion & Queries
-# ═══════════════════════════════════════════════════════════════
+# NOTE: the old GET /api/predictions (value × 0.98 "predictions") was removed —
+# real model outputs are served by /api/ai/anomaly, /api/ai/forecast, /api/ai/chronos.
 
 @app.get("/api/ncpor/live")
 def get_ncpor_live(sid: str = Depends(station_param)):
@@ -766,72 +743,37 @@ def get_station_risk(sid: str = Depends(station_param)):
 
 @app.get("/api/twin-inspector")
 def get_twin_inspector(sid: str = Depends(station_param)):
-    # Read-only: the causal chain from the physics-fallback model's last tick.
-    # (Never calls pm.compute() — only the background tick advances state.)
+    """ONE schema (twin_inspector.build_twin_inspector) for both sources (B13).
+    Simulator live → its causal chain (proxied); otherwise the backend's physics
+    fallback (read-only — never calls pm.compute())."""
+    snap = published_snapshot(sid)
+    if snap["dataSource"] == "simulator":
+        try:
+            data = _sim_request("GET", "/api/twin-inspector", params={"station": sid})
+            data["telemetrySource"] = "simulator"
+            return data
+        except HTTPException as exc:
+            log.info("Twin inspector: simulator unavailable (%s); using physics fallback", exc.detail)
     fallback = store.get_fallback(sid)
     if fallback is None:
         raise HTTPException(status_code=503, detail="Telemetry not ready yet; retry shortly")
     weather = fallback["weather"]
-    readings = fallback["readings"]
-    meta = fallback["meta"]
-    snap = published_snapshot(sid)
-    pb = meta.get("power_breakdown", {})
-    tb = meta.get("thermal_breakdown", {})
-
-    return {
-        "station": sid,
-        "stationId": sid,
-        # Causal chain below is always the backend physics model; telemetrySource says
-        # what the station's live telemetry currently comes from.
-        "telemetrySource": snap["dataSource"],
-        "dataSource": {
-            "label": f"NCPOR AWS Telemetry + Polar Physics Causal Model ({sid.upper()})",
-            "weatherSource": weather["source"],
-            "type": "reanalysis"
-        },
-        "environment": {
-            "temperature_C": weather["temp"],
-            "wind_speed_kmh": round(ms_to_kmh(weather["wind"]), 1),
-            "surface_pressure_hPa": weather["pressure"],
-            "relative_humidity_pct": weather["humidity"]
-        },
-        "causalChain": {
-            "thermal": {
-                "label": "1. Building Thermal Loss (Fourier Conduction + Wind Convection)",
-                "heat_loss_kW": round(float(meta.get("total_heat_loss_kW", 85.4)), 1),
-                "heating_demand_kW": round(float(meta.get("heating_demand_kW", 68.2)), 1),
-                "basis": "documented"
-            },
-            "electrical": {
-                "label": "2. Station Electrical Load Demand",
-                "base_load_kW": round(float(pb.get("base_load_kW", 90)), 1),
-                "heating_power_kW": round(float(pb.get("heating_electrical_kW", 68)), 1),
-                "total_demand_kW": round(float(pb.get("total_demand_kW", 158)), 1),
-                "basis": "documented"
-            },
-            "generator": {
-                "label": "3. Primary Generator Engine State",
-                "load_pct": round(float(meta.get("gen_load_pct", 79)), 1),
-                "fuel_rate_Lhr": round(float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28.5)), 1),
-                "gen_temp_C": round(float(readings.get("generator", {}).get("gen_temp", {}).get("value", 82)), 1),
-                "basis": "documented"
-            },
-            "logistics": {
-                "label": "4. Fuel Autonomy & Supply Longevity",
-                "daily_fuel_burn_L": round(float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28.5)) * 24, 0),
-                # store_fuel is kL (model-derived) → litres / daily burn in litres
-                "days_of_supply_remaining": round(_val(readings, "storage", "store_fuel", 0.0) * 1000 / max(10, float(readings.get("generator", {}).get("gen_fuel_rate", {}).get("value", 28.5)) * 24), 1),
-                "resupply_urgency": "NOMINAL (100+ Days)",
-                "basis": "calculated"
-            }
-        },
-        "assumptions": [
-            {"param": "Thermal Transmittance (U-Value)", "value": "0.18 W/m²·K (Polar Insulated Cladding)", "basis": "documented"},
-            {"param": "Primary Generator Capacity", "value": "200 kW (Volvo Penta Diesel Unit)", "basis": "documented"},
-            {"param": "Specific Fuel Consumption", "value": "0.245 L/kWh (Polar A-1 Blend)", "basis": "documented"},
-            {"param": "Indoor Comfort Setpoint", "value": "+20.0 °C target living area", "basis": "documented"}
-        ]
-    }
+    env_type = _weather_provenance(weather).lower()
+    return build_twin_inspector(
+        station_id=sid,
+        mode="physics-fallback",
+        tick_count=None,
+        values=fallback["sensors"],
+        meta=fallback["meta"],
+        params=PHYSICS[sid].params,
+        environment_source=f"{weather.get('source')} ({weather.get('dataset') or 'no dataset'})",
+        environment_source_type=env_type,
+        simulated_time=None,
+        data_source={"mode": "physics-fallback", "sourceType": env_type,
+                     "label": "Backend physics fallback driven by the latest DB weather row",
+                     "weatherDataset": weather.get("dataset")},
+        telemetry_source="physics-fallback",
+    )
 
 # ═══════════════════════════════════════════════════════════════
 #  What-If Scenario Simulation Engine
@@ -1109,19 +1051,20 @@ def dispatch_remote_command(req: DispatchCommandRequest):
         req.subsystem,
         req.command,
         json.dumps(req.parameters or {}),
-        "executed",
+        "queued (simulated)",
         now_ts,
-        now_ts,
+        None,
         req.issuedBy,
-        f"Command [{req.command}] acknowledged and applied to station telemetry controller."
+        "SIMULATED dispatch: recorded only. No station actuation link exists; nothing was executed."
     ))
     conn.commit()
     conn.close()
     return {
-        "status": "success",
+        "status": "queued (simulated)",
+        "simulated": True,
         "commandId": cmd_id,
-        "message": f"Command '{req.command}' dispatched to {req.stationId} {req.subsystem}.",
-        "executionTimeMs": 85
+        "message": (f"Simulated dispatch: '{req.command}' for {req.stationId} {req.subsystem} was recorded. "
+                    "No real actuation link exists."),
     }
 
 @app.get("/api/remote/commands")
@@ -1153,81 +1096,208 @@ def get_alerts(sid: str = Depends(station_param)):
 #  Admin & Configuration APIs
 # ═══════════════════════════════════════════════════════════════
 
-SYSTEM_THRESHOLDS = {
-    "generator_temp_warning": 88.0,
-    "generator_temp_critical": 95.0,
-    "wind_speed_warning_ms": 18.0,
-    "wind_speed_critical_ms": 25.0,
-    "fuel_reorder_days": 45
+# Allowed ranges per threshold (unit) — validated on save (B22).
+THRESHOLD_RULES = {
+    "generator_temp_warning": (40.0, 130.0, "°C"),
+    "generator_temp_critical": (40.0, 140.0, "°C"),
+    "wind_speed_warning_ms": (1.0, 80.0, "m/s"),
+    "wind_speed_critical_ms": (1.0, 100.0, "m/s"),
+    "fuel_reorder_days": (1.0, 365.0, "days"),
 }
+THRESHOLD_ORDER = [("generator_temp_warning", "generator_temp_critical"),
+                   ("wind_speed_warning_ms", "wind_speed_critical_ms")]
+
+
+def load_thresholds() -> dict:
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        rows = conn.execute("SELECT key, value, updated_at, updated_by FROM admin_thresholds").fetchall()
+    finally:
+        conn.close()
+    return {k: {"value": v, "updatedAt": ts, "updatedBy": by} for k, v, ts, by in rows}
+
 
 @app.get("/api/admin/config")
 def get_admin_config():
+    th = load_thresholds()
     return {
         "system": {
             "name": "AURORA Antarctic Digital Twin Platform",
             "version": app_config.APP_VERSION,
-            "status": "Healthy / Mission Control Ready",
             "activeStations": ["Maitri", "Bharati"],
-            "ingestionSource": "NCPOR Official Data Infrastructure (https://data.ncpor.res.in)"
+            "ingestionSource": "Open-Meteo ERA5 reanalysis cache + NCPOR AWS live page scrape (manual ingest)",
         },
+        # HARDCODED-DEMO: example roles only — there is no authentication or RBAC yet (P1-8).
+        "usersProvenance": "HARDCODED-DEMO (no authentication / RBAC implemented)",
         "users": [
             {"id": "usr-01", "name": "Station Commander", "role": "Commander", "station": "All", "access": "Full Control"},
             {"id": "usr-02", "name": "Chief Electrical Engineer", "role": "Engineer", "station": "Maitri", "access": "C&C Dispatch"},
             {"id": "usr-03", "name": "Scientific Observer", "role": "Observer", "station": "Bharati", "access": "Read-Only Analytics"},
             {"id": "usr-04", "name": "Logistics Officer", "role": "Logistics", "station": "All", "access": "Inventory Management"}
         ],
-        "thresholds": SYSTEM_THRESHOLDS
+        "thresholds": {k: v["value"] for k, v in th.items()},
+        "thresholdsMeta": th,
+        "thresholdRules": {k: {"min": lo, "max": hi, "unit": u} for k, (lo, hi, u) in THRESHOLD_RULES.items()},
+        "thresholdsUsedByAlerts": False,   # stored only; alert logic adopts them in the next step
     }
 
+
 class ConfigUpdateRequest(BaseModel):
-    thresholds: Optional[Dict[str, float]] = None
+    thresholds: Dict[str, float]
+    updatedBy: str = Field("operator", max_length=64)
+
 
 @app.post("/api/admin/config")
 def update_admin_config(req: ConfigUpdateRequest):
-    if req.thresholds:
-        for k, v in req.thresholds.items():
-            SYSTEM_THRESHOLDS[k] = float(v)
-    return {"status": "success", "thresholds": SYSTEM_THRESHOLDS}
+    errors = []
+    for k, v in req.thresholds.items():
+        if k not in THRESHOLD_RULES:
+            errors.append(f"unknown threshold '{k}'")
+            continue
+        lo, hi, unit = THRESHOLD_RULES[k]
+        if not math.isfinite(v) or not (lo <= v <= hi):
+            errors.append(f"{k} must be between {lo} and {hi} {unit} (got {v})")
+    merged = {k: v["value"] for k, v in load_thresholds().items()}
+    merged.update({k: float(v) for k, v in req.thresholds.items() if k in THRESHOLD_RULES})
+    for warn, crit in THRESHOLD_ORDER:
+        if merged.get(warn) is not None and merged.get(crit) is not None and merged[warn] >= merged[crit]:
+            errors.append(f"{warn} ({merged[warn]}) must be lower than {crit} ({merged[crit]})")
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        with conn:
+            for k, v in req.thresholds.items():
+                conn.execute("UPDATE admin_thresholds SET value = ?, updated_at = ?, updated_by = ? WHERE key = ?",
+                             (float(v), now, req.updatedBy, k))
+    finally:
+        conn.close()
+    return {"status": "saved", "updatedAt": now,
+            "thresholds": {k: v["value"] for k, v in load_thresholds().items()},
+            "thresholdsUsedByAlerts": False}
 
 # ═══════════════════════════════════════════════════════════════
-#  Evidence-Grounded AI Explanation API
+#  Real AI pipeline (proxied from the internal simulator, :SIM_PORT)
+# ═══════════════════════════════════════════════════════════════
+
+SIM_TIMEOUT_S = 3.0
+EXPLAIN_TIMEOUT_S = 20.0
+MODE_TIMEOUT_S = 30.0   # /mode rebuilds simulators (may load weather caches)
+
+
+def _sim_request(method: str, path: str, *, params=None, json_body=None, timeout=SIM_TIMEOUT_S):
+    """Call the internal simulator. Down/timeout/5xx → HTTP 503 with a clear reason."""
+    url = f"{app_config.SIMULATOR_URL}{path}"
+    try:
+        r = requests.request(method, url, params=params, json=json_body, timeout=timeout)
+    except requests.Timeout:
+        raise HTTPException(status_code=503, detail=f"Simulator offline: no response from {app_config.SIMULATOR_URL} within {timeout:g} s")
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Simulator offline: cannot reach {app_config.SIMULATOR_URL} ({type(exc).__name__})")
+    if r.status_code >= 500:
+        raise HTTPException(status_code=503, detail=f"Simulator error: HTTP {r.status_code} from {path}")
+    try:
+        data = r.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail=f"Simulator returned invalid JSON from {path}")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=data)
+    return data
+
+
+@app.get("/api/ai/anomaly")
+def ai_anomaly(sid: str = Depends(station_param)):
+    return {**_sim_request("GET", "/api/anomaly", params={"station": sid}), "source": "simulator"}
+
+
+@app.get("/api/ai/decision")
+def ai_decision(sid: str = Depends(station_param)):
+    return {**_sim_request("GET", "/api/decision", params={"station": sid}), "source": "simulator"}
+
+
+@app.get("/api/ai/forecast")
+def ai_forecast(sid: str = Depends(station_param)):
+    return {**_sim_request("GET", "/api/forecast", params={"station": sid}), "source": "simulator"}
+
+
+@app.get("/api/ai/chronos")
+def ai_chronos(sid: str = Depends(station_param)):
+    return {**_sim_request("GET", "/api/chronos-forecast", params={"station": sid}), "source": "simulator"}
+
+
+# ── Demo Control / replay controls (so the browser never calls :SIM_PORT) ──
+
+@app.get("/api/sim/scenarios")
+def sim_scenarios(sid: str = Depends(station_param)):
+    return _sim_request("GET", "/scenarios", params={"station": sid})
+
+
+@app.post("/api/sim/inject/{scenario_id}")
+def sim_inject(scenario_id: str, sid: str = Depends(station_param)):
+    if not re.fullmatch(r"[a-z0-9_]{1,40}", scenario_id):
+        raise HTTPException(status_code=422, detail="invalid scenario id")
+    return _sim_request("POST", f"/inject/{scenario_id}", params={"station": sid})
+
+
+@app.post("/api/sim/reset")
+def sim_reset(sid: str = Depends(station_param)):
+    return _sim_request("POST", "/reset", params={"station": sid})
+
+
+class ModeRequest(BaseModel):
+    mode: str = Field("reanalysis", pattern=r"^(reanalysis|simulation)$")
+    date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    speed: float = Field(120.0, ge=1.0, le=3600.0)
+
+
+@app.post("/api/sim/mode")
+def sim_mode(req: ModeRequest):
+    return _sim_request("POST", "/mode", json_body=req.model_dump(), timeout=MODE_TIMEOUT_S)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Explanation: LLM via simulator (Groq) or honest offline summary
 # ═══════════════════════════════════════════════════════════════
 
 class ExplainRequest(BaseModel):
-    evidence: Optional[Dict[str, Any]] = None
-    station: str = "maitri"
-    subsystem: Optional[str] = None
+    station: Optional[str] = Field(None, max_length=32)
+    stationId: Optional[str] = Field(None, max_length=32)
+    question: str = Field("status", max_length=32)
+    freeText: str = Field("", max_length=2000)
+
+
+_LLM_FAILURE_PREFIXES = ("LLM explanation", "Decision engine has not")
+
 
 @app.post("/api/aurora-explain")
 @app.post("/api/explain")
+@app.post("/api/ai/explain")
 def get_ai_explanation(req: ExplainRequest):
-    station = require_station(req.station)
-    risk = assess_blizzard_and_polar_risks(station)
-    weather = get_latest_weather_for_station(station)
-    
-    text = (
-        f"**Aurora Antarctic Diagnostic Briefing ({station.upper()})**\n\n"
-        f"• **Current Environmental Regime**: Outside temperature is {weather['temp']}°C with wind speed of {weather['wind']} m/s "
-        f"({ms_to_kmh(weather['wind']):.0f} km/h) and air pressure {weather['pressure']} hPa (source: {weather['source']}, dataset: {weather.get('dataset')}).\n\n"
-        f"• **Physical Causal Assessment**: Overall station health is **{risk['overall_health'].upper()}** (Risk Score: {risk['risk_score']}/100). "
-        f"Wind chill is currently evaluated at {risk['wind_chill_c']}°C. "
-    )
-    if risk["identified_risks"]:
-        top_risk = risk["identified_risks"][0]
-        text += (
-            f"The primary operational advisory is: **{top_risk['reason']}**\n\n"
-            f"• **Recommended Engineering Mitigation**: {top_risk['recommended_action']}"
-        )
-    else:
-        text += "All critical life-support and energy generation subsystems are operating within their nominal physical envelopes."
+    """Forward question + freeText to the simulator's Groq layer. With no key,
+    Groq/simulator unreachable or an upstream error, return a deterministic
+    summary of the current decision JSON labelled 'offline summary'."""
+    sid = require_station(req.stationId or req.station or "maitri")
+    reason = None
+    try:
+        res = _sim_request("POST", "/api/aurora-explain", timeout=EXPLAIN_TIMEOUT_S,
+                           json_body={"station": sid, "question": req.question, "freeText": req.freeText})
+        text = str(res.get("explanation", ""))
+        if res.get("llmAvailable") and not text.startswith(_LLM_FAILURE_PREFIXES):
+            return {**res, "station": sid, "mode": "llm", "llmAvailable": True}
+        reason = text or "LLM unavailable"
+    except HTTPException as exc:
+        reason = str(exc.detail)
 
-    return {
-        "status": "success",
-        "station": station,
-        "explanation": text,
-        "provenance": "Grounded on live NCPOR observation stream and Aurora causal physics model."
-    }
+    try:
+        decision = _sim_request("GET", "/api/decision", params={"station": sid})
+        if (decision.get("risk") or {}).get("level") == "unknown":
+            decision = None     # simulator up but no decision computed yet
+    except HTTPException:
+        decision = None
+    out = offline_explanation(decision, req.question, req.freeText, sid, store.get_published(sid))
+    out.update({"station": sid, "reason": reason, "sources": ["decision_engine"] if decision else ["telemetry_snapshot"]})
+    return out
 
 if __name__ == "__main__":
     import uvicorn
