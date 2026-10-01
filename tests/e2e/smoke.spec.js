@@ -133,11 +133,16 @@ test('every module opens cleanly', async ({ page }) => {
     // and never the ErrorBoundary fallback.
     await expect(page.locator('.overview-stage, .module-content-scroll')).toBeVisible();
     await expect(page.getByTestId('error-boundary'), `${label} crashed`).toHaveCount(0);
-    // The panel on screen must be THIS module's, and the loading placeholder must clear.
+    // Exactly one module panel, and it is THIS module's; the loading placeholder clears.
+    // The count catches audit F1 (every visited module stayed stacked on screen), which a
+    // toContainText check alone cannot: the new marker is present either way.
     if (marker) {
+      await expect(page.getByTestId('module-panel'), `more than one module on screen after ${label}`).toHaveCount(1);
       await expect(page.getByTestId('panel-fallback')).toHaveCount(0);
-      await expect(page.locator('.module-content-scroll'),
+      await expect(page.getByTestId('module-panel'),
                    `${label} was selected but its panel did not render`).toContainText(marker);
+    } else {
+      await expect(page.getByTestId('module-panel')).toHaveCount(0);
     }
   }
 

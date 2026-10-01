@@ -109,15 +109,25 @@ export default function App() {
     remote: 'Remote commands panel', admin: 'Admin panel', ai: 'AI diagnostics panel',
   };
 
-  // Each module panel gets its own ErrorBoundary so one crash never blanks the app.
-  // The Suspense boundary sits OUTSIDE AnimatePresence (see the render below), not here.
+  // One module panel at a time. The wrapper is keyed by module, so switching unmounts
+  // the previous panel outright. Each panel gets its own ErrorBoundary so one crash
+  // never blanks the app, and its own Suspense so a loading chunk shows the placeholder.
+  //
+  // No AnimatePresence here (UI audit finding F1). Without mode="wait" it
+  // kept every exiting lazy panel mounted, so each module visited stayed stacked on
+  // screen; with mode="wait" (fixed in a745600) the incoming panel suspended and the
+  // swap never happened. Plain keyed rendering has neither failure.
   function renderModulePanel() {
     const panel = renderModulePanelInner();
     if (!panel) return null;
     return (
-      <ErrorBoundary key={activeModule} name={MODULE_NAMES[activeModule]} resetKey={activeStation}>
-        {panel}
-      </ErrorBoundary>
+      <div key={activeModule} data-testid="module-panel" data-module={activeModule}>
+        <ErrorBoundary name={MODULE_NAMES[activeModule]} resetKey={activeStation}>
+          <Suspense fallback={<PanelFallback name={MODULE_NAMES[activeModule]} />}>
+            {panel}
+          </Suspense>
+        </ErrorBoundary>
+      </div>
     );
   }
 
@@ -264,18 +274,7 @@ export default function App() {
             </div>
           ) : (
             <div className="module-content-scroll">
-              {/* No mode="wait" here, deliberately. With it, AnimatePresence keeps the
-                  OLD child mounted until its exit animation finishes; the panels are
-                  lazy, so the incoming child suspends, React keeps showing the old tree,
-                  and the swap never happens — selecting a module whose chunk was not
-                  cached yet left the previous panel on screen. Suspense also wraps
-                  AnimatePresence rather than sitting inside it, so a loading chunk
-                  replaces the subtree with the placeholder instead of being held. */}
-              <Suspense fallback={<PanelFallback name={MODULE_NAMES[activeModule]} />}>
-                <AnimatePresence>
-                  {renderModulePanel()}
-                </AnimatePresence>
-              </Suspense>
+              {renderModulePanel()}
             </div>
           )}
         </main>
