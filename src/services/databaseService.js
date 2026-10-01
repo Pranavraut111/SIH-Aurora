@@ -5,13 +5,7 @@
    - Alert history log
    - Station configuration persistence
    ═══════════════════════════════════════════════════════════════ */
-import { db, firebaseEnabled } from '../firebase';
-import {
-  ref,
-  push,
-  set,
-  serverTimestamp,
-} from 'firebase/database';
+import { firebaseEnabled, getFirebaseDatabase } from '../firebase';
 
 // ── Sensor Snapshot Writes ───────────────────────────────────
 const WRITE_INTERVAL_MS = 30_000; // 30 seconds
@@ -24,6 +18,9 @@ export async function writeSensorSnapshot(stationId, sensors, alerts) {
   lastWriteTime = now;
 
   try {
+    const fb = await getFirebaseDatabase();
+    if (!fb) return false;
+    const { db, ref, push, set, serverTimestamp } = fb;
     const snapshotsRef = ref(db, `sensor_snapshots/${stationId}`);
     const newSnapshotRef = push(snapshotsRef);
     await set(newSnapshotRef, {
@@ -49,6 +46,9 @@ export async function logAlert(stationId, buildingId, severity, buildingName, tr
   alertCache.set(cacheKey, severity);
 
   try {
+    const fb = await getFirebaseDatabase();
+    if (!fb) return;
+    const { db, ref, push, set, serverTimestamp } = fb;
     const alertsRef = ref(db, `alert_history/${stationId}`);
     const newAlertRef = push(alertsRef);
     await set(newAlertRef, {

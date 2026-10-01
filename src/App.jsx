@@ -5,34 +5,39 @@
    - Left Collapsible Sidebar (Primary Navigation)
    - Main Stage (Flexbox 100% fill, 3D Digital Twin or Full Module Views)
    ═══════════════════════════════════════════════════════════════ */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, lazy, Suspense } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import StationScene from './components/StationScene';
 import ErrorBoundary from './components/ErrorBoundary';
 import TopBar from './components/TopBar';
 import SidebarNav from './components/SidebarNav';
 import OverviewHUD from './components/OverviewHUD';
-import BuildingPanel from './components/BuildingPanel';
 import AlertFeed from './components/AlertFeed';
 import ConnectionPanel from './components/ConnectionPanel';
 import DemoControl from './components/DemoControl';
-import AiPanel from './components/AiPanel';
-import EventTimeline from './components/EventTimeline';
-import TwinInspector from './components/TwinInspector';
-import EnvironmentalPanel from './components/EnvironmentalPanel';
-import WhatIfSimulationPanel from './components/WhatIfSimulationPanel';
-import LogisticsPanel from './components/LogisticsPanel';
-import RemoteControlPanel from './components/RemoteControlPanel';
-import AdminPanel from './components/AdminPanel';
-import ReportPanel from './components/ReportPanel';
-import {
-  InfrastructurePanel,
-  EnergyPanel,
-} from './components/ModulePanels';
+import PanelFallback from './components/PanelFallback';
 import { useStationData } from './hooks/useStationData';
 import { useDatabase } from './hooks/useDatabase';
 import { trackModuleView, trackBuildingView, trackConnectionToggle, trackStationSwitch } from './services/analyticsService';
 import './App.css';
+
+// ── Code splitting ─────────────────────────────────────────
+// Everything below is fetched only when it is first shown, which keeps three.js
+// (the 3D twin) and recharts (the weather charts) out of the initial bundle.
+const StationScene = lazy(() => import('./components/StationScene'));
+const BuildingPanel = lazy(() => import('./components/BuildingPanel'));
+const EventTimeline = lazy(() => import('./components/EventTimeline'));
+const TwinInspector = lazy(() => import('./components/TwinInspector'));
+const AiPanel = lazy(() => import('./components/AiPanel'));
+const EnvironmentalPanel = lazy(() => import('./components/EnvironmentalPanel'));
+const WhatIfSimulationPanel = lazy(() => import('./components/WhatIfSimulationPanel'));
+const LogisticsPanel = lazy(() => import('./components/LogisticsPanel'));
+const RemoteControlPanel = lazy(() => import('./components/RemoteControlPanel'));
+const AdminPanel = lazy(() => import('./components/AdminPanel'));
+const ReportPanel = lazy(() => import('./components/ReportPanel'));
+const InfrastructurePanel = lazy(() =>
+  import('./components/ModulePanels').then((m) => ({ default: m.InfrastructurePanel })));
+const EnergyPanel = lazy(() =>
+  import('./components/ModulePanels').then((m) => ({ default: m.EnergyPanel })));
 
 export default function App() {
   // ── State ──────────────────────────────────────────────────
@@ -104,13 +109,16 @@ export default function App() {
     remote: 'Remote commands panel', admin: 'Admin panel', ai: 'AI diagnostics panel',
   };
 
-  // Each module panel gets its own ErrorBoundary so one crash never blanks the app.
+  // Each module panel gets its own ErrorBoundary so one crash never blanks the app,
+  // and its own Suspense boundary because the panels are loaded on demand.
   function renderModulePanel() {
     const panel = renderModulePanelInner();
     if (!panel) return null;
     return (
       <ErrorBoundary key={activeModule} name={MODULE_NAMES[activeModule]} resetKey={activeStation}>
-        {panel}
+        <Suspense fallback={<PanelFallback name={MODULE_NAMES[activeModule]} />}>
+          {panel}
+        </Suspense>
       </ErrorBoundary>
     );
   }
@@ -234,12 +242,14 @@ export default function App() {
               {/* 3D Twin Scene — Centerpiece */}
               <div className="scene-container">
                 <ErrorBoundary name="3D station view">
-                  <StationScene
-                    alertStates={stationData.alerts}
-                    selectedBuilding={selectedBuilding}
-                    onBuildingClick={handleBuildingClick}
-                    onBuildingHover={handleBuildingHover}
-                  />
+                  <Suspense fallback={<PanelFallback name="3D station view" />}>
+                    <StationScene
+                      alertStates={stationData.alerts}
+                      selectedBuilding={selectedBuilding}
+                      onBuildingClick={handleBuildingClick}
+                      onBuildingHover={handleBuildingHover}
+                    />
+                  </Suspense>
                 </ErrorBoundary>
               </div>
 
@@ -289,34 +299,42 @@ export default function App() {
       />
 
       {/* Building Detail Slide-in Panel */}
-      <AnimatePresence>
-        {selectedBuilding && (
-          <BuildingPanel
-            buildingId={selectedBuilding}
-            sensorData={stationData.sensors[selectedBuilding]}
-            historyData={stationData.history?.[selectedBuilding]}
-            alertLevel={stationData.alerts?.[selectedBuilding]}
-            onClose={() => setSelectedBuilding(null)}
-          />
-        )}
-      </AnimatePresence>
+      <Suspense fallback={null}>
+        <AnimatePresence>
+          {selectedBuilding && (
+            <BuildingPanel
+              buildingId={selectedBuilding}
+              sensorData={stationData.sensors[selectedBuilding]}
+              historyData={stationData.history?.[selectedBuilding]}
+              alertLevel={stationData.alerts?.[selectedBuilding]}
+              onClose={() => setSelectedBuilding(null)}
+            />
+          )}
+        </AnimatePresence>
+      </Suspense>
 
       {/* Event Timeline Modal */}
-      <AnimatePresence>
-        {showTimeline && (
-          <EventTimeline
-            events={eventTimeline}
-            onClose={() => setShowTimeline(false)}
-          />
-        )}
-      </AnimatePresence>
+      <Suspense fallback={null}>
+        <AnimatePresence>
+          {showTimeline && (
+            <EventTimeline
+              events={eventTimeline}
+              onClose={() => setShowTimeline(false)}
+            />
+          )}
+        </AnimatePresence>
+      </Suspense>
 
-      {/* Digital Twin Inspector Modal */}
-      <TwinInspector
-        activeStation={activeStation}
-        isOpen={showTwinInspector}
-        onClose={() => setShowTwinInspector(false)}
-      />
+      {/* Digital Twin Inspector Modal — mounted only once it is first opened. */}
+      {showTwinInspector && (
+        <Suspense fallback={null}>
+          <TwinInspector
+            activeStation={activeStation}
+            isOpen={showTwinInspector}
+            onClose={() => setShowTwinInspector(false)}
+          />
+        </Suspense>
+      )}
 
       {/* Demo Control Anomaly Trigger Tool */}
       <DemoControl activeStation={activeStation} />

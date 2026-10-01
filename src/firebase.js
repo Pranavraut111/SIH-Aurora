@@ -3,12 +3,14 @@
    OFF BY DEFAULT (security: PROJECT_CONTEXT.md §15 / P0-6).
    Firebase (RTDB + Analytics) is initialised ONLY when
      VITE_ENABLE_FIREBASE === "true"  AND  the VITE_FIREBASE_* config is present.
-   Otherwise `app`/`db`/analytics are null and every Firebase call in
-   databaseService / analyticsService is a silent no-op (one console.info).
+   Otherwise every Firebase call in databaseService / analyticsService is a
+   silent no-op (one console.info).
+
+   The SDK is loaded with a dynamic import(), so when Firebase is disabled — the
+   default, and the only supported setup — none of it is in the bundle the browser
+   downloads. Nothing here touches the network until something asks for the db or
+   analytics handle.
    ═══════════════════════════════════════════════════════════════ */
-import { initializeApp } from 'firebase/app';
-import { getAnalytics, isSupported } from 'firebase/analytics';
-import { getDatabase } from 'firebase/database';
 
 const env = import.meta.env;
 
@@ -27,34 +29,63 @@ const REQUIRED_KEYS = ['apiKey', 'projectId', 'appId', 'databaseURL'];
 const missing = REQUIRED_KEYS.filter((k) => !firebaseConfig[k]);
 const enabledFlag = env.VITE_ENABLE_FIREBASE === 'true';
 
-let app = null;
-let analytics = null;
-let db = null;
+/** Synchronous: true only when the flag is on AND the config is complete. */
+export const firebaseEnabled = enabledFlag && missing.length === 0;
 
 if (!enabledFlag) {
   console.info('[Firebase] Disabled (set VITE_ENABLE_FIREBASE=true to enable).');
 } else if (missing.length > 0) {
   console.info(`[Firebase] Disabled: VITE_ENABLE_FIREBASE=true but config missing (${missing.join(', ')}).`);
-} else {
-  try {
-    app = initializeApp(firebaseConfig);
-    db = getDatabase(app);
-    // Analytics is unavailable in some environments (e.g. no cookies/IndexedDB)
-    isSupported()
-      .then((ok) => {
-        if (ok) analytics = getAnalytics(app);
-      })
-      .catch((err) => console.warn('[Firebase] Analytics unavailable:', err.message));
-  } catch (err) {
-    console.error('[Firebase] Initialisation failed:', err);
-    app = null;
-    db = null;
-  }
 }
 
-export const firebaseEnabled = db !== null;
-export function getFirebaseAnalytics() {
-  return analytics;
+let initPromise = null;
+
+/** Load the SDK and initialise the app once. Resolves to null when disabled or broken. */
+function init() {
+  if (!firebaseEnabled) return Promise.resolve(null);
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    try {
+      const [{ initializeApp }, dbMod] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/database'),
+      ]);
+      const app = initializeApp(firebaseConfig);
+      return { app, db: dbMod.getDatabase(app), dbMod };
+    } catch (err) {
+      console.error('[Firebase] Initialisation failed:', err);
+      return null;
+    }
+  })();
+  return initPromise;
 }
-export { app, db };
-export default app;
+
+/** `{ db, ref, push, set, serverTimestamp }` when Firebase is on, else null. */
+export async function getFirebaseDatabase() {
+  const inst = await init();
+  if (!inst) return null;
+  const { ref, push, set, serverTimestamp } = inst.dbMod;
+  return { db: inst.db, ref, push, set, serverTimestamp };
+}
+
+let analyticsPromise = null;
+
+/** `{ analytics, logEvent }` when Analytics is on and supported, else null. */
+export async function getFirebaseAnalytics() {
+  if (!firebaseEnabled) return null;
+  if (analyticsPromise) return analyticsPromise;
+  analyticsPromise = (async () => {
+    const inst = await init();
+    if (!inst) return null;
+    try {
+      // Analytics is unavailable in some environments (e.g. no cookies/IndexedDB).
+      const mod = await import('firebase/analytics');
+      if (!(await mod.isSupported())) return null;
+      return { analytics: mod.getAnalytics(inst.app), logEvent: mod.logEvent };
+    } catch (err) {
+      console.warn('[Firebase] Analytics unavailable:', err.message);
+      return null;
+    }
+  })();
+  return analyticsPromise;
+}

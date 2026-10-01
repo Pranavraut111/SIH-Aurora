@@ -3,14 +3,15 @@
    Wraps Firebase Analytics for Aurora-specific event tracking.
    All events are fire-and-forget (no blocking UI).
    ═══════════════════════════════════════════════════════════════ */
-import { getFirebaseAnalytics } from '../firebase';
-import { logEvent as fbLogEvent } from 'firebase/analytics';
+import { firebaseEnabled, getFirebaseAnalytics } from '../firebase';
 
-// No-op when Firebase/Analytics is not configured.
+// No-op when Firebase/Analytics is not configured. Fire-and-forget: the SDK is
+// loaded on demand, so nothing here blocks the UI or runs when Firebase is off.
 function logEvent(name, params) {
-  const analytics = getFirebaseAnalytics();
-  if (!analytics) return;
-  fbLogEvent(analytics, name, params);
+  if (!firebaseEnabled) return;
+  getFirebaseAnalytics()
+    .then((fb) => fb && fb.logEvent(fb.analytics, name, params))
+    .catch((e) => console.debug('[analytics] event not sent (analytics unavailable)', e));
 }
 
 /**
