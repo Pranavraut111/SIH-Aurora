@@ -16,6 +16,7 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
+coverage/
 
 # Secrets — NEVER commit
 .env

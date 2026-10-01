@@ -1,0 +1,9 @@
+/* Vitest setup: jest-dom matchers + a clean slate between tests. */
+import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
+import { afterEach, vi } from 'vitest';
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
