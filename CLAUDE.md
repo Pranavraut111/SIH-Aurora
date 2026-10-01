@@ -23,6 +23,10 @@
   Python reads it via `simulator/station_config.py`; the frontend imports it via `src/data/stationConfig.js`;
   it is served at `GET /api/config/stations`. Never hardcode coordinates, names, graphs or thresholds elsewhere.
   Physics parameters stay in `physics_model.py`.
+- **Alerts** come only from `simulator/alert_engine.py` (run by the tick): every sensor vs station_config
+  defaults + `alert_threshold_overrides` (SQLite, set in System Admin). Alerts persist in `station_alerts`,
+  are acknowledged by id (`POST /api/alerts/{id}/acknowledge` with `acknowledgedBy`), and auto-resolve after
+  `ALERT_RESOLVE_TICKS` normal ticks. No client-side alert rules except the labelled browser demo mode.
 
 ## Units (one convention everywhere — simulator.py, physics_model.py, unified_backend.py, UI)
 - `storage.store_fuel` = **kL**, `store_food` = **days** of food, `store_spares` = **items**.

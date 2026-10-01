@@ -19,7 +19,6 @@ inspector, what-if, logistics, remote commands and admin config.
 import asyncio
 import re
 import logging
-import math
 import sys
 import threading
 import time
@@ -30,7 +29,9 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 
 import requests
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -54,6 +55,8 @@ from offline_explain import offline_explanation
 from twin_inspector import build_twin_inspector
 from units import ms_to_kmh, kmh_to_ms
 from station_store import StationStore
+import alert_engine
+from alert_engine import AlertEngine, AlertNotFound
 
 log = logging.getLogger("aurora.backend")
 
@@ -64,6 +67,8 @@ STATIONS = station_config.station_ids()          # from station_config.json
 PHYSICS = {sid: StationPhysicsModel(sid) for sid in STATIONS}
 
 store = StationStore(STATIONS, history_max_points=app_config.HISTORY_MAX_POINTS)
+# Persistent threshold alerts for every sensor (station_config defaults + admin overrides).
+ALERTS = AlertEngine(STATIONS, resolve_ticks=app_config.ALERT_RESOLVE_TICKS)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -244,55 +249,11 @@ def advance_fallback(sid: str) -> dict:
 #  COMPUTE SNAPSHOT (pure) — no IO, no mutation
 # ═══════════════════════════════════════════════════════════════
 
-def compute_alerts(sid: str, sensors: dict, ts_ms: int):
-    """Existing unified alert rules (gen_temp, wind), evaluated from sensors so
-    they work for both telemetry sources. Wind thresholds are in m/s."""
-    alerts: Dict[str, str] = {}
-    active_alerts: List[dict] = []
-
-    gen_temp = sensors.get("generator", {}).get("gen_temp")
-    if gen_temp is not None:
-        if gen_temp > 95:
-            alerts["generator"] = "critical"
-            active_alerts.append({
-                "id": f"ALT-{sid}-GEN-01", "buildingId": "generator", "buildingName": "Generator Shed",
-                "level": "critical", "sensor": "gen_temp", "value": gen_temp, "unit": "°C", "threshold": 95,
-                "message": f"Generator coolant temperature {gen_temp}°C exceeds safe limit (95°C).",
-                "timestamp": ts_ms,
-            })
-        elif gen_temp > 88:
-            alerts["generator"] = "warning"
-            active_alerts.append({
-                "id": f"ALT-{sid}-GEN-02", "buildingId": "generator", "buildingName": "Generator Shed",
-                "level": "warning", "sensor": "gen_temp", "value": gen_temp, "unit": "°C", "threshold": 88,
-                "message": f"Elevated generator temperature ({gen_temp}°C).",
-                "timestamp": ts_ms,
-            })
-        else:
-            alerts["generator"] = "normal"
-
-    wind_kmh = sensors.get("lab", {}).get("env_wind")
-    if wind_kmh is not None:
-        wind_ms = kmh_to_ms(wind_kmh)
-        if wind_ms > 25:
-            alerts["commsMast"] = "critical"
-            active_alerts.append({
-                "id": f"ALT-{sid}-WIND-01", "buildingId": "commsMast", "buildingName": "Comms Tower",
-                "level": "critical", "sensor": "env_wind", "value": round(wind_kmh, 1), "unit": "km/h", "threshold": 90,
-                "message": f"Gale wind speed ({wind_kmh:.0f} km/h) approaching mast structural safety limits.",
-                "timestamp": ts_ms,
-            })
-        elif wind_ms > 18:
-            alerts["commsMast"] = "warning"
-        else:
-            alerts["commsMast"] = "normal"
-    return alerts, active_alerts
-
-
 def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts_ms: int,
                    last_batch_age, connected: bool, event_timeline=None, active_patterns=None) -> dict:
-    """Pure: sensors → alerts → cascade → health → snapshot dict."""
-    alerts, active_alerts = compute_alerts(sid, sensors, ts_ms)
+    """sensors → persistent threshold alerts (ALERTS.evaluate) → cascade → health → snapshot.
+    Only the tick calls this (via select_snapshot), so alert state advances once per tick."""
+    alerts, active_alerts = ALERTS.evaluate(sid, sensors, ts_ms)
     dependency_alerts = analyze_dependency_cascade(alerts, sid)
     if any(a["level"] == "critical" for a in active_alerts) or any(d["severity"] == "critical" for d in dependency_alerts):
         health = "critical"
@@ -390,13 +351,19 @@ def published_snapshot(sid: str) -> dict:
 #  Background tick (the only writer of physics state)
 # ═══════════════════════════════════════════════════════════════
 
+def tick_station(sid: str) -> dict:
+    """One station tick (blocking: physics + alert DB writes). Runs in a worker thread."""
+    fallback = advance_fallback(sid)
+    store.set_fallback(sid, fallback)
+    snap = select_snapshot(sid)
+    store.publish(sid, snap)
+    return snap
+
+
 async def run_tick():
     for sid in STATIONS:
         try:
-            fallback = await asyncio.to_thread(advance_fallback, sid)
-            store.set_fallback(sid, fallback)
-            snap = select_snapshot(sid)
-            store.publish(sid, snap)
+            snap = await asyncio.to_thread(tick_station, sid)
             await manager.broadcast(sid, snap)
         except Exception:
             log.exception("Tick failed for station %s", sid)
@@ -417,6 +384,7 @@ async def tick_loop():
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    ALERTS.load_open()   # open/acknowledged alerts survive restarts
     await run_tick()   # prime: every station has a published snapshot before serving
     task = asyncio.create_task(tick_loop())
     log.info("Unified backend ready (v%s, tick %.1fs, batch freshness %.0fs)",
@@ -432,6 +400,20 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Aurora Antarctic Digital Twin Platform", version=app_config.APP_VERSION, lifespan=lifespan)
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """422 with JSON-safe details. FastAPI's default echoes the raw input, which
+    crashes (500) when a body contains NaN/Infinity."""
+    errors = []
+    for e in exc.errors():
+        item = {k: v for k, v in e.items() if k not in ("input", "ctx", "url")}
+        if "ctx" in e:
+            item["ctx"] = {k: str(v) for k, v in e["ctx"].items()}
+        errors.append(item)
+    log.info("422 on %s %s: %s", request.method, request.url.path, [x.get("msg") for x in errors][:5])
+    return JSONResponse(status_code=422, content={"detail": errors})
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -957,9 +939,36 @@ def toggle_station_connection(sid: str = Depends(station_param)):
 def get_station_connection_status(sid: str = Depends(station_param)):
     return {"status": "success", "stationId": sid, "connected": store.is_connected(sid)}
 
+class AcknowledgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    acknowledgedBy: OperatorName
+
+
 @app.post("/api/alerts/{alert_id}/acknowledge")
-def acknowledge_alert(alert_id: str):
-    return {"status": "success", "alertId": alert_id, "acknowledged": True}
+def acknowledge_alert(alert_id: str, req: AcknowledgeRequest):
+    if len(alert_id) > 120:
+        raise HTTPException(status_code=422, detail=["alert id too long"])
+    try:
+        row = ALERTS.acknowledge(alert_id, req.acknowledgedBy)
+    except AlertNotFound:
+        raise HTTPException(status_code=404, detail=f"Unknown alert '{alert_id}'")
+    return {"status": "success", "alertId": alert_id, "acknowledged": True,
+            "acknowledgedBy": row["acknowledged_by"], "acknowledgedAt": row["acknowledged_at"],
+            "alertStatus": row["status"], "alreadyAcknowledged": row["alreadyAcknowledged"]}
+
+
+@app.get("/api/alerts/history")
+def get_alert_history(sid: str = Depends(station_param), limit: int = Query(100, ge=1, le=500)):
+    rows = ALERTS.history(sid, limit)
+    names = station_config.building_names(sid)
+    return {"stationId": sid, "alerts": [{
+        "id": r["id"], "sensor": r["parameter"], "buildingId": r["subsystem"],
+        "buildingName": names.get(r["subsystem"], r["subsystem"]), "level": r["severity"],
+        "peakLevel": r["peak_severity"] or r["severity"], "direction": r["direction"],
+        "threshold": r["threshold_value"], "unit": r["unit"], "value": r["observed_value"],
+        "message": r["reason"], "status": r["status"], "raisedAt": r["timestamp"],
+        "resolvedAt": r["resolved_at"], "acknowledgedBy": r["acknowledged_by"],
+        "acknowledgedAt": r["acknowledged_at"]} for r in rows]}
 
 # ═══════════════════════════════════════════════════════════════
 #  Logistics & Operational Inventory APIs
@@ -1146,32 +1155,15 @@ def get_alerts(sid: str = Depends(station_param)):
 #  Admin & Configuration APIs
 # ═══════════════════════════════════════════════════════════════
 
-# Allowed ranges per threshold (unit) — validated on save (B22).
-THRESHOLD_RULES = {
-    "generator_temp_warning": (40.0, 130.0, "°C"),
-    "generator_temp_critical": (40.0, 140.0, "°C"),
-    "wind_speed_warning_ms": (1.0, 80.0, "m/s"),
-    "wind_speed_critical_ms": (1.0, 100.0, "m/s"),
-    "fuel_reorder_days": (1.0, 365.0, "days"),
-}
-THRESHOLD_ORDER = [("generator_temp_warning", "generator_temp_critical"),
-                   ("wind_speed_warning_ms", "wind_speed_critical_ms")]
-
-
-def load_thresholds() -> dict:
-    with db.connect() as conn:
-        rows = conn.execute("SELECT key, value, updated_at, updated_by FROM admin_thresholds").fetchall()
-    return {k: {"value": v, "updatedAt": ts, "updatedBy": by} for k, v, ts, by in rows}
-
-
 @app.get("/api/admin/config")
-def get_admin_config():
-    th = load_thresholds()
+def get_admin_config(sid: str = Depends(station_param)):
+    sensors = station_config.sensors(sid)
+    overrides = alert_engine.load_overrides(sid)
     return {
         "system": {
             "name": "AURORA Antarctic Digital Twin Platform",
             "version": app_config.APP_VERSION,
-            "activeStations": ["Maitri", "Bharati"],
+            "activeStations": [station_config.meta_value(s_id, "name") for s_id in STATIONS],
             "ingestionSource": "Open-Meteo ERA5 reanalysis cache + NCPOR AWS live page scrape (manual ingest)",
         },
         # HARDCODED-DEMO: example roles only — there is no authentication or RBAC yet (P1-8).
@@ -1182,43 +1174,79 @@ def get_admin_config():
             {"id": "usr-03", "name": "Scientific Observer", "role": "Observer", "station": "Bharati", "access": "Read-Only Analytics"},
             {"id": "usr-04", "name": "Logistics Officer", "role": "Logistics", "station": "All", "access": "Inventory Management"}
         ],
-        "thresholds": {k: v["value"] for k, v in th.items()},
-        "thresholdsMeta": th,
-        "thresholdRules": {k: {"min": lo, "max": hi, "unit": u} for k, (lo, hi, u) in THRESHOLD_RULES.items()},
-        "thresholdsUsedByAlerts": False,   # stored only; alert logic adopts them in the next step
+        "stationId": sid,
+        # Effective thresholds used by the alert engine for this station.
+        "thresholds": alert_engine.effective_thresholds(sid, overrides),
+        "thresholdDefaults": station_config.default_thresholds(sid),
+        "thresholdOverrides": overrides,
+        "thresholdRules": {k: {"name": v["name"], "building": v["building"], "unit": v["unit"],
+                               "min": v["thresholdRange"][0], "max": v["thresholdRange"][1], "basis": v["basis"]}
+                           for k, v in sensors.items()},
+        "alertResolveTicks": ALERTS.resolve_ticks,
+        "thresholdsUsedByAlerts": True,
     }
 
 
+class ThresholdLevels(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    warning: Optional[float] = Field(None, allow_inf_nan=False)
+    critical: Optional[float] = Field(None, allow_inf_nan=False)
+
+
+class SensorThresholdUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    low: Optional[ThresholdLevels] = None
+    high: Optional[ThresholdLevels] = None
+
+
 class ConfigUpdateRequest(BaseModel):
-    thresholds: Dict[str, float]
-    updatedBy: str = Field("operator", max_length=64)
+    model_config = ConfigDict(extra="forbid")
+    stationId: StationIdStr                      # a station id, or "*" for every station
+    thresholds: Dict[str, SensorThresholdUpdate] = Field(min_length=1, max_length=40)
+    updatedBy: OperatorName
+
+
+def _scope(raw: str) -> str:
+    return "*" if raw.strip() == "*" else require_station(raw)
 
 
 @app.post("/api/admin/config")
 def update_admin_config(req: ConfigUpdateRequest):
-    errors = []
-    for k, v in req.thresholds.items():
-        if k not in THRESHOLD_RULES:
-            errors.append(f"unknown threshold '{k}'")
-            continue
-        lo, hi, unit = THRESHOLD_RULES[k]
-        if not math.isfinite(v) or not (lo <= v <= hi):
-            errors.append(f"{k} must be between {lo} and {hi} {unit} (got {v})")
-    merged = {k: v["value"] for k, v in load_thresholds().items()}
-    merged.update({k: float(v) for k, v in req.thresholds.items() if k in THRESHOLD_RULES})
-    for warn, crit in THRESHOLD_ORDER:
-        if merged.get(warn) is not None and merged.get(crit) is not None and merged[warn] >= merged[crit]:
-            errors.append(f"{warn} ({merged[warn]}) must be lower than {crit} ({merged[crit]})")
+    scope = _scope(req.stationId)
+    updates = {
+        sensor: {d: {lvl: v for lvl, v in levels.model_dump().items() if v is not None}
+                 for d, levels in (("low", u.low), ("high", u.high)) if levels is not None}
+        for sensor, u in req.thresholds.items()
+    }
+    updates = {k: {d: lv for d, lv in v.items() if lv} for k, v in updates.items()}
+    updates = {k: v for k, v in updates.items() if v}
+    if not updates:
+        raise HTTPException(status_code=422, detail=["no threshold values given"])
+    errors = alert_engine.validate_threshold_update(scope, updates)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
-    now = int(time.time() * 1000)
-    with db.connect() as conn:
-        for k, v in req.thresholds.items():
-            conn.execute("UPDATE admin_thresholds SET value = ?, updated_at = ?, updated_by = ? WHERE key = ?",
-                         (float(v), now, req.updatedBy, k))
-    return {"status": "saved", "updatedAt": now,
-            "thresholds": {k: v["value"] for k, v in load_thresholds().items()},
-            "thresholdsUsedByAlerts": False}
+    n = alert_engine.save_overrides(scope, updates, req.updatedBy)
+    log.info("Alert thresholds updated by %s for %s: %s", req.updatedBy, scope, updates)
+    shown = STATIONS[0] if scope == "*" else scope
+    return {"status": "saved", "stationId": scope, "valuesSaved": n, "updatedAt": int(time.time() * 1000),
+            "thresholds": alert_engine.effective_thresholds(shown), "thresholdsUsedByAlerts": True}
+
+
+class ThresholdResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stationId: StationIdStr
+    sensor: Optional[Identifier] = None
+    updatedBy: OperatorName
+
+
+@app.post("/api/admin/config/reset")
+def reset_admin_thresholds(req: ThresholdResetRequest):
+    scope = _scope(req.stationId)
+    if req.sensor is not None and req.sensor not in station_config.sensors(STATIONS[0] if scope == "*" else scope):
+        raise HTTPException(status_code=404, detail=f"Unknown sensor '{req.sensor}'")
+    removed = alert_engine.reset_overrides(scope, req.sensor)
+    log.info("Alert threshold overrides reset by %s for %s/%s: %d removed", req.updatedBy, scope, req.sensor, removed)
+    return {"status": "reset", "stationId": scope, "sensor": req.sensor, "removed": removed}
 
 # ═══════════════════════════════════════════════════════════════
 #  Real AI pipeline (proxied from the internal simulator, :SIM_PORT)

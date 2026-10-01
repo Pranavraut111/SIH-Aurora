@@ -1,5 +1,5 @@
 """Unified backend: real-pipeline proxies (503 when the simulator is down),
-honest explanations, ONE twin-inspector schema, persisted+validated thresholds,
+honest explanations, ONE twin-inspector schema,
 simulated remote dispatch, and removal of the fake /api/predictions."""
 
 import pytest
@@ -120,26 +120,7 @@ def test_twin_inspector_fallback_uses_the_one_schema(client):
     assert data["generatorModel"]["power_kW"] is not None
 
 
-# ── admin thresholds: persisted + validated ───────────────────
-
-def test_thresholds_persist_and_validate(client):
-    c, _ = client
-    base = c.get("/api/admin/config").json()
-    assert base["thresholds"]["generator_temp_critical"] == 95.0
-    assert base["thresholdsUsedByAlerts"] is False
-
-    ok = c.post("/api/admin/config", json={"thresholds": {"generator_temp_critical": 97.5}, "updatedBy": "test"})
-    assert ok.status_code == 200 and ok.json()["thresholds"]["generator_temp_critical"] == 97.5
-    again = c.get("/api/admin/config").json()
-    assert again["thresholds"]["generator_temp_critical"] == 97.5            # persisted in SQLite
-    assert again["thresholdsMeta"]["generator_temp_critical"]["updatedBy"] == "test"
-
-    for bad in ({"generator_temp_critical": 500}, {"unknown_key": 1.0},
-                {"wind_speed_warning_ms": 30.0, "wind_speed_critical_ms": 20.0},
-                {"generator_temp_warning": 99.0}):                            # ≥ critical (97.5)
-        r = c.post("/api/admin/config", json={"thresholds": bad})
-        assert r.status_code == 422, bad
-    assert c.get("/api/admin/config").json()["thresholds"]["generator_temp_critical"] == 97.5   # unchanged
+# (admin thresholds + alerts are covered in test_alerts.py)
 
 
 # ── remote dispatch is labelled simulated ─────────────────────

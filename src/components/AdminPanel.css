@@ -237,3 +237,8 @@
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+/* ── per-sensor alert thresholds ─────────────────────────────── */
+.thresholds-table { width: 100%; font-size: 0.75rem; margin: 10px 0; }
+.thresholds-table td, .thresholds-table th { padding: 4px 6px; vertical-align: top; }
+.threshold-input { width: 84px; padding: 4px 6px; }

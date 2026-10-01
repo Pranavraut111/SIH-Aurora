@@ -31,7 +31,6 @@ import {
 } from './components/ModulePanels';
 import { useStationData } from './hooks/useStationData';
 import { useDatabase } from './hooks/useDatabase';
-import { getActiveAlerts } from './data/stationData';
 import { trackModuleView, trackBuildingView, trackConnectionToggle, trackStationSwitch } from './services/analyticsService';
 import './App.css';
 
@@ -54,9 +53,8 @@ export default function App() {
   useDatabase(activeStation, stationData);
 
   // ── Derived state ────────────────────────────────────────
-  const activeAlerts = stationData.activeAlerts?.length > 0
-    ? stationData.activeAlerts
-    : getActiveAlerts(stationData);
+  // Backend alerts (or browser-demo alerts, computed in useStationData) — no extra client rules.
+  const activeAlerts = stationData.activeAlerts || [];
   const criticalCount = activeAlerts.filter(a => a.level === 'critical').length;
   const isConnected = stationData.connected !== undefined ? stationData.connected : true;
   // Global data-source badge: live simulator / physics fallback / browser demo / offline
@@ -285,6 +283,9 @@ export default function App() {
         onClose={() => setShowAlertsDrawer(false)}
         alerts={activeAlerts}
         onAlertClick={handleAlertClick}
+        onAcknowledge={acknowledgeAlert}
+        activeStation={activeStation}
+        canAcknowledge={dataSource === 'websocket'}
       />
 
       {/* Building Detail Slide-in Panel */}

@@ -235,3 +235,15 @@
   line-height: 1.5;
   margin: 0;
 }
+
+/* ── acknowledge + tabs ─────────────────────────────────────── */
+.alert-ack-btn {
+  padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer;
+  color: #0f172a; background: #38bdf8; border: none;
+}
+.alert-ack-btn:disabled { opacity: 0.6; cursor: wait; }
+.alert-tab-btn {
+  margin-right: 4px; padding: 2px 8px; border-radius: 6px; font-size: 0.7rem; cursor: pointer;
+  color: inherit; background: transparent; border: 1px solid rgba(148, 163, 184, 0.3);
+}
+.alert-tab-btn.active { background: rgba(56, 189, 248, 0.2); border-color: #38bdf8; }

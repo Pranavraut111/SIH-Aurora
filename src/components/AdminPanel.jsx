@@ -5,15 +5,18 @@ import {
   LuRefreshCw, LuMapPin, LuCheck, LuServer
 } from 'react-icons/lu';
 import './AdminPanel.css';
-import { apiGet, apiPost } from '../services/api';
+import { apiGet, apiPost, describeApiError } from '../services/api';
+import { getOperatorName, setOperatorName as persistOperatorName, OPERATOR_NAME_RE } from '../services/operator';
 import { STATION_IDS, stationMeta, stationMetaDetailed } from '../data/stationConfig';
 
 
 export default function AdminPanel({ activeStation = 'maitri' }) {
   const [config, setConfig] = useState(null);
   const [activeTab, setActiveTab] = useState('datasources'); // 'datasources' | 'users' | 'thresholds' | 'system'
-  // Thresholds come from the backend (SQLite admin_thresholds); no client defaults.
-  const [thresholds, setThresholds] = useState(null);
+  // Effective alert thresholds for the active station (station_config defaults + SQLite overrides).
+  // edits: {sensor: {low|high: {warning|critical: string}}} — what the operator typed.
+  const [edits, setEdits] = useState({});
+  const [operatorName, setOperatorName] = useState(getOperatorName);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // { ok: boolean, text: string }
   const [loadError, setLoadError] = useState(null);
@@ -21,38 +24,69 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
 
   const fetchConfig = async () => {
     try {
-      const d = await apiGet('/admin/config');
+      const d = await apiGet(`/admin/config?stationId=${activeStation}`);
       setConfig(d);
-      setThresholds(d?.thresholds ? { ...d.thresholds } : null);
+      setEdits({});
       setLoadError(null);
     } catch (e) {
       console.error('Admin config error:', e);
-      setLoadError(e?.kind === 'http' ? `Backend error (HTTP ${e.status})` : 'Backend unreachable');
+      setLoadError(describeApiError(e));
     }
   };
 
   useEffect(() => {
     fetchConfig();
-  }, []);
+  }, [activeStation]);
+
+  const effective = config?.stationId === activeStation ? config.thresholds : null;
+  const valueOf = (sensor, dir, level) => edits[sensor]?.[dir]?.[level] ?? String(effective?.[sensor]?.[dir]?.[level] ?? '');
+  const setEdit = (sensor, dir, level, v) => setEdits((prev) => ({
+    ...prev, [sensor]: { ...prev[sensor], [dir]: { ...prev[sensor]?.[dir], [level]: v } },
+  }));
+  const isOverridden = (sensor) => (config?.thresholdOverrides || []).some((o) => o.sensor === sensor && o.stationId === activeStation);
 
   const handleSaveThresholds = async (e) => {
     e.preventDefault();
-    if (!thresholds) return;
+    if (!effective) return;
+    if (!OPERATOR_NAME_RE.test(operatorName.trim())) {
+      setSaveStatus({ ok: false, text: 'Operator name: 2–60 letters, digits, spaces or . , \' ( ) _ -' });
+      return;
+    }
+    // Only send values that actually changed.
+    const changes = {};
+    Object.entries(edits).forEach(([sensor, dirs]) => Object.entries(dirs).forEach(([dir, levels]) =>
+      Object.entries(levels).forEach(([level, raw]) => {
+        const num = Number(raw);
+        if (raw === '' || Number.isNaN(num) || num === effective[sensor]?.[dir]?.[level]) return;
+        changes[sensor] = { ...changes[sensor], [dir]: { ...changes[sensor]?.[dir], [level]: num } };
+      })));
+    if (!Object.keys(changes).length) {
+      setSaveStatus({ ok: false, text: 'No changes to save.' });
+      return;
+    }
     setSaving(true);
     try {
-      const res = await apiPost('/admin/config', { thresholds, updatedBy: 'admin-panel' });
-      setThresholds({ ...res.thresholds });
-      setSaveStatus({ ok: true, text: `Saved to the backend database at ${new Date(res.updatedAt).toLocaleTimeString()}. Note: alert rules do not use these values yet.` });
+      const res = await apiPost('/admin/config', { stationId: activeStation, thresholds: changes, updatedBy: operatorName.trim() });
+      persistOperatorName(operatorName);
+      setSaveStatus({ ok: true, text: `Saved ${res.valuesSaved} value(s) for ${activeStation}. The alert engine uses them from the next tick.` });
       fetchConfig();
     } catch (err) {
       console.error('[Admin] save thresholds failed', err);
-      const detail = err?.status === 422 && Array.isArray(err.body?.detail)
-        ? err.body.detail.map((d) => (typeof d === 'string' ? d : d.msg)).join('; ')
-        : err?.kind === 'http' ? `HTTP ${err.status}` : 'backend unreachable';
-      setSaveStatus({ ok: false, text: `Not saved: ${detail}` });
+      setSaveStatus({ ok: false, text: `Not saved: ${describeApiError(err)}` });
     } finally {
       setSaving(false);
       setTimeout(() => setSaveStatus(null), 8000);
+    }
+  };
+
+  const handleReset = async (sensor) => {
+    try {
+      const res = await apiPost('/admin/config/reset', { stationId: activeStation, sensor, updatedBy: operatorName.trim() || getOperatorName() });
+      setSaveStatus({ ok: true, text: `Reset ${sensor} to the station_config default (${res.removed} override value(s) removed).` });
+      fetchConfig();
+    } catch (err) {
+      console.error('[Admin] reset failed', err);
+      setSaveStatus({ ok: false, text: `Reset failed: ${describeApiError(err)}` });
     }
   };
 
@@ -71,14 +105,6 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
       setIngesting(false);
       setTimeout(() => setSaveStatus(null), 8000);
     }
-  };
-
-  const THRESHOLD_LABELS = {
-    generator_temp_warning: 'Generator coolant temperature — warning',
-    generator_temp_critical: 'Generator coolant temperature — critical',
-    wind_speed_warning_ms: 'Wind speed — warning',
-    wind_speed_critical_ms: 'Wind speed — critical',
-    fuel_reorder_days: 'Fuel reorder warning (days of supply)',
   };
 
   return (
@@ -189,29 +215,54 @@ export default function AdminPanel({ activeStation = 'maitri' }) {
         )}
 
         {activeTab === 'thresholds' && (
-          <form onSubmit={handleSaveThresholds} className="thresholds-form">
+          <form onSubmit={handleSaveThresholds} className="thresholds-form" data-testid="thresholds-form">
             {loadError && <p className="text-danger">{loadError} — thresholds cannot be loaded or saved.</p>}
-            {thresholds && Object.keys(THRESHOLD_LABELS).map((key) => {
-              const rule = config?.thresholdRules?.[key];
-              const meta = config?.thresholdsMeta?.[key];
-              return (
-                <div className="threshold-row" key={key}>
-                  <label htmlFor={`th-${key}`}>
-                    {THRESHOLD_LABELS[key]} ({rule?.unit}) <small className="text-muted">allowed {rule?.min}–{rule?.max}{meta ? ` · last set by ${meta.updatedBy}` : ''}</small>
-                  </label>
-                  <input
-                    id={`th-${key}`}
-                    type="number"
-                    step="0.5"
-                    value={thresholds[key] ?? ''}
-                    onChange={(e) => setThresholds((t) => ({ ...t, [key]: e.target.value === '' ? null : Number(e.target.value) }))}
-                    className="admin-input font-mono"
-                  />
-                </div>
-              );
-            })}
-            <p className="text-caption text-muted">Stored in the backend database and validated (range, warning &lt; critical). Alert rules don't use them yet.</p>
-            <button type="submit" className="btn-save-admin" disabled={!thresholds || saving}>
+            <p className="text-caption text-muted">
+              Alert thresholds for <strong>{stationMeta(activeStation).fullName}</strong>, used by the backend alert engine
+              (defaults from station_config.json; your changes are stored in SQLite as overrides for this station).
+              An alert auto-resolves after {config?.alertResolveTicks ?? '—'} consecutive normal ticks.
+            </p>
+            <div className="threshold-row">
+              <label htmlFor="admin-operator">Operator name (recorded with the change; not authenticated)</label>
+              <input id="admin-operator" className="admin-input" maxLength={60} value={operatorName}
+                onChange={(e) => setOperatorName(e.target.value)} />
+            </div>
+            {effective && (
+              <table className="admin-table font-mono thresholds-table">
+                <thead>
+                  <tr><th>Sensor</th><th>Unit</th><th>Low warn</th><th>Low crit</th><th>High warn</th><th>High crit</th><th /></tr>
+                </thead>
+                <tbody>
+                  {Object.entries(config.thresholdRules).map(([sensor, rule]) => (
+                    <tr key={sensor} data-sensor={sensor}>
+                      <td title={rule.basis}>{rule.name}<br /><small className="text-muted">{sensor} · {rule.building}</small></td>
+                      <td>{rule.unit}<br /><small className="text-muted">{rule.min}–{rule.max}</small></td>
+                      {['low', 'high'].flatMap((dir) => ['warning', 'critical'].map((level) => (
+                        <td key={`${dir}-${level}`}>
+                          {effective[sensor]?.[dir] ? (
+                            <input
+                              type="number"
+                              step="any"
+                              className="admin-input threshold-input"
+                              aria-label={`${sensor} ${dir} ${level}`}
+                              data-threshold={`${sensor}.${dir}.${level}`}
+                              value={valueOf(sensor, dir, level)}
+                              onChange={(e) => setEdit(sensor, dir, level, e.target.value)}
+                            />
+                          ) : <span className="text-muted">—</span>}
+                        </td>
+                      )))}
+                      <td>
+                        {isOverridden(sensor) && (
+                          <button type="button" className="btn-sync-source" onClick={() => handleReset(sensor)}>Reset</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <button type="submit" className="btn-save-admin" disabled={!effective || saving}>
               {saving ? 'Saving…' : 'Save Alert Thresholds'}
             </button>
           </form>

@@ -16,7 +16,7 @@ LEGACY_STATUSES = ("executed", "dispatched", "pending", "failed")
 
 
 def apply(conn):
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(remote_commands)")}
+    cols = {row[0] for row in conn.execute("SELECT name FROM pragma_table_info(?)", ("remote_commands",))}
     added = False
     if "acknowledged_at" not in cols:
         conn.execute("ALTER TABLE remote_commands ADD COLUMN acknowledged_at INTEGER")

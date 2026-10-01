@@ -239,12 +239,16 @@ export default function RemoteControlPanel({ activeStation = 'maitri', sensorDat
                     <div className="incident-row-top">
                       <span className={`badge badge-${alt.level}`}>{alt.level.toUpperCase()}</span>
                       <span className="incident-loc">{alt.buildingName}</span>
-                      <button
-                        className="btn-ack"
-                        onClick={() => onAcknowledgeAlert?.(alt.id)}
-                      >
-                        Acknowledge
-                      </button>
+                      {alt.acknowledged ? (
+                        <span className="incident-loc text-success">Ack: {alt.acknowledgedBy}</span>
+                      ) : (
+                        <button
+                          className="btn-ack"
+                          onClick={async () => { await onAcknowledgeAlert?.(alt.id); fetchState(); }}
+                        >
+                          Acknowledge
+                        </button>
+                      )}
                     </div>
                     <p className="incident-msg">{alt.message}</p>
                   </div>

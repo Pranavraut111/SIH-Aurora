@@ -12,7 +12,8 @@ import {
   getActiveAlerts,
 } from '../data/stationData';
 import { WS_URL } from '../config';
-import { apiPost } from '../services/api';
+import { apiPost, describeApiError } from '../services/api';
+import { getOperatorName } from '../services/operator';
 
 // WS reconnect: exponential backoff 1 s → 30 s, reset when a socket opens (B21).
 const RECONNECT_BASE_MS = 1000;
@@ -267,19 +268,22 @@ export function useStationData(activeStation = 'maitri') {
     }
   }, [stationData.connected]);
 
+  // Real acknowledge: recorded in the backend (who/when) and persisted. The alert
+  // stays visible (marked acknowledged) until its condition clears and it auto-resolves.
+  // Returns {ok, error}. Browser-demo alerts have no backend id and cannot be acknowledged.
   const acknowledgeAlert = useCallback(async (alertId) => {
     try {
-      await apiPost(`/alerts/${alertId}/acknowledge`);
+      const res = await apiPost(`/alerts/${encodeURIComponent(alertId)}/acknowledge`, { acknowledgedBy: getOperatorName() });
       setStationData(prev => ({
         ...prev,
-        activeAlerts: prev.activeAlerts.filter(a => a.id !== alertId)
+        activeAlerts: prev.activeAlerts.map(a => (a.id === alertId
+          ? { ...a, acknowledged: true, status: res.alertStatus, acknowledgedBy: res.acknowledgedBy, acknowledgedAt: res.acknowledgedAt }
+          : a)),
       }));
+      return { ok: true };
     } catch (e) {
-      console.warn(`[Alerts] acknowledge ${alertId} failed on backend; hiding locally`, e);
-      setStationData(prev => ({
-        ...prev,
-        activeAlerts: prev.activeAlerts.filter(a => a.id !== alertId)
-      }));
+      console.error(`[Alerts] acknowledge ${alertId} failed`, e);
+      return { ok: false, error: describeApiError(e) };
     }
   }, []);
 

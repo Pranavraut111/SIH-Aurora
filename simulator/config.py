@@ -157,6 +157,9 @@ HISTORY_MAX_POINTS = _get_int("HISTORY_MAX_POINTS", 300)
 TICK_INTERVAL_S = _get_float("TICK_INTERVAL_S", 2.0)
 # Simulated remote commands move queued → acknowledged (simulated) after this many seconds.
 REMOTE_ACK_DELAY_S = _get_float("REMOTE_ACK_DELAY_S", 5.0)
+# An alert auto-resolves after this many consecutive normal ticks (hysteresis; also the
+# number of lower-level ticks before a critical alert de-escalates to warning).
+ALERT_RESOLVE_TICKS = _get_int("ALERT_RESOLVE_TICKS", 3)
 
 # ── LLM (Groq) — server-side only ─────────────────────────────
 GROQ_API_KEY = _get("GROQ_API_KEY", "")

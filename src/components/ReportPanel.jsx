@@ -51,7 +51,7 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
         settle(apiGet(`/risk?stationId=${selectedStation}`), 'risk'),
         settle(apiGet(`/logistics?stationId=${selectedStation}`), 'logistics'),
         settle(apiGet(`/alerts?stationId=${selectedStation}`), 'alerts'),
-        settle(apiGet('/admin/config'), 'config'),
+        settle(apiGet(`/admin/config?stationId=${selectedStation}`), 'config'),
       ]);
 
       setReportData({
@@ -348,7 +348,7 @@ export default function ReportPanel({ activeStation = 'maitri', sensorData = {} 
                   <span className="p-val font-mono">
                     {v(gen.gen_temp, '°C')}
                   </span>
-                  <span className="p-sub">Warning threshold: {v(reportData.config?.thresholds?.generator_temp_warning, '°C')}</span>
+                  <span className="p-sub">Warning threshold: {v(reportData.config?.thresholds?.gen_temp?.high?.warning, '°C')}</span>
                 </div>
                 <div className="p-card">
                   <span className="p-title">Living Block Indoor Temp</span>
