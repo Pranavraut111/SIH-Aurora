@@ -1496,6 +1496,18 @@ def get_ai_explanation(req: ExplainRequest):
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Checked here as well as in the lifespan, so the CLI path prints just the problem and
+    # exits instead of burying it in a startup traceback. The lifespan check stays as the
+    # backstop for anything that imports `app` directly (gunicorn, uvicorn --factory, …).
+    _errors = app_config.production_config_errors()
+    if _errors and app_config.APP_ENV == "production":
+        print("Refusing to start with APP_ENV=production:", file=sys.stderr)
+        for _e in _errors:
+            print(f"  - {_e}", file=sys.stderr)
+        print("\nSee docs/DEPLOYMENT.md for the required variables.", file=sys.stderr)
+        raise SystemExit(1)
+
     # log_config=None: uvicorn's loggers propagate to the root handler configured in config.py,
     # so every service line has the same format and honours LOG_LEVEL.
     uvicorn.run(app, host=app_config.HOST, port=app_config.API_PORT, log_config=None,
