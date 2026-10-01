@@ -480,7 +480,9 @@ class StationSimulator:
         # 6. Phase 3: Anomaly detection (scored every tick)
         if self.anomaly_detector and ANOMALY_AVAILABLE:
             try:
-                features = extract_features(weather, self.values, meta, station_id=self.station_id)
+                # Observed (post-injection) vs the physics prediction for this tick
+                features = extract_features(weather, self.values, meta, station_id=self.station_id,
+                                            predicted=physics_readings)
                 self._last_anomaly = self.anomaly_detector.score(features)
             except Exception:
                 self._log_stage_error("anomaly")  # never break the main loop
@@ -838,11 +840,15 @@ def anomaly_status():
     return jsonify({
         "stationId": station_id,
         "anomalyScore": anomaly.get("anomaly_score", 0),
-        "scoreType": anomaly.get("scoreType", "normalized_isolation_forest"),
+        "scoreType": anomaly.get("scoreType", "isolation_forest_path_score"),
         "threshold": anomaly.get("threshold", 0.5),
         "isAnomaly": anomaly.get("is_anomaly", False),
         "evidence": anomaly.get("evidence", []),
         "candidateCauses": anomaly.get("candidateCauses", []),
+        # v3: which rule fired ("isolation_forest" and/or "residual_z") + largest residual
+        "triggeredBy": anomaly.get("triggeredBy", []),
+        "maxResidualSigma": anomaly.get("maxResidualSigma"),
+        "residualAlarmSigma": anomaly.get("residualAlarmSigma"),
         "detectorAvailable": sim.anomaly_detector is not None if hasattr(sim, 'anomaly_detector') else False,
     })
 

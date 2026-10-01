@@ -168,29 +168,36 @@ class WeatherDataLayer:
 
     def get_current_weather(self) -> dict:
         """
-        Get the interpolated weather at the current replay time.
-        Uses linear interpolation between hourly data points.
+        Get the interpolated weather at the current replay time (wall clock ×
+        speed_factor). Loops the cached window instead of freezing (B19).
 
-        Returns dict with:
-          env_temp, env_wind, env_pressure, env_humidity,
-          wind_direction, solar_radiation,
-          provenance metadata
+        Returns dict with env_temp (°C), env_wind (km/h), env_pressure (hPa),
+        env_humidity (%), wind_direction, solar_radiation, provenance metadata.
         """
         if self.data is None or self.start_time is None:
             return None
 
-        # How many simulated hours have elapsed
         wall_elapsed = time.time() - self.start_time
         sim_elapsed_hours = (wall_elapsed * self.speed_factor) / 3600.0
-
-        # Loop the cached window instead of freezing on the last hour (B19)
-        max_index = len(self.data["time"]) - 1
-        span = max(max_index, 1)
-        loop = int(sim_elapsed_hours // span)
+        weather = self.sample_at(sim_elapsed_hours)
+        loop = weather["replay_loop"]
         if loop > self._last_loop:
             self._last_loop = loop
             log.info("[%s] Replay window %s → %s finished; looping to start (loop %d)",
                      self.station_id, self.data["time"][0], self.data["time"][-1], loop)
+        return weather
+
+    def span_hours(self) -> int:
+        """Length of the cached window in hours (last index)."""
+        return max(len(self.data["time"]) - 1, 1)
+
+    def sample_at(self, sim_elapsed_hours: float) -> dict:
+        """Pure: weather `sim_elapsed_hours` into the replay (looping). The live
+        replay AND anomaly training/evaluation both use this, so they share the
+        exact same interpolation and unit conversion (env_wind in km/h)."""
+        max_index = len(self.data["time"]) - 1
+        span = max(max_index, 1)
+        loop = int(sim_elapsed_hours // span)
         index_f = sim_elapsed_hours - loop * span
         idx_lo = int(index_f)
         idx_hi = min(idx_lo + 1, max_index)
@@ -215,7 +222,6 @@ class WeatherDataLayer:
         wind_dir = interp("wind_direction_10m")
         solar = interp("shortwave_radiation")
 
-        # Current simulated time
         if self.data_start:
             sim_time = self.data_start + timedelta(hours=index_f)
         else:

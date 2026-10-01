@@ -164,6 +164,18 @@ RESPONSE_TEMPLATES = {
         "escalation": "If indoor temperatures drop below 15°C, activate backup heating",
         "action_type": "operator_review",
     },
+    "generator_output_loss": {
+        "action": "Check generator output, governor and load transfer; prepare backup generator",
+        "monitoring": "Monitor generator power and RPM every 5 minutes",
+        "escalation": "If output stays below physics prediction, start backup generator and shed non-essential load",
+        "action_type": "operator_review",
+    },
+    "ventilation_degradation": {
+        "action": "Inspect living-quarters ventilation (fans, intakes, filters)",
+        "monitoring": "Monitor CO2 and humidity in living quarters every 5 minutes",
+        "escalation": "If CO2 exceeds 1500 ppm, increase fresh-air intake and limit occupancy",
+        "action_type": "operator_review",
+    },
     "cold_front": {
         "action": "Verify heating system readiness and fuel reserves",
         "monitoring": "Monitor ambient temperature and heating demand",
@@ -521,21 +533,22 @@ if __name__ == "__main__":
         "meta": {"gen_load_pct": 34.7},
     }
 
+    # v3 anomaly output: "expected" is the physics prediction for the same tick
     anomaly = {
-        "anomaly_score": 0.52,
-        "scoreType": "normalized_isolation_forest",
-        "threshold": 0.45,
+        "anomaly_score": 0.61,
+        "scoreType": "isolation_forest_path_score",
+        "threshold": 0.554,
+        "triggeredBy": ["isolation_forest", "residual_z"],
         "is_anomaly": True,
         "evidence": [
-            {"sensor": "gen_temp_residual", "value": 12.3, "expected": 0.5,
-             "deviation_sigma": 5.2, "direction": "above", "contribution": 5.2},
-            {"sensor": "gen_temp_rate_5m", "value": 1.76, "expected": 0.54,
-             "deviation_sigma": 8.8, "direction": "above", "contribution": 8.8},
+            {"sensor": "gen_temp", "value": 64.9, "expected": 58.6, "residual": 6.3,
+             "deviation_sigma": 12.6, "direction": "above", "contribution": 12.6,
+             "expectedSource": "physics model prediction (same tick)"},
         ],
         "candidateCauses": [
-            {"cause": "cooling_degradation", "confidence": 0.85,
+            {"cause": "cooling_degradation", "confidence": 1.0,
              "description": "Possible generator cooling system degradation",
-             "matchingSensors": ["gen_temp_residual", "gen_temp_rate_5m"]},
+             "matchingSensors": ["gen_temp"]},
         ],
     }
 

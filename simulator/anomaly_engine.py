@@ -1,706 +1,560 @@
 #!/usr/bin/env python3
 """
-Aurora v3 — Phase 3: Anomaly Detection Engine (v2)
+Aurora — Anomaly Detection Engine (v3: physics-residual features)
 
-Improvements over v1:
-  - Temporal features: rate-of-change over 5/15 min windows
-  - Physics residual features: actual vs expected from twin
-  - Threshold-vs-detection curve analysis
-  - Proper train / validation / final-test split
-  - Separate anomaly detection from cause classification metrics
-  - Sequential degradation generation (gradual onset)
+Fixes PROJECT_CONTEXT.md B3 (continuous false positives). v2 was trained on
+physics states that had not converged (3 warm-up ticks → gen_temp ≈ 44 °C) and
+on 120 s ticks while live runs 2 s ticks, so every normal live state looked
+anomalous. v3:
 
-Architecture:
-    ERA5 weather → Physics Twin → Expected State
-                                        ↓
-                                 Feature Engine
-                     ┌──────────────────┼──────────────────┐
-                     ↓                  ↓                  ↓
-               absolute dev       rate of change      residual vs model
-                     ↓                  ↓                  ↓
-                     └──────────────────┼──────────────────┘
-                                        ↓
-                                 Anomaly Detector
-                                        ↓
-                              temporal evidence
-                                        ↓
-                              candidate causes
+- FEATURES are physics residuals: for each monitored sensor,
+      z = (observed − physics prediction for the SAME tick) / σ_sensor
+  plus per-tick rates of those residuals. "Expected" therefore always means the
+  digital twin's current prediction — never a training-set mean.
+- RATE UNITS are "per physics tick". The physics model's dynamics are per
+  compute() call (gen_temp moves 5 % of the way to its target per call,
+  independent of dt or replay speed), so per-tick rates are the only unit that
+  is invariant to AURORA_SPEED. Rates are taken on RESIDUALS, so weather changes
+  (which do scale with speed) cannot leak into them.
+- TRAINING uses the exact live code path: WeatherDataLayer.sample_at() (same
+  interpolation + km/h wind conversion) → StationPhysicsModel.compute(dt=2 s)
+  → FeatureEngine.extract(observed, predicted). Normal samples are recorded
+  only after the physics state has converged.
+- σ_sensor is an ASSUMED sensor-noise model (see anomaly_model_card.md).
+  Training "observations" = prediction + N(0, σ).
+
+Train (writes the .pkl files ONLY if acceptance criteria pass):
+    python simulator/anomaly_engine.py            # train + evaluate + save if passing
+    python simulator/anomaly_engine.py --dry-run  # train + evaluate, never save
+Evaluate the saved models (never writes models):
+    python simulator/evaluate_anomaly.py
 """
 
-import sys, os, json, random, pickle, collections
+import collections
+import json
+import logging
+import os
+import pickle
+import random
+import re
+import sys
+import time
+
 import numpy as np
-sys.path.insert(0, os.path.dirname(__file__))
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import config as app_config
 from physics_model import StationPhysicsModel
-from config import anomaly_model_path
 
-# ═══════════════════════════════════════════════════════
-#  Feature definitions
-# ═══════════════════════════════════════════════════════
+log = logging.getLogger("aurora.anomaly")
 
-# Base features (instantaneous)
-BASE_FEATURES = [
-    "env_temp", "env_wind",
-    "heat_loss_kW", "heating_demand_kW",
-    "total_demand_kW", "gen_load_pct",
-    "gen_temp_C", "fuel_rate_Lhr", "gen_rpm",
+# ═══════════════════════════════════════════════════════════════
+#  Constants shared by training, evaluation and live scoring
+# ═══════════════════════════════════════════════════════════════
+
+MODEL_VERSION = 3
+SEED = 20260930
+
+# Must equal simulator.TICK_INTERVAL (dt passed to physics compute() per tick).
+# Asserted by tests/test_anomaly_model.py.
+PHYSICS_TICK_DT_S = 2.0
+# Replay speed used to generate training/evaluation data (the default AURORA_SPEED).
+TRAIN_SPEED = 120.0
+
+# Warm-up: physics gen_temp carries N(0, 0.2 °C) noise EVERY tick, so a raw
+# |Δgen_temp| < 0.05 °C test for 20 consecutive ticks is practically never met
+# (p ≈ 1e-17). We test the DETERMINISTIC drift instead: the physics model moves
+# gen_temp by 0.05·(target − gen_temp) per tick; require that drift to be
+# < 0.05 °C/tick for 20 consecutive ticks AND at least 200 ticks.
+WARMUP_MIN_TICKS = 200
+WARMUP_MAX_TICKS = 3000
+CONVERGE_DRIFT_C = 0.05
+CONVERGE_RUN_TICKS = 20
+GEN_TEMP_APPROACH = 0.05  # per-tick approach factor used in physics_model.compute()
+
+RATE_SHORT_TICKS = 3
+RATE_LONG_TICKS = 10
+
+# (building, sensor, assumed sensor noise σ in the sensor's unit)
+RESIDUAL_SENSORS = [
+    ("generator", "gen_temp", 0.5),          # °C
+    ("generator", "gen_rpm", 5.0),           # rpm
+    ("generator", "gen_power", 1.5),         # kW
+    ("generator", "gen_fuel_rate", 0.3),     # L/hr
+    ("heating", "heat_a_temp", 0.5),         # °C
+    ("heating", "heat_a_flow", 0.3),         # L/min
+    ("livingQuarters", "lq_temp", 0.2),      # °C
+    ("livingQuarters", "lq_co2", 15.0),      # ppm
+    ("livingQuarters", "lq_humidity", 1.0),  # %
+    ("waterTank", "water_level", 0.5),       # %
 ]
+NOISE_SIGMA = {s: sigma for _, s, sigma in RESIDUAL_SENSORS}
+RATE_SENSORS_SHORT = ["gen_temp", "gen_rpm", "gen_fuel_rate", "heat_a_temp"]
+RATE_SENSORS_LONG = ["gen_temp"]
 
-# Physics-derived ratio features
-RATIO_FEATURES = [
-    "fuel_per_kW",       # fuel efficiency ratio
-    "temp_per_load",     # thermal efficiency ratio
-]
+RESIDUAL_FEATURES = [f"{s}_residual_z" for _, s, _ in RESIDUAL_SENSORS]
+RATE_FEATURES = ([f"{s}_residual_z_rate_short" for s in RATE_SENSORS_SHORT]
+                 + [f"{s}_residual_z_rate_long" for s in RATE_SENSORS_LONG])
+ALL_FEATURES = RESIDUAL_FEATURES + RATE_FEATURES
 
-# Residual features: actual − expected from physics model
-RESIDUAL_FEATURES = [
-    "gen_temp_residual",   # gen_temp − f(load)
-    "fuel_residual",       # fuel_rate − f(demand)
-    "rpm_residual",        # rpm − nominal
-]
+EVIDENCE_MIN_SIGMA = 3.0
 
-# Temporal features: rate of change
-TEMPORAL_FEATURES = [
-    "gen_temp_rate_5m",    # °C / 5 minutes
-    "gen_temp_rate_15m",   # °C / 15 minutes
-    "fuel_rate_rate_5m",   # L/hr per 5 min
-    "rpm_rate_5m",         # RPM per 5 min
-    "load_rate_5m",        # pct per 5 min
-]
-
-ALL_FEATURES = BASE_FEATURES + RATIO_FEATURES + RESIDUAL_FEATURES + TEMPORAL_FEATURES
+# Residual z-gate (tuning, see anomaly_model_card.md): Isolation-Forest scores
+# saturate at the most extreme TRAINING point, so a huge deviation in one or two
+# sensors (heating_failure, co2_spike: ~78σ) scores no higher than a 4σ noise
+# point. Any |residual| ≥ 6σ is therefore also flagged. With 10 residuals per
+# tick, the pure-noise false-alarm probability is ≈ 2e-8 per tick.
+RESIDUAL_ALARM_SIGMA = 6.0
+_RESIDUAL_IDX = [ALL_FEATURES.index(f) for f in RESIDUAL_FEATURES]
 
 
-def _safe_val(obj, default=0):
-    """Extract numeric value from possibly-dict sensor reading."""
+def _safe_val(obj, default=None):
+    """Numeric value from a raw number or a {'value': …} reading."""
     if isinstance(obj, dict):
-        return obj.get("value", default)
-    return obj if obj is not None else default
+        obj = obj.get("value", default)
+    return default if obj is None else float(obj)
 
+
+def observed_from_readings(readings: dict) -> dict:
+    """{building: {sensor: {'value': v, …}}} → {building: {sensor: v}} (like simulator.values)."""
+    return {b: {s: _safe_val(r) for s, r in sensors.items()} for b, sensors in readings.items()}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Feature engine (identical for training, evaluation and live)
+# ═══════════════════════════════════════════════════════════════
 
 class FeatureEngine:
-    """Extracts features from physics model output, including temporal features.
+    """Residual features for one station, with a rolling buffer for per-tick rates."""
 
-    Maintains a rolling buffer for rate-of-change computation.
-    """
-
-    def __init__(self, station_id: str, tick_interval_sec: float = 120):
+    def __init__(self, station_id: str):
         self.station_id = station_id
-        self.tick_interval_sec = tick_interval_sec
-        # Rolling buffer: stores recent base feature dicts
-        # At 120s ticks: 5min = ~2-3 entries, 15min = ~7-8 entries
-        self.buffer = collections.deque(maxlen=10)
-
-        # Load physics model parameters for residual calculation
-        pm = StationPhysicsModel(station_id)
-        self.gen_params = pm.params["generator"]
-
-    def extract(self, weather: dict, readings: dict, meta: dict) -> dict:
-        """Extract full feature vector (base + ratio + residual + temporal)."""
-        pb = meta.get("power_breakdown", {})
-
-        gen = readings.get("generator", {})
-        gen_temp = _safe_val(gen.get("gen_temp"))
-        fuel_rate = _safe_val(gen.get("gen_fuel_rate"))
-        gen_rpm = _safe_val(gen.get("gen_rpm"), 1500)
-        gen_power = _safe_val(gen.get("gen_power"))
-
-        total_demand = pb.get("total_demand_kW", 70)
-        gen_load = meta.get("gen_load_pct", 35)
-
-        # ── Base features ──────────────────────────────────
-        base = {
-            "env_temp": weather.get("env_temp", -20),
-            "env_wind": weather.get("env_wind", 30),
-            "heat_loss_kW": meta.get("total_heat_loss_kW", 0),
-            "heating_demand_kW": meta.get("heating_demand_kW", 0),
-            "total_demand_kW": total_demand,
-            "gen_load_pct": gen_load,
-            "gen_temp_C": gen_temp,
-            "fuel_rate_Lhr": fuel_rate,
-            "gen_rpm": gen_rpm,
-        }
-
-        # ── Ratio features ─────────────────────────────────
-        base["fuel_per_kW"] = fuel_rate / max(gen_power, 1)
-        base["temp_per_load"] = gen_temp / max(gen_load, 1)
-
-        # ── Residual features (actual − physics expected) ──
-        # Expected gen temp from Willans thermal model
-        load_frac = gen_load / 100.0
-        expected_temp = (self.gen_params["coolant_base_temp_C"] +
-                        load_frac * self.gen_params["temp_rise_per_load"] /
-                        self.gen_params["cooling_efficiency"])
-        base["gen_temp_residual"] = gen_temp - expected_temp
-
-        # Expected fuel from Willans line
-        expected_fuel = (self.gen_params["fuel_coeff_a"] +
-                        self.gen_params["fuel_coeff_b"] * total_demand)
-        base["fuel_residual"] = fuel_rate - expected_fuel
-
-        # RPM residual from nominal
-        base["rpm_residual"] = gen_rpm - self.gen_params["nominal_rpm"]
-
-        # ── Temporal features (rate of change) ──────────────
-        if len(self.buffer) >= 2:
-            # 5-minute rate (last ~2-3 entries at 120s ticks)
-            idx_5m = max(0, len(self.buffer) - 3)
-            old = self.buffer[idx_5m]
-            dt_min = (len(self.buffer) - idx_5m) * self.tick_interval_sec / 60
-            dt_min = max(dt_min, 0.01)
-            base["gen_temp_rate_5m"] = (gen_temp - old["gen_temp_C"]) / dt_min
-            base["fuel_rate_rate_5m"] = (fuel_rate - old["fuel_rate_Lhr"]) / dt_min
-            base["rpm_rate_5m"] = (gen_rpm - old["gen_rpm"]) / dt_min
-            base["load_rate_5m"] = (gen_load - old["gen_load_pct"]) / dt_min
-
-            # 15-minute rate (all buffer at 120s ticks ≈ 20 min window)
-            old_15 = self.buffer[0]
-            dt_15 = len(self.buffer) * self.tick_interval_sec / 60
-            dt_15 = max(dt_15, 0.01)
-            base["gen_temp_rate_15m"] = (gen_temp - old_15["gen_temp_C"]) / dt_15
-        else:
-            base["gen_temp_rate_5m"] = 0
-            base["fuel_rate_rate_5m"] = 0
-            base["rpm_rate_5m"] = 0
-            base["load_rate_5m"] = 0
-            base["gen_temp_rate_15m"] = 0
-
-        # Update buffer
-        self.buffer.append(dict(base))
-
-        return base
+        self.buffer = collections.deque(maxlen=RATE_LONG_TICKS + 1)
 
     def reset(self):
-        """Clear temporal buffer for independent sample generation."""
         self.buffer.clear()
+
+    def extract(self, observed: dict, predicted: dict) -> dict:
+        """observed: sensor values as reported (post-injection in the demo).
+        predicted: physics model readings for the SAME tick (the digital twin).
+        Returns {feature: float} + '_details' (observed/expected per sensor)."""
+        feats, details = {}, {}
+        for bld, sensor, sigma in RESIDUAL_SENSORS:
+            pred = _safe_val((predicted.get(bld) or {}).get(sensor), 0.0)
+            obs = _safe_val((observed.get(bld) or {}).get(sensor), pred)
+            resid = obs - pred
+            feats[f"{sensor}_residual_z"] = resid / sigma
+            details[sensor] = {"building": bld, "observed": obs, "expected": pred,
+                               "residual": resid, "sigma": sigma}
+
+        self.buffer.append({k: feats[k] for k in RESIDUAL_FEATURES})
+        n = len(self.buffer)
+        for s in RATE_SENSORS_SHORT:
+            key = f"{s}_residual_z"
+            feats[f"{key}_rate_short"] = ((self.buffer[-1][key] - self.buffer[-1 - RATE_SHORT_TICKS][key])
+                                          / RATE_SHORT_TICKS if n > RATE_SHORT_TICKS else 0.0)
+        for s in RATE_SENSORS_LONG:
+            key = f"{s}_residual_z"
+            feats[f"{key}_rate_long"] = ((self.buffer[-1][key] - self.buffer[-1 - RATE_LONG_TICKS][key])
+                                         / RATE_LONG_TICKS if n > RATE_LONG_TICKS else 0.0)
+        feats["_details"] = details
+        return feats
 
 
 def features_to_array(feat: dict) -> np.ndarray:
-    """Convert feature dict to numpy array in canonical order."""
-    return np.array([feat.get(k, 0) for k in ALL_FEATURES])
+    return np.array([feat.get(k, 0.0) for k in ALL_FEATURES], dtype=float)
 
 
-# ═══════════════════════════════════════════════════════
-#  Data generation
-# ═══════════════════════════════════════════════════════
+# Global per-station engines for live use (simulator.py)
+_live_engines = {}
+_warned_no_prediction = set()
 
-def generate_normal_sequences(station_id: str, n_sequences: int = 500,
-                               seq_length: int = 8) -> list:
-    """Generate sequences of normal operating states.
 
-    Each sequence is a short time-series at consistent weather,
-    allowing temporal features to build up naturally.
-    """
+def extract_features(weather: dict, readings: dict, meta: dict,
+                     station_id: str = "maitri", predicted: dict = None) -> dict:
+    """Live entry point used by simulator.py every tick.
+    readings  = simulator.values (observed, post-injection)
+    predicted = physics readings for this tick (pre-injection). If omitted,
+                residuals are zero (logged once) — always pass it."""
+    if predicted is None:
+        if station_id not in _warned_no_prediction:
+            _warned_no_prediction.add(station_id)
+            log.warning("[%s] extract_features called without physics prediction; residuals will be 0", station_id)
+        predicted = readings
+    if station_id not in _live_engines:
+        _live_engines[station_id] = FeatureEngine(station_id)
+    return _live_engines[station_id].extract(readings, predicted)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Replay (the live tick path, without wall-clock time)
+# ═══════════════════════════════════════════════════════════════
+
+_CACHE_RE = re.compile(r"^(?P<station>[a-z]+)_(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})\.json$")
+
+
+def cached_windows(stations=("maitri", "bharati")) -> list:
+    """All (station, start_date) ERA5 replay windows present in weather_cache/."""
+    out = []
+    for f in sorted(app_config.WEATHER_CACHE_DIR.iterdir()):
+        m = _CACHE_RE.match(f.name)
+        if m and m.group("station") in stations:
+            out.append((m.group("station"), m.group("start")))
+    return out
+
+
+def replay_states(station_id: str, date: str, speed: float = TRAIN_SPEED, seed: int = None):
+    """Yield (tick, weather, predicted_readings, meta, physics_model) exactly as the
+    live simulator produces them: weather sampled at tick·dt·speed simulated
+    seconds, physics compute(dt=PHYSICS_TICK_DT_S). One pass over the window."""
+    from weather_data import WeatherDataLayer
+    if seed is not None:
+        random.seed(seed)
+    layer = WeatherDataLayer(station_id, date=date, speed_factor=speed)
+    if not layer.fetch_and_cache():
+        raise RuntimeError(f"No cached ERA5 window for {station_id} {date}")
     pm = StationPhysicsModel(station_id)
-    fe = FeatureEngine(station_id)
-    data = []
-
-    temps = np.linspace(-55, 0, 30)
-    winds = np.linspace(2, 100, 25)
-
-    for _ in range(n_sequences):
-        temp = float(np.random.choice(temps)) + random.gauss(0, 3)
-        wind = max(0, float(np.random.choice(winds)) + random.gauss(0, 5))
-
-        pm.reset_state()
-        fe.reset()
-
-        weather = {
-            "env_temp": temp, "env_wind": wind,
-            "env_pressure": 950 + random.gauss(0, 15),
-            "env_humidity": 60 + random.gauss(0, 15),
-        }
-
-        # Let model converge (3 warm-up ticks, not recorded)
-        for _ in range(3):
-            readings = pm.compute(weather, dt_seconds=120)
-            meta = readings.pop("_meta", {})
-            fe.extract(weather, readings, meta)
-
-        # Record seq_length ticks (slightly varying weather)
-        for t in range(seq_length):
-            w = dict(weather)
-            w["env_temp"] += random.gauss(0, 0.3)
-            w["env_wind"] = max(0, w["env_wind"] + random.gauss(0, 1))
-            readings = pm.compute(w, dt_seconds=120)
-            meta = readings.pop("_meta", {})
-            feat = fe.extract(w, readings, meta)
-            feat["label"] = "normal"
-            data.append(feat)
-
-    return data
+    hours_per_tick = PHYSICS_TICK_DT_S * speed / 3600.0
+    n_ticks = int(layer.span_hours() / hours_per_tick)
+    for t in range(n_ticks):
+        weather = layer.sample_at(t * hours_per_tick)
+        readings = pm.compute(weather, dt_seconds=PHYSICS_TICK_DT_S)
+        meta = readings.pop("_meta")
+        yield t, weather, readings, meta, pm
 
 
-def generate_degradation_sequences(station_id: str, n_sequences: int = 150,
-                                     seq_length: int = 8) -> list:
-    """Generate sequential degradation scenarios with gradual onset.
+class ConvergenceTracker:
+    """Warm-up gate: ≥ WARMUP_MIN_TICKS and deterministic gen_temp drift
+    < CONVERGE_DRIFT_C for CONVERGE_RUN_TICKS consecutive ticks."""
 
-    Each sequence starts normal and progressively degrades,
-    producing temporal signatures (rising gen_temp, falling RPM, etc).
-    """
-    pm = StationPhysicsModel(station_id)
-    fe = FeatureEngine(station_id)
-    data = []
+    def __init__(self, station_id: str):
+        g = StationPhysicsModel(station_id).params["generator"]
+        self.base, self.rise, self.cool = g["coolant_base_temp_C"], g["temp_rise_per_load"], g["cooling_efficiency"]
+        self.ticks = 0
+        self.run = 0
+        self.converged_at = None
 
-    degradation_types = [
-        {"name": "cooling_degradation",
-         "description": "Generator cooling system losing efficiency",
-         "apply": lambda r, m, sev: _degrade_cooling(r, m, sev)},
-        {"name": "fuel_system_degradation",
-         "description": "Fuel injection becoming less efficient",
-         "apply": lambda r, m, sev: _degrade_fuel(r, m, sev)},
-        {"name": "heating_degradation",
-         "description": "Heating system losing output capacity",
-         "apply": lambda r, m, sev: _degrade_heating(r, m, sev)},
-        {"name": "bearing_wear",
-         "description": "Generator bearing wear causing RPM instability",
-         "apply": lambda r, m, sev: _degrade_bearings(r, m, sev)},
-    ]
-
-    for _ in range(n_sequences):
-        temp = random.uniform(-50, -5) + random.gauss(0, 3)
-        wind = max(0, random.uniform(5, 80) + random.gauss(0, 5))
-        weather = {
-            "env_temp": temp, "env_wind": wind,
-            "env_pressure": 950 + random.gauss(0, 15),
-            "env_humidity": 60 + random.gauss(0, 15),
-        }
-
-        deg = random.choice(degradation_types)
-        max_severity = random.uniform(0.15, 0.45)
-
-        pm.reset_state()
-        fe.reset()
-
-        # Warm up
-        for _ in range(3):
-            readings = pm.compute(weather, dt_seconds=120)
-            meta = readings.pop("_meta", {})
-            fe.extract(weather, readings, meta)
-
-        # Gradual degradation over seq_length ticks
-        for t in range(seq_length):
-            w = dict(weather)
-            w["env_temp"] += random.gauss(0, 0.3)
-            w["env_wind"] = max(0, w["env_wind"] + random.gauss(0, 1))
-
-            readings = pm.compute(w, dt_seconds=120)
-            meta = readings.pop("_meta", {})
-
-            # Severity ramps from 0 → max over the sequence
-            severity = max_severity * (t / max(seq_length - 1, 1))
-            readings, meta = deg["apply"](readings, meta, severity)
-
-            feat = fe.extract(w, readings, meta)
-            feat["label"] = deg["name"]
-            feat["degradation_type"] = deg["name"]
-            feat["severity"] = severity
-            feat["tick_in_sequence"] = t
-            data.append(feat)
-
-    return data
+    def update(self, pm, meta) -> bool:
+        self.ticks += 1
+        target = self.base + meta["gen_load_factor"] * self.rise / self.cool
+        drift = abs(GEN_TEMP_APPROACH * (target - pm.gen_temp_C))
+        self.run = self.run + 1 if drift < CONVERGE_DRIFT_C else 0
+        if self.converged_at is None and (
+                (self.ticks >= WARMUP_MIN_TICKS and self.run >= CONVERGE_RUN_TICKS)
+                or self.ticks >= WARMUP_MAX_TICKS):
+            self.converged_at = self.ticks
+        return self.converged_at is not None
 
 
-def _degrade_cooling(readings, meta, severity):
-    gen = readings.get("generator", {})
-    gt = gen.get("gen_temp", {})
-    if isinstance(gt, dict):
-        gt["value"] *= (1 + severity)
-    else:
-        gen["gen_temp"] = (gt or 60) * (1 + severity)
-    return readings, meta
+def add_sensor_noise(observed: dict, rng: np.random.Generator) -> dict:
+    """observed + N(0, σ_sensor) on the monitored sensors (assumed sensor noise)."""
+    out = {b: dict(s) for b, s in observed.items()}
+    for bld, sensor, sigma in RESIDUAL_SENSORS:
+        if sensor in out.get(bld, {}):
+            out[bld][sensor] = out[bld][sensor] + rng.normal(0.0, sigma)
+    return out
 
 
-def _degrade_fuel(readings, meta, severity):
-    gen = readings.get("generator", {})
-    fr = gen.get("gen_fuel_rate", {})
-    if isinstance(fr, dict):
-        fr["value"] *= (1 + severity)
-    else:
-        gen["gen_fuel_rate"] = (fr or 15) * (1 + severity)
-    gp = gen.get("gen_power", {})
-    if isinstance(gp, dict):
-        gp["value"] *= (1 - severity * 0.3)
-    return readings, meta
+# ═══════════════════════════════════════════════════════════════
+#  Synthetic degradations (applied to OBSERVED values vs the prediction)
+# ═══════════════════════════════════════════════════════════════
+
+DEGRADATION_RAMP_TICKS = 30      # severity ramps linearly 0 → max over 30 ticks, then holds
+DEGRADATION_WINDOW_TICKS = 45    # detection window (ramp + 15 ticks hold)
 
 
-def _degrade_heating(readings, meta, severity):
-    meta["heating_demand_kW"] = meta.get("heating_demand_kW", 15) * (1 + severity)
-    pb = meta.get("power_breakdown", {})
-    pb["total_demand_kW"] = pb.get("total_demand_kW", 70) * (1 + severity * 0.5)
-    meta["gen_load_pct"] = meta.get("gen_load_pct", 35) * (1 + severity * 0.5)
-    return readings, meta
+def _scale(obs, pred_readings, bld, sensor, factor):
+    base = _safe_val(pred_readings[bld][sensor])
+    obs[bld][sensor] = obs[bld][sensor] - base + base * factor
 
 
-def _degrade_bearings(readings, meta, severity):
-    gen = readings.get("generator", {})
-    rpm = gen.get("gen_rpm", {})
-    if isinstance(rpm, dict):
-        rpm["value"] *= (1 - severity)
-        rpm["value"] += random.gauss(0, 20 * severity / 0.15)
-    else:
-        gen["gen_rpm"] = (rpm or 1500) * (1 - severity) + random.gauss(0, 20)
-    gt = gen.get("gen_temp", {})
-    if isinstance(gt, dict):
-        gt["value"] *= (1 + severity * 0.5)
-    return readings, meta
+def degrade_cooling(obs, pred, sev, rng):
+    _scale(obs, pred, "generator", "gen_temp", 1 + sev)
 
 
-# ═══════════════════════════════════════════════════════
-#  Anomaly Detector
-# ═══════════════════════════════════════════════════════
+def degrade_fuel(obs, pred, sev, rng):
+    _scale(obs, pred, "generator", "gen_fuel_rate", 1 + sev)
+    _scale(obs, pred, "generator", "gen_power", 1 - 0.3 * sev)
+
+
+def degrade_heating(obs, pred, sev, rng):
+    # Heating capacity loss: lower supply temperature and flow on Zone A.
+    _scale(obs, pred, "heating", "heat_a_temp", 1 - sev)
+    _scale(obs, pred, "heating", "heat_a_flow", 1 - sev)
+
+
+def degrade_bearings(obs, pred, sev, rng):
+    _scale(obs, pred, "generator", "gen_rpm", 1 - sev)
+    obs["generator"]["gen_rpm"] += rng.normal(0.0, 20.0 * sev / 0.15)
+    _scale(obs, pred, "generator", "gen_temp", 1 + 0.5 * sev)
+
+
+DEGRADATIONS = {
+    "cooling_degradation": degrade_cooling,
+    "fuel_system_degradation": degrade_fuel,
+    "heating_degradation": degrade_heating,
+    "bearing_wear": degrade_bearings,
+}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Detector
+# ═══════════════════════════════════════════════════════════════
 
 class AnomalyDetector:
-    """Physics-informed anomaly detection with temporal features.
+    """Isolation Forest on physics-residual features.
 
-    Trained on normal operating sequences from the digital twin.
-    Scores new observations against the learned baseline.
-    Reports which sensors contribute most to the anomaly.
-
-    Score definition:
-        scoreType: normalized_isolation_forest
-        NOT a probability.
-        0.0 = clearly within normal operating envelope
-        0.5 = boundary of normal
-        1.0 = strongly outside normal operating envelope
+    anomaly_score = original Isolation-Forest score s(x) ∈ (0, 1]
+    (= −score_samples); ≈ 0.5 is the paper's boundary. NOT a probability.
+    is_anomaly = anomaly_score ≥ threshold (calibrated on held-out normals).
     """
 
-    SCORE_TYPE = "normalized_isolation_forest"
+    SCORE_TYPE = "isolation_forest_path_score"
 
-    # Candidate cause signatures (rule-based, separate from anomaly detection)
+    # Candidate causes: (sensor, direction) pairs that must all deviate ≥ 3σ,
+    # plus sensors that must stay within 3σ. Rule-based; reported separately
+    # from detection and labelled as *possible* causes.
     CAUSE_SIGNATURES = {
+        "generator_output_loss": {
+            "description": "Possible generator output loss (power and RPM below physics prediction)",
+            "require": [("gen_power", "below"), ("gen_rpm", "below")], "normal": [],
+        },
+        "bearing_wear": {
+            "description": "Possible generator bearing wear (RPM low, temperature high)",
+            "require": [("gen_rpm", "below"), ("gen_temp", "above")], "normal": ["gen_power"],
+        },
         "cooling_degradation": {
             "description": "Possible generator cooling system degradation",
-            "key_sensors": ["gen_temp_C", "gen_temp_residual", "temp_per_load", "gen_temp_rate_5m"],
-            "pattern": {"gen_temp_residual": "above", "temp_per_load": "above"},
+            "require": [("gen_temp", "above")], "normal": ["gen_rpm", "gen_power"],
         },
         "fuel_system_degradation": {
             "description": "Possible fuel injection efficiency loss",
-            "key_sensors": ["fuel_rate_Lhr", "fuel_residual", "fuel_per_kW"],
-            "pattern": {"fuel_residual": "above", "fuel_per_kW": "above"},
-        },
-        "bearing_wear": {
-            "description": "Possible generator bearing wear",
-            "key_sensors": ["gen_rpm", "rpm_residual", "rpm_rate_5m", "gen_temp_C"],
-            "pattern": {"rpm_residual": "below", "gen_temp_residual": "above"},
+            "require": [("gen_fuel_rate", "above")], "normal": ["gen_rpm"],
         },
         "heating_degradation": {
             "description": "Possible heating system capacity loss",
-            "key_sensors": ["heating_demand_kW", "total_demand_kW", "gen_load_pct"],
-            "pattern": {"heating_demand_kW": "above", "gen_load_pct": "above"},
+            "require": [("heat_a_temp", "below")], "normal": [],
+        },
+        "ventilation_degradation": {
+            "description": "Possible ventilation failure (CO2 above physics prediction)",
+            "require": [("lq_co2", "above")], "normal": [],
         },
     }
 
     def __init__(self, station_id: str):
         self.station_id = station_id
         self.model = None
-        self.scaler = None
-        self.normal_means = None
-        self.normal_stds = None
-        self.feature_names = ALL_FEATURES
+        self.threshold = 0.5
+        self.feature_names = list(ALL_FEATURES)
+        self.metadata = {}
         self.is_trained = False
-        self.threshold = 0.5  # default, may be tuned
 
-    def train(self, normal_data: list, threshold: float = None):
-        """Train on normal physics-derived operating states ONLY."""
+    # ── training ──────────────────────────────────────────────
+    def train(self, X: np.ndarray, seed: int = SEED, n_estimators: int = 300, max_samples: int = 512):
         from sklearn.ensemble import IsolationForest
-        from sklearn.preprocessing import StandardScaler
-
-        X = np.array([features_to_array(d) for d in normal_data])
-
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
-
-        self.normal_means = X.mean(axis=0)
-        self.normal_stds = X.std(axis=0) + 1e-8
-
-        self.model = IsolationForest(
-            n_estimators=200,
-            contamination=0.05,
-            random_state=42,
-            max_features=0.8,
-        )
-        self.model.fit(X_scaled)
+        self.model = IsolationForest(n_estimators=n_estimators, max_samples=max_samples,
+                                     contamination="auto", random_state=seed)
+        self.model.fit(X)
         self.is_trained = True
 
-        if threshold is not None:
-            self.threshold = threshold
+    def scores(self, X: np.ndarray) -> np.ndarray:
+        return -self.model.score_samples(np.atleast_2d(X))
 
-        print(f"  [{self.station_id}] Trained on {len(normal_data)} normal states, "
-              f"{len(self.feature_names)} features")
+    def flags(self, X: np.ndarray) -> np.ndarray:
+        """Batch decision: Isolation-Forest score ≥ threshold OR any residual ≥ 6σ."""
+        X = np.atleast_2d(X)
+        return (self.scores(X) >= self.threshold) | (np.abs(X[:, _RESIDUAL_IDX]).max(axis=1) >= RESIDUAL_ALARM_SIGMA)
 
-    def score(self, features: dict) -> dict:
-        """Score a single observation.
+    def calibrate(self, X_val_normal: np.ndarray, quantile: float, margin: float):
+        s = self.scores(X_val_normal)
+        self.threshold = float(max(np.quantile(s, quantile) + margin, 0.5))
+        return self.threshold
 
-        ANOMALY DETECTION: is this observation outside normal?
-        CAUSE CLASSIFICATION: given anomaly, which synthetic signature matches?
-        These are reported as SEPARATE outputs.
-        """
-        if not self.is_trained:
-            return {
-                "anomaly_score": 0, "scoreType": self.SCORE_TYPE,
-                "threshold": self.threshold,
-                "is_anomaly": False, "evidence": [], "candidateCauses": [],
-            }
-
-        x = features_to_array(features).reshape(1, -1)
-        x_scaled = self.scaler.transform(x)
-
-        raw_score = self.model.decision_function(x_scaled)[0]
-        anomaly_score = max(0, min(1, 0.5 - raw_score))
-        is_anomaly = anomaly_score >= self.threshold
-
-        # Evidence
-        deviations = (x[0] - self.normal_means) / self.normal_stds
+    # ── live scoring ──────────────────────────────────────────
+    def explain(self, features: dict, is_anomaly: bool):
+        """Evidence (vs the physics prediction for the same tick) + candidate causes."""
+        details = features.get("_details", {})
+        z = {sensor: d["residual"] / d["sigma"] for sensor, d in details.items()}
         evidence = []
-        evidence_by_sensor = {}
-        for i, name in enumerate(self.feature_names):
-            dev = float(deviations[i])
-            direction = "above" if dev > 0 else "below"
-            evidence_by_sensor[name] = {"sigma": dev, "direction": direction}
-            if abs(dev) > 1.5:
+        for sensor, d in details.items():
+            if abs(z[sensor]) >= EVIDENCE_MIN_SIGMA:
                 evidence.append({
-                    "sensor": name,
-                    "value": round(float(x[0][i]), 2),
-                    "expected": round(float(self.normal_means[i]), 2),
-                    "deviation_sigma": round(dev, 1),
-                    "direction": direction,
-                    "contribution": round(abs(dev), 2),
+                    "sensor": sensor,
+                    "value": round(d["observed"], 2),
+                    "expected": round(d["expected"], 2),          # physics prediction, same tick
+                    "residual": round(d["residual"], 2),
+                    "deviation_sigma": round(z[sensor], 1),
+                    "direction": "above" if z[sensor] > 0 else "below",
+                    "contribution": round(abs(z[sensor]), 2),
+                    "expectedSource": "physics model prediction (same tick)",
                 })
         evidence.sort(key=lambda e: e["contribution"], reverse=True)
 
-        # Cause classification (separate from detection)
         candidate_causes = []
         if is_anomaly:
-            for cause_id, sig in self.CAUSE_SIGNATURES.items():
-                match_score = 0
-                for sensor, exp_dir in sig["pattern"].items():
-                    if sensor in evidence_by_sensor:
-                        actual = evidence_by_sensor[sensor]
-                        if actual["direction"] == exp_dir and abs(actual["sigma"]) > 1.0:
-                            match_score += abs(actual["sigma"])
-                total_keys = len(sig["pattern"])
-                confidence = min(1.0, match_score / (total_keys * 3))
-                if confidence > 0.1:
+            for cause, sig in self.CAUSE_SIGNATURES.items():
+                ok = all((z.get(s, 0) >= EVIDENCE_MIN_SIGMA) if d == "above" else (z.get(s, 0) <= -EVIDENCE_MIN_SIGMA)
+                         for s, d in sig["require"])
+                ok = ok and all(abs(z.get(s, 0)) < EVIDENCE_MIN_SIGMA for s in sig["normal"])
+                if ok:
+                    strength = float(np.mean([abs(z[s]) for s, _ in sig["require"]]))
                     candidate_causes.append({
-                        "cause": cause_id,
+                        "cause": cause,
                         "description": sig["description"],
-                        "confidence": round(confidence, 2),
-                        "matchingSensors": [
-                            s for s in sig["key_sensors"]
-                            if s in evidence_by_sensor
-                            and abs(evidence_by_sensor[s]["sigma"]) > 1.0
-                        ],
+                        "confidence": round(min(1.0, strength / 10.0), 2),
+                        "matchingSensors": [s for s, _ in sig["require"]],
                     })
             candidate_causes.sort(key=lambda c: c["confidence"], reverse=True)
+        return evidence[:5], candidate_causes[:3]
 
+    def score(self, features: dict) -> dict:
+        if not self.is_trained:
+            return {"anomaly_score": 0, "scoreType": self.SCORE_TYPE, "threshold": self.threshold,
+                    "is_anomaly": False, "evidence": [], "candidateCauses": []}
+        x = features_to_array(features)
+        s = float(self.scores(x)[0])
+        max_z = float(np.abs(x[_RESIDUAL_IDX]).max())
+        triggered = []
+        if s >= self.threshold:
+            triggered.append("isolation_forest")
+        if max_z >= RESIDUAL_ALARM_SIGMA:
+            triggered.append("residual_z")
+        is_anomaly = bool(triggered)
+        evidence, causes = self.explain(features, is_anomaly)
         return {
-            "anomaly_score": round(float(anomaly_score), 3),
+            "anomaly_score": round(s, 3),
             "scoreType": self.SCORE_TYPE,
-            "threshold": self.threshold,
+            "threshold": round(self.threshold, 3),
+            "maxResidualSigma": round(max_z, 1),
+            "residualAlarmSigma": RESIDUAL_ALARM_SIGMA,
+            "triggeredBy": triggered,
             "is_anomaly": bool(is_anomaly),
-            "evidence": evidence[:5],
-            "candidateCauses": candidate_causes[:3],
+            "evidence": evidence,
+            "candidateCauses": causes,
         }
 
+    # ── persistence ───────────────────────────────────────────
     def save(self, path: str):
         with open(path, "wb") as f:
             pickle.dump({
-                "model": self.model, "scaler": self.scaler,
-                "normal_means": self.normal_means, "normal_stds": self.normal_stds,
+                "model_version": MODEL_VERSION, "model": self.model, "threshold": self.threshold,
                 "station_id": self.station_id, "feature_names": self.feature_names,
-                "threshold": self.threshold,
+                "metadata": self.metadata,
             }, f)
 
     def load(self, path: str):
         with open(path, "rb") as f:
             data = pickle.load(f)
+        if data.get("model_version") != MODEL_VERSION or data.get("feature_names") != ALL_FEATURES:
+            raise ValueError(f"{path} is not a v{MODEL_VERSION} residual model "
+                             "(retrain: python simulator/anomaly_engine.py)")
         self.model = data["model"]
-        self.scaler = data["scaler"]
-        self.normal_means = data["normal_means"]
-        self.normal_stds = data["normal_stds"]
+        self.threshold = data["threshold"]
         self.station_id = data["station_id"]
-        self.feature_names = data.get("feature_names", ALL_FEATURES)
-        self.threshold = data.get("threshold", 0.5)
+        self.feature_names = data["feature_names"]
+        self.metadata = data.get("metadata", {})
         self.is_trained = True
 
 
-# ═══════════════════════════════════════════════════════
-#  extract_features — backward compatible with simulator
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+#  Training
+# ═══════════════════════════════════════════════════════════════
 
-# Global feature engines for live use
-_live_engines = {}
-
-def extract_features(weather: dict, readings: dict, meta: dict,
-                     station_id: str = "maitri") -> dict:
-    """Extract features for live scoring (backward compatible)."""
-    if station_id not in _live_engines:
-        _live_engines[station_id] = FeatureEngine(station_id)
-    return _live_engines[station_id].extract(weather, readings, meta)
+CALIBRATION_QUANTILE = 0.999
+CALIBRATION_MARGIN = 0.02
 
 
-# ═══════════════════════════════════════════════════════
-#  Training, Threshold Analysis & Evaluation
-# ═══════════════════════════════════════════════════════
+def collect_normal(station_id: str, date: str, seed: int):
+    """Converged normal feature vectors for one replay window
+    (observed = physics prediction + assumed sensor noise)."""
+    rng = np.random.default_rng(seed)
+    fe, conv = FeatureEngine(station_id), ConvergenceTracker(station_id)
+    X, n_warmup = [], 0
+    for t, weather, readings, meta, pm in replay_states(station_id, date, seed=seed):
+        if not conv.update(pm, meta):
+            n_warmup += 1
+            continue
+        observed = add_sensor_noise(observed_from_readings(readings), rng)
+        X.append(features_to_array(fe.extract(observed, readings)))
+    return np.array(X), {"warmup_ticks": n_warmup, "samples": len(X), "converged_at": conv.converged_at}
+
+
+def train_station(station_id: str, seed: int = SEED):
+    windows = [d for _, d in cached_windows((station_id,))]
+    blocks, summary = [], {}
+    for i, date in enumerate(windows):
+        X, info = collect_normal(station_id, date, seed + i)
+        blocks.append(X)
+        summary[date] = info
+    X = np.vstack(blocks)
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(len(X))
+    n_val = int(0.2 * len(X))
+    X_val, X_train = X[idx[:n_val]], X[idx[n_val:]]
+
+    det = AnomalyDetector(station_id)
+    det.train(X_train, seed=seed)
+    det.calibrate(X_val, CALIBRATION_QUANTILE, CALIBRATION_MARGIN)
+    import sklearn
+    det.metadata = {
+        "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "sklearn_version": sklearn.__version__,
+        "seed": seed,
+        "speed": TRAIN_SPEED,
+        "physics_tick_dt_s": PHYSICS_TICK_DT_S,
+        "windows": summary,
+        "n_train": int(len(X_train)),
+        "n_val": int(len(X_val)),
+        "calibration": {"quantile": CALIBRATION_QUANTILE, "margin": CALIBRATION_MARGIN,
+                        "threshold": det.threshold},
+        "noise_sigma": NOISE_SIGMA,
+        "residual_alarm_sigma": RESIDUAL_ALARM_SIGMA,
+        "features": ALL_FEATURES,
+    }
+    return det
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="Train v3 residual anomaly models")
+    ap.add_argument("--dry-run", action="store_true", help="train + evaluate, never write .pkl files")
+    ap.add_argument("--metrics-out", help="write evaluation metrics JSON here (never a model file)")
+    args = ap.parse_args(argv)
+
+    random.seed(SEED)
+    np.random.seed(SEED)
+    detectors = {}
+    for sid in ("maitri", "bharati"):
+        t0 = time.time()
+        detectors[sid] = train_station(sid)
+        md = detectors[sid].metadata
+        print(f"[{sid}] trained on {md['n_train']} normal states "
+              f"({len(md['windows'])} windows), threshold={detectors[sid].threshold:.3f} "
+              f"in {time.time() - t0:.1f}s")
+
+    from evaluate_anomaly import evaluate, criteria_pass, format_report
+    metrics = evaluate(detectors)
+    print(format_report(metrics))
+    if args.metrics_out:
+        with open(args.metrics_out, "w") as f:
+            json.dump({"metrics": metrics, "training": {s: d.metadata for s, d in detectors.items()}},
+                      f, indent=2, default=str)
+
+    ok, failures = criteria_pass(metrics)
+    if not ok:
+        print("\nACCEPTANCE CRITERIA NOT MET — models NOT saved:")
+        for f in failures:
+            print("  -", f)
+        return 1
+    if args.dry_run:
+        print("\nCriteria met (dry run) — models NOT saved.")
+        return 0
+    for sid, det in detectors.items():
+        det.save(str(app_config.anomaly_model_path(sid)))
+        print(f"Saved {app_config.anomaly_model_path(sid)}")
+    return 0
+
 
 if __name__ == "__main__":
-    for station in ["maitri", "bharati"]:
-        print(f"\n{'='*70}")
-        print(f"  ANOMALY MODEL v2 — {station.upper()}")
-        print(f"{'='*70}")
-
-        # ── Data Generation ──────────────────────────────────
-        print("\n  DATA GENERATION (sequential)")
-        normal = generate_normal_sequences(station, n_sequences=500, seq_length=8)
-        print(f"    Normal: {len(normal)} states from 500 sequences")
-
-        degraded = generate_degradation_sequences(station, n_sequences=200, seq_length=8)
-        print(f"    Degradation: {len(degraded)} states from 200 sequences (held out)")
-
-        # ── 3-way split: train / validation / final-test ─────
-        random.shuffle(normal)
-        n = len(normal)
-        n_train = int(n * 0.60)
-        n_val = int(n * 0.20)
-        normal_train = normal[:n_train]
-        normal_val = normal[n_train:n_train + n_val]
-        normal_test = normal[n_train + n_val:]
-
-        random.shuffle(degraded)
-        nd = len(degraded)
-        deg_val = degraded[:nd // 2]
-        deg_test = degraded[nd // 2:]
-
-        print(f"\n  DATA SPLIT")
-        print(f"    Training:    {len(normal_train)} normal states")
-        print(f"    Validation:  {len(normal_val)} normal + {len(deg_val)} degraded")
-        print(f"    Final test:  {len(normal_test)} normal + {len(deg_test)} degraded")
-        print(f"    Degradation is NEVER used for training")
-
-        # ── Train ────────────────────────────────────────────
-        print(f"\n  TRAINING")
-        detector = AnomalyDetector(station)
-        detector.train(normal_train)
-        print(f"    Features: {len(ALL_FEATURES)} "
-              f"({len(BASE_FEATURES)} base + {len(RATIO_FEATURES)} ratio + "
-              f"{len(RESIDUAL_FEATURES)} residual + {len(TEMPORAL_FEATURES)} temporal)")
-
-        # ── Threshold Analysis (on VALIDATION set) ───────────
-        print(f"\n  THRESHOLD ANALYSIS (validation set)")
-        print(f"    {'Threshold':>10s} {'Detection':>10s} {'FPR':>8s} {'FNR':>8s}")
-        print(f"    {'─'*10} {'─'*10} {'─'*8} {'─'*8}")
-
-        best_threshold = 0.5
-        best_f1 = 0
-
-        for threshold in [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]:
-            fp = sum(1 for d in normal_val
-                     if detector.score(d)["anomaly_score"] >= threshold)
-            tp = sum(1 for d in deg_val
-                     if detector.score(d)["anomaly_score"] >= threshold)
-            fn = len(deg_val) - tp
-
-            fpr_t = fp / max(len(normal_val), 1)
-            det_t = tp / max(len(deg_val), 1)
-            fnr_t = fn / max(len(deg_val), 1)
-
-            precision = tp / max(tp + fp, 1)
-            recall = det_t
-            f1 = 2 * precision * recall / max(precision + recall, 0.001)
-
-            print(f"    {threshold:10.2f} {det_t*100:9.1f}% {fpr_t*100:7.1f}% {fnr_t*100:7.1f}%")
-
-            if f1 > best_f1:
-                best_f1 = f1
-                best_threshold = threshold
-
-        print(f"\n    Selected threshold: {best_threshold} (best F1={best_f1:.3f} on validation)")
-        detector.threshold = best_threshold
-
-        # ── Final Test (UNTOUCHED until now) ──────────────────
-        print(f"\n  FINAL TEST (independent test set, threshold={best_threshold})")
-
-        # Normal test
-        fp_final = 0
-        for d in normal_test:
-            result = detector.score(d)
-            if result["is_anomaly"]:
-                fp_final += 1
-        fpr_final = fp_final / max(len(normal_test), 1)
-        print(f"\n    ANOMALY DETECTION (is something abnormal?)")
-        print(f"    Normal: FP={fp_final}/{len(normal_test)} FPR={fpr_final*100:.1f}%")
-
-        # Degradation test — per type
-        deg_by_type = {}
-        all_tp = 0
-        for d in deg_test:
-            dtype = d.get("degradation_type", "unknown")
-            if dtype not in deg_by_type:
-                deg_by_type[dtype] = {"tp": 0, "fn": 0, "total": 0,
-                                       "scores": [], "cause_correct": 0}
-            result = detector.score(d)
-            deg_by_type[dtype]["scores"].append(result["anomaly_score"])
-            deg_by_type[dtype]["total"] += 1
-            if result["is_anomaly"]:
-                deg_by_type[dtype]["tp"] += 1
-                all_tp += 1
-                cause_ids = [c["cause"] for c in result.get("candidateCauses", [])]
-                if dtype in cause_ids:
-                    deg_by_type[dtype]["cause_correct"] += 1
-            else:
-                deg_by_type[dtype]["fn"] += 1
-
-        print(f"\n    {'Degradation':25s} {'Det.Rate':>8s} {'Mean':>6s} {'TP':>4s} {'FN':>4s}")
-        print(f"    {'─'*25} {'─'*8} {'─'*6} {'─'*4} {'─'*4}")
-        for dtype in sorted(deg_by_type.keys()):
-            s = deg_by_type[dtype]
-            dr = s["tp"] / max(s["total"], 1)
-            print(f"    {dtype:25s} {dr*100:7.1f}% {np.mean(s['scores']):5.3f} "
-                  f"{s['tp']:4d} {s['fn']:4d}")
-
-        total_deg = len(deg_test)
-        overall_det = all_tp / max(total_deg, 1)
-        print(f"\n    Overall detection: {overall_det*100:.1f}%  FPR: {fpr_final*100:.1f}%")
-
-        # Cause classification (SEPARATE metric)
-        print(f"\n    CAUSE CLASSIFICATION (given anomaly detected, is cause ID correct?)")
-        for dtype in sorted(deg_by_type.keys()):
-            s = deg_by_type[dtype]
-            if s["tp"] > 0:
-                cause_acc = s["cause_correct"] / s["tp"]
-                print(f"    {dtype:25s}: {cause_acc*100:.0f}% ({s['cause_correct']}/{s['tp']})")
-            else:
-                print(f"    {dtype:25s}: N/A (no detections)")
-
-        # Example detections
-        print(f"\n  EXAMPLE DETECTIONS")
-        shown = 0
-        for d in deg_test:
-            if shown >= 3:
-                break
-            result = detector.score(d)
-            if result["is_anomaly"]:
-                dtype = d.get("degradation_type", "?")
-                sev = d.get("severity", 0)
-                print(f"\n    [{dtype}] score={result['anomaly_score']:.3f} severity={sev:.2f}")
-                print(f"    Evidence:")
-                for ev in result["evidence"][:4]:
-                    print(f"      {ev['sensor']:22s}: {ev['value']:8.2f} "
-                          f"(expected {ev['expected']:8.2f}, {ev['deviation_sigma']:+.1f}σ)")
-                if result["candidateCauses"]:
-                    print(f"    Candidate causes (synthetic prototype evaluation):")
-                    for cc in result["candidateCauses"]:
-                        print(f"      {cc['cause']:25s} confidence={cc['confidence']:.2f}")
-                shown += 1
-
-        # Save
-        model_path = str(anomaly_model_path(station))
-        detector.save(model_path)
-        print(f"\n  Model saved: {model_path}")
-
-    print(f"\n{'='*70}")
-    print(f"  NOTE: All degradation results are PROTOTYPE EVALUATION")
-    print(f"  against synthetic degradation signatures. This does not")
-    print(f"  constitute production-readiness validation.")
-    print(f"{'='*70}")
+    sys.exit(main())
