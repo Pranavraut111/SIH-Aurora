@@ -47,10 +47,55 @@ jobs:
 
       # Build and start are separate steps so a failure says which one broke, and
       # --progress plain keeps the full build output in the log.
-      - name: Show the compose configuration
+      # Every compose file, not just the base one: the overlays use !reset / !override,
+      # which a typo turns into silently dropped settings rather than an error.
+      - name: Validate every compose configuration
+        env:
+          DOMAIN: aurora.example.invalid
+          ACME_EMAIL: ci@example.invalid
         run: |
           docker compose version
-          docker compose config --quiet && echo "compose config is valid"
+          docker compose config --quiet
+          echo "base: ok"
+          docker compose -f docker-compose.yml -f docker-compose.offline.yml config --quiet
+          echo "offline: ok"
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+          echo "prod: ok"
+          docker compose -f docker-compose.yml -f docker-compose.https.yml config --quiet
+          echo "https: ok"
+
+          # !override must keep the internal network; !reset would have emptied it.
+          docker compose -f docker-compose.yml -f docker-compose.offline.yml config \
+            | python3 -c "
+          import sys, yaml
+          c = yaml.safe_load(sys.stdin)
+          for svc in ('backend', 'simulator'):
+              nets = list(c['services'][svc].get('networks') or {})
+              assert nets == ['aurora-internal'], f'{svc} offline networks: {nets}'
+          assert sorted(c['services']['frontend']['networks']) == ['aurora', 'aurora-internal']
+          print('offline overlay: the Python services are internal-only')
+          "
+          # prod must pull images, not build; https must not publish the frontend.
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
+            | python3 -c "
+          import sys, yaml
+          c = yaml.safe_load(sys.stdin)
+          for svc in ('frontend', 'backend', 'simulator'):
+              s = c['services'][svc]
+              assert 'build' not in s, f'{svc} still builds in the prod overlay'
+              assert s['image'].startswith('ghcr.io/saeesh-vele/sih2026a-'), s['image']
+          print('prod overlay: all three services pull from GHCR')
+          "
+          DOMAIN=aurora.example.invalid ACME_EMAIL=ci@example.invalid \
+            docker compose -f docker-compose.yml -f docker-compose.https.yml config \
+            | python3 -c "
+          import sys, yaml
+          c = yaml.safe_load(sys.stdin)
+          assert not c['services']['frontend'].get('ports'), 'frontend still publishes a port under HTTPS'
+          ports = [p['published'] for p in c['services']['caddy']['ports']]
+          assert '80' in ports and '443' in ports, ports
+          print('https overlay: only Caddy publishes 80/443')
+          "
 
       # One step per image: the step name alone identifies which build broke.
       - name: Build the backend image
