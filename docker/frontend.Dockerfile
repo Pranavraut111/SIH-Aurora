@@ -51,6 +51,7 @@ RUN rm -rf /usr/share/nginx/html/*
 COPY --from=builder /build/dist /usr/share/nginx/html
 # A template, not conf.d: the nginx entrypoint runs envsubst over /etc/nginx/templates.
 COPY docker/nginx.conf /etc/nginx/templates/default.conf.template
+COPY docker/nginx-security-headers.conf /etc/nginx/snippets/security-headers.conf
 
 # The upstream host:port is templated so compose (or another orchestrator) can move the
 # backend without rebuilding. nginx substitutes these into the conf at container start.

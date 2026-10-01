@@ -107,16 +107,40 @@ jobs:
           print('health ok:', h['status'], 'stations:', list(h['stations']))
           "
 
+      # nginx's add_header is not inherited into a location that sets any header of its
+      # own, so every location class is checked — the HTML, a hashed asset and the
+      # proxied API. One missing include silently drops the CSP for that path.
       - name: Security headers and caching come from nginx
         run: |
-          headers=$(curl -fsSI http://localhost/)
-          echo "$headers"
-          echo "$headers" | grep -iq 'content-security-policy'
-          echo "$headers" | grep -iq 'x-content-type-options: nosniff'
-          echo "$headers" | grep -iq 'referrer-policy'
-          echo "$headers" | grep -iq 'cache-control: no-store'
+          asset=$(curl -fsS http://localhost/ | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -1)
+          echo "asset: $asset"
+          fail=0
+          for path in "/" "$asset" "/api/health"; do
+            headers=$(curl -fsSI "http://localhost${path}")
+            echo "--- $path ---"; echo "$headers"
+            for h in 'content-security-policy' 'x-content-type-options: nosniff' \
+                     'referrer-policy' 'x-frame-options' 'permissions-policy'; do
+              if ! echo "$headers" | grep -iq "$h"; then
+                echo "::error::$path is missing header: $h"
+                fail=1
+              fi
+            done
+          done
+          # Caching: index.html must never be cached, hashed assets forever, API never.
+          curl -fsSI http://localhost/ | grep -iq 'cache-control: no-store' \
+            || { echo '::error::index.html is cacheable'; fail=1; }
+          curl -fsSI "http://localhost${asset}" | grep -iq 'immutable' \
+            || { echo '::error::hashed asset is not immutable'; fail=1; }
+          curl -fsSI http://localhost/api/health | grep -iq 'cache-control: no-store' \
+            || { echo '::error::API responses are cacheable'; fail=1; }
+          # Exactly one Cache-Control per response (`expires` plus add_header emits two).
+          for path in "/" "$asset"; do
+            n=$(curl -fsSI "http://localhost${path}" | grep -ic '^cache-control:' || true)
+            test "$n" -eq 1 || { echo "::error::$path returned $n Cache-Control headers"; fail=1; }
+          done
           # A deep link must fall back to index.html (SPA routing).
           curl -fsS http://localhost/some/deep/route | grep -q '<div id="root">'
+          exit $fail
 
       - name: The backend and simulator are NOT reachable from the host
         run: |
