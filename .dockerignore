@@ -1,0 +1,60 @@
+# Aurora — Docker build context. Keep it small: the context is uploaded on every build.
+
+# Dependencies / virtualenvs (reinstalled inside the image)
+node_modules/
+.venv/
+venv/
+
+# Build outputs
+dist/
+dist-ssr/
+legacy/
+
+# VCS and local tooling
+.git/
+.github/
+.gitignore
+.gitattributes
+.claude/
+.code-review-graph/
+.mcp.json
+.mcp.json.example
+.pre-commit-config.yaml
+.gitleaks.toml
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+coverage/
+
+# Tests and their artefacts (images ship runtime code only)
+tests/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+playwright.config.js
+simulator/tests/
+requirements-dev.txt
+pyproject.toml
+**/*.test.js
+**/*.test.jsx
+src/test/
+
+# Secrets — NEVER in an image layer. Config is injected at run time.
+.env
+.env.*
+!.env.example
+
+# Docs and OS junk
+docs/
+*.md
+.DS_Store
+._*
+*.log
