@@ -162,7 +162,12 @@ def test_status_reports_availability_model_and_per_station_buffers(two_stations)
 # ── Genuine inference (needs torch + chronos-forecasting) ───────────────────
 @pytest.fixture(scope="module")
 def inference_result():
-    """One real forecast, shared by the `ml` tests below — loading the model is slow."""
+    """One real forecast, shared by the `ml` tests below — loading the model is slow.
+
+    The first call may download ~190 MB and build the pipeline, so it is only used to warm
+    things up; `elapsed` times a second call, which is what the simulator tick actually
+    pays once the process is up.
+    """
     if not _check_chronos_available():
         pytest.skip("chronos not installed")
     f = GenuineChronosForecaster()
@@ -176,6 +181,8 @@ def inference_result():
                 "fuel_rate_Lhr": 15 + math.sin(i * 0.12),
             },
         )
+    warmup = f.run_forecast("maitri")
+    assert warmup["available"] is True, warmup.get("reason", "unknown")
     started = time.monotonic()
     result = f.run_forecast("maitri")
     return result, time.monotonic() - started, f
@@ -191,9 +198,11 @@ def test_inference_produces_a_forecast(inference_result):
 
 @pytest.mark.ml
 @requires_chronos
-def test_inference_finishes_in_under_30_seconds(inference_result):
+def test_warm_inference_is_fast_enough_for_the_tick(inference_result):
+    """With the pipeline already loaded, a forecast must not stall the simulator tick.
+    (The cold first call is excluded on purpose — it may download the model.)"""
     _, elapsed, _ = inference_result
-    assert elapsed < 30, f"took {elapsed:.1f}s"
+    assert elapsed < 5, f"warm inference took {elapsed:.1f}s"
 
 
 @pytest.mark.ml
