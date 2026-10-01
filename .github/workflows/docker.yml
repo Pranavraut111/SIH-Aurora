@@ -433,10 +433,27 @@ jobs:
         run: |
           sed -i '/^ADMIN_TOKEN=/d' .env
           docker compose up -d --force-recreate backend simulator
-          for i in $(seq 1 40); do
-            curl -fsS -m 3 http://localhost/api/health >/dev/null 2>&1 && break
+          # Wait for the simulator as well, not just the backend: the next steps inject
+          # through /api/sim/*, which is a proxy route and answers 503 until it is up.
+          for i in $(seq 1 60); do
+            if curl -fsS -m 3 http://localhost/api/health > /tmp/restore-health.json 2>/dev/null \
+               && python3 -c "
+          import json,sys
+          h = json.load(open('/tmp/restore-health.json'))
+          sys.exit(0 if h['db']['ok'] and h['simulator']['reachable'] else 1)
+          " 2>/dev/null; then
+              echo "stack back without a token after $((i * 3))s"
+              break
+            fi
             sleep 3
           done
+          curl -fsS http://localhost/api/admin/session | tee /tmp/restore-session.json
+          python3 -c "
+          import json
+          s = json.load(open('/tmp/restore-session.json'))
+          assert s['writeProtected'] is False, f'protection is still on: {s}'
+          print('write protection off again')
+          "
 
       - name: The backend and simulator are NOT reachable from the host
         run: |
@@ -456,16 +473,29 @@ jobs:
 
       - name: Data survives a restart
         run: |
-          id=$(curl -fsS "http://localhost/api/alerts?stationId=bharati" \
-                | python3 -c "import json,sys; a=json.load(sys.stdin)['activeAlerts']; print(a[0]['id'] if a else '')")
+          alert_id() {
+            curl -fsS "http://localhost/api/alerts?stationId=bharati" \
+              | python3 -c "import json,sys; a=json.load(sys.stdin)['activeAlerts']; print(a[0]['id'] if a else '')"
+          }
+          id=$(alert_id)
           if [ -z "$id" ]; then
-            echo "no open bharati alert to acknowledge; injecting one"
+            echo "no open bharati alert; injecting one"
             curl -fsS -X POST "http://localhost/api/sim/inject/generator_failure?stationId=bharati" >/dev/null
-            sleep 8
-            id=$(curl -fsS "http://localhost/api/alerts?stationId=bharati" \
-                  | python3 -c "import json,sys; a=json.load(sys.stdin)['activeAlerts']; print(a[0]['id'] if a else '')")
+            # The alert engine runs on the backend tick (2 s) and needs the injected
+            # telemetry to arrive first, so poll rather than guessing a sleep.
+            for i in $(seq 1 20); do
+              id=$(alert_id)
+              [ -n "$id" ] && { echo "alert raised after $((i * 2))s"; break; }
+              sleep 2
+            done
           fi
-          test -n "$id" || { echo "::error::still no alert to acknowledge"; exit 1; }
+          if [ -z "$id" ]; then
+            echo "::error::no bharati alert was raised after injecting generator_failure"
+            curl -fsS "http://localhost/api/alerts?stationId=bharati" || true
+            curl -fsS http://localhost/api/health || true
+            docker compose logs --tail=60 backend simulator
+            exit 1
+          fi
           curl -fsS -X POST "http://localhost/api/alerts/$id/acknowledge" \
             -H 'Content-Type: application/json' -d '{"acknowledgedBy":"ci-restart-test"}' >/dev/null
           echo "acknowledged $id"
