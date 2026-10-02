@@ -184,3 +184,35 @@ def test_offset_unknown_means_no_absolute_replay_time(tmp_path, monkeypatch):
     assert lyr.fetch_and_cache()
     w = lyr.sample_at(1.0)
     assert w["simulated_time_ms"] is None and w["utc_offset_source"] == "unknown"
+
+
+# ── Wind direction is a compass angle: interpolate across north, not through south ──
+@pytest.mark.parametrize("lo, hi, frac, expected", [
+    (350.0, 10.0, 0.5, 0.0),       # across north, clockwise
+    (350.0, 10.0, 0.25, 355.0),
+    (350.0, 10.0, 0.75, 5.0),
+    (10.0, 350.0, 0.5, 0.0),       # across north, anticlockwise
+    (10.0, 350.0, 0.25, 5.0),
+    (10.0, 350.0, 0.75, 355.0),
+    (90.0, 180.0, 0.5, 135.0),     # ordinary case unchanged
+    (0.0, 180.0, 0.5, 270.0),      # exactly opposite: a tie, resolved anticlockwise (delta in [-180, 180))
+])
+def test_wind_direction_interpolates_on_the_shortest_arc(lo, hi, frac, expected):
+    import weather_data
+    got = weather_data.interp_angle_deg(lo, hi, frac)
+    assert 0.0 <= got < 360.0
+    assert min(abs(got - expected), 360.0 - abs(got - expected)) == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("dirs, expected", [([350.0, 10.0], 0.0), ([10.0, 350.0], 0.0)])
+def test_replay_wind_direction_crosses_north(tmp_path, monkeypatch, dirs, expected):
+    import weather_data
+    monkeypatch.setattr(weather_data, "CACHE_DIR", tmp_path)
+    times = ["2024-01-01T00:00", "2024-01-01T01:00", "2024-01-01T02:00"]
+    write_cache(tmp_path / "maitri_2024-01-01_2024-01-08.json", times, [36.0] * 3,
+                extra_hourly={"wind_direction_10m": dirs + [dirs[-1]]})
+    lyr = weather_data.WeatherDataLayer("maitri", date="2024-01-01", speed_factor=3600)
+    assert lyr.fetch_and_cache()
+    w = lyr.sample_at(0.5)                                    # halfway between the two hours
+    assert w["wind_direction"] == expected                    # north, not 180° (south)
+

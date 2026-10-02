@@ -61,6 +61,16 @@ OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL   = "https://api.open-meteo.com/v1/forecast"
 
 
+def interp_angle_deg(lo: float, hi: float, frac: float) -> float:
+    """Interpolate a compass angle (degrees) along the shortest arc, result in [0, 360).
+
+    Linear interpolation is wrong across north: halfway from 350° to 10° it gives 180°
+    (due south) instead of 0°. Here the difference is wrapped into [-180, 180) first.
+    """
+    delta = (hi - lo + 180.0) % 360.0 - 180.0
+    return (lo + delta * frac) % 360.0
+
+
 class WeatherDataLayer:
     """
     Downloads, caches, and replays real ERA5 reanalysis weather data.
@@ -231,7 +241,7 @@ class WeatherDataLayer:
         idx_hi = min(idx_lo + 1, max_index)
         frac = index_f - idx_lo
 
-        def interp(key):
+        def interp(key, angle=False):
             vals = self.data.get(key, [])
             if not vals or idx_lo >= len(vals):
                 return None
@@ -239,6 +249,8 @@ class WeatherDataLayer:
             hi = vals[idx_hi] if idx_hi < len(vals) else lo
             if lo is None or hi is None:
                 return lo if lo is not None else hi
+            if angle:
+                return interp_angle_deg(lo, hi, frac)
             return lo + (hi - lo) * frac
 
         temp = interp("temperature_2m")
@@ -247,7 +259,7 @@ class WeatherDataLayer:
             wind *= self._wind_to_kmh  # physics model expects km/h
         pressure = interp("surface_pressure")
         humidity = interp("relative_humidity_2m")
-        wind_dir = interp("wind_direction_10m")
+        wind_dir = interp("wind_direction_10m", angle=True)   # circular: across 0°/360°
         solar = interp("shortwave_radiation")
 
         if self.data_start:
@@ -260,7 +272,7 @@ class WeatherDataLayer:
             "env_wind": round(wind, 1) if wind is not None else None,
             "env_pressure": round(pressure, 1) if pressure is not None else None,
             "env_humidity": round(humidity, 1) if humidity is not None else None,
-            "wind_direction": round(wind_dir, 0) if wind_dir is not None else None,
+            "wind_direction": round(wind_dir, 0) % 360 if wind_dir is not None else None,
             "solar_radiation": round(solar, 1) if solar is not None else None,
             "simulated_time": sim_time.strftime("%Y-%m-%dT%H:%M:%S"),   # cache-local time
             # The same instant as epoch ms (UTC), or None when the cache's offset is unknown.
