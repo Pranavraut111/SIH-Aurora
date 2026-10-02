@@ -1048,8 +1048,8 @@ LLM_UNAVAILABLE_MSG = (
 # Must start with "LLM explanation" so the backend treats it as an LLM failure and
 # substitutes its offline summary (see _LLM_FAILURE_PREFIXES in unified_backend.py).
 LLM_CAPPED_MSG = (
-    "LLM explanation unavailable: the server's hourly Groq budget "
-    f"({app_config.GROQ_MAX_CALLS_PER_HOUR} calls) is used up. "
+    "LLM explanation unavailable: the server's Groq budget "
+    f"({app_config.GROQ_MAX_CALLS_PER_HOUR} calls an hour, {app_config.GROQ_MAX_CALLS_PER_DAY} a day) is used up. "
     "The structured decision data (/api/decision) is still available."
 )
 
@@ -1064,17 +1064,25 @@ _groq_cap_logged = False
 
 
 def _groq_prune(now: float) -> None:
-    """Drop call timestamps older than an hour. Caller holds _groq_lock."""
-    cutoff = now - 3600.0
+    """Drop call timestamps older than a day (the daily cap needs them). Caller holds _groq_lock."""
+    cutoff = now - 86400.0
     while _groq_calls and _groq_calls[0] < cutoff:
         _groq_calls.popleft()
 
 
+def _groq_used(now: float) -> tuple[int, int]:
+    """(calls in the last hour, calls in the last 24 h). Caller holds _groq_lock."""
+    hour = sum(1 for t in _groq_calls if t >= now - 3600.0)
+    return hour, len(_groq_calls)
+
+
 def groq_budget_remaining() -> int:
-    """Calls still allowed this rolling hour. Does not consume any."""
+    """Calls still allowed now: the tighter of the hourly and daily caps. Consumes none."""
     with _groq_lock:
-        _groq_prune(time.time())
-        return max(0, app_config.GROQ_MAX_CALLS_PER_HOUR - len(_groq_calls))
+        now = time.time()
+        _groq_prune(now)
+        hour, day = _groq_used(now)
+        return max(0, min(app_config.GROQ_MAX_CALLS_PER_HOUR - hour, app_config.GROQ_MAX_CALLS_PER_DAY - day))
 
 
 def _groq_take_slot() -> bool:
@@ -1083,12 +1091,13 @@ def _groq_take_slot() -> bool:
     now = time.time()
     with _groq_lock:
         _groq_prune(now)
-        if len(_groq_calls) >= app_config.GROQ_MAX_CALLS_PER_HOUR:
+        hour, day = _groq_used(now)
+        if hour >= app_config.GROQ_MAX_CALLS_PER_HOUR or day >= app_config.GROQ_MAX_CALLS_PER_DAY:
             if not _groq_cap_logged:
                 log.warning(
-                    "[Groq] hourly budget of %d calls is used up; serving offline summaries "
-                    "until it refills (raise GROQ_MAX_CALLS_PER_HOUR to change this)",
-                    app_config.GROQ_MAX_CALLS_PER_HOUR,
+                    "[Groq] budget used up (%d/%d this hour, %d/%d today); serving offline summaries "
+                    "until it refills (GROQ_MAX_CALLS_PER_HOUR / GROQ_MAX_CALLS_PER_DAY)",
+                    hour, app_config.GROQ_MAX_CALLS_PER_HOUR, day, app_config.GROQ_MAX_CALLS_PER_DAY,
                 )
                 _groq_cap_logged = True
             return False

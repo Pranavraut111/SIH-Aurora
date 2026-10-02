@@ -165,7 +165,14 @@ GROQ_API_KEY = _get("GROQ_API_KEY", "")
 GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
 # Cap on outbound Groq calls per rolling hour, across the whole process. Past the cap the
 # explain routes return the offline summary instead — honest, and it bounds the bill.
-GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 60)
+# Sized for Groq's free tier on openai/gpt-oss-120b (30 req/min, 1,000 req/day, 8,000
+# tokens/min, 200,000 tokens/day): one explanation is about 1–1.5k tokens, so the daily
+# token budget (~130 calls) is the binding limit, not the request count.
+GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 40)
+GROQ_MAX_CALLS_PER_DAY = _get_int("GROQ_MAX_CALLS_PER_DAY", 120)
+# Identical explanation requests (same station, question, text and alert state) within
+# this many seconds reuse the previous LLM answer instead of spending another call.
+EXPLAIN_CACHE_S = _get_int("EXPLAIN_CACHE_S", 120)
 
 # ── Write protection ─────────────────────────────────────────
 # When set, every state-changing route requires `X-Admin-Token: <ADMIN_TOKEN>`.

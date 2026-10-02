@@ -1,0 +1,57 @@
+{
+  "capturedAt": "2026-10-02T18:39:38+00:00",
+  "source": "live deployment, public reads (GET /api/admin/config, GET /api/logistics)",
+  "thresholdOverrides": [],
+  "ledger": {
+    "maitri-food": {
+      "stationId": "maitri",
+      "current": 14200.0,
+      "dailyConsumption": 75.0
+    },
+    "maitri-fuel": {
+      "stationId": "maitri",
+      "current": 68400.0,
+      "dailyConsumption": 280.0
+    },
+    "maitri-med": {
+      "stationId": "maitri",
+      "current": 380.0,
+      "dailyConsumption": 1.2
+    },
+    "maitri-spares": {
+      "stationId": "maitri",
+      "current": 92.0,
+      "dailyConsumption": 0.4
+    },
+    "maitri-water": {
+      "stationId": "maitri",
+      "current": 45000.0,
+      "dailyConsumption": 850.0
+    },
+    "bharati-food": {
+      "stationId": "bharati",
+      "current": 24500.0,
+      "dailyConsumption": 140.0
+    },
+    "bharati-fuel": {
+      "stationId": "bharati",
+      "current": 112000.0,
+      "dailyConsumption": 340.0
+    },
+    "bharati-med": {
+      "stationId": "bharati",
+      "current": 620.0,
+      "dailyConsumption": 2.0
+    },
+    "bharati-spares": {
+      "stationId": "bharati",
+      "current": 160.0,
+      "dailyConsumption": 0.6
+    },
+    "bharati-water": {
+      "stationId": "bharati",
+      "current": 72000.0,
+      "dailyConsumption": 1200.0
+    }
+  }
+}

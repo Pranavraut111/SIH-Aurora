@@ -80,7 +80,7 @@ export default function TopBar({
   activeStation, onStationChange, isDesktop, onOpenNav,
   telemetryBadge, isConnected, alertCount, criticalCount, updatedAt,
   onOpenLink, onOpenAlerts, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp, demoActive,
-  onStartTour, pageTourLabel, onStartPageTour, signInOpen, onSignInOpenChange, onShare, onOpenAbout,
+  onStartTour, pageTourLabel, onStartPageTour, signInOpen, onSignInOpenChange, onShare, onOpenAbout, onOpenWelcome, onOpenStories,
 }) {
   const now = useNow(1000);
   const scheme = useSchemeToggle();
@@ -185,6 +185,7 @@ export default function TopBar({
         {helpLoaded && (
           <Suspense fallback={null}>
             <HelpMenu anchorEl={helpAnchor} onClose={() => setHelpAnchor(null)} onStartTour={onStartTour}
+              onOpenWelcome={onOpenWelcome} onOpenStories={onOpenStories} onOpenAbout={onOpenAbout}
               pageTourLabel={pageTourLabel} onStartPageTour={onStartPageTour} onOpenShortcuts={onOpenHelp} />
           </Suspense>
         )}
@@ -235,6 +236,7 @@ export default function TopBar({
               onTeamSignIn={teamSignIn ? () => onSignInOpenChange?.(true) : null}
               onShare={onShare}
               onAbout={onOpenAbout}
+              onStories={onOpenStories}
             />
           </Suspense>
         )}

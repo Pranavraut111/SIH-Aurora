@@ -79,8 +79,18 @@ function watchForProblems(page) {
  */
 async function operatorLogin(page) {
   const pill = page.getByTestId('operator-login');
-  if (!(await pill.count())) return false;          // writes are unprotected
-  await pill.click();
+  const chip = page.getByTestId('sandbox-chip');
+  await expect(pill.or(chip).or(page.getByTestId('data-source-badge')).first()).toBeVisible();
+  if (await chip.count()) {
+    // Judge mode: visitors are in a sandbox; the team signs in from the ⋮ menu.
+    if (!ADMIN_TOKEN) return false;
+    await page.getByTestId('topbar-more').click();
+    await page.getByTestId('menu-team-signin').click();
+  } else if (await pill.count()) {
+    await pill.click();
+  } else {
+    return false;                                   // writes are unprotected
+  }
   await page.getByTestId('operator-token-input').fill(ADMIN_TOKEN);
   await page.getByTestId('operator-submit').click();
   await expect(page.getByTestId('operator-logout')).toBeVisible();
@@ -100,15 +110,24 @@ async function openModule(page, moduleId) {
     .toHaveAttribute('aria-current', 'page');
 }
 
-// The product tour auto-starts on a first visit. Every test except the tour tests runs
-// as a returning visitor, so the tour never covers what they click.
+// A first visit shows the welcome card (and ?tour=start the tour). Every test except the
+// tour and welcome tests runs as a returning visitor, so neither covers what they click.
 const TOUR_KEY = 'aurora-tour-v1';
-test.beforeEach(async ({ page }, testInfo) => {
-  if (testInfo.title.includes('product tour')) return;
-  await page.addInitScript((key) => {
+const WELCOME_KEY = 'aurora-welcome-v1';
+const returningVisitor = (keys) => {
+  for (const key of keys) {
     try { window.localStorage.setItem(key, '{"outcome":"e2e"}'); } catch (err) { console.warn(err); }
-  }, TOUR_KEY);
+  }
+};
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.title.includes('first visit')) return;
+  await page.addInitScript(returningVisitor, [TOUR_KEY, WELCOME_KEY]);
 });
+
+/** Judge mode as the backend reports it: {sandbox, publicDemo, writeProtected}. */
+async function judgeMode(request) {
+  return (await request.get(`${API}/api/admin/session`)).json();
+}
 
 /** Step through the open tour to the end: Next, → (keyboard) alternately. Returns the titles. */
 async function completeTour(page, total) {
@@ -234,6 +253,7 @@ test('an injected generator failure on bharati shows up as a bharati alert', asy
 
 test('viewing needs no login, and writes are refused without one', async ({ page, request }) => {
   test.skip(!ADMIN_TOKEN, 'ADMIN_TOKEN is not set for this stack, so writes are unprotected');
+  test.skip((await judgeMode(request)).sandbox, 'judge mode: covered by the sandbox tests below');
   const { consoleErrors, failedRequests } = watchForProblems(page);
 
   await page.goto('/');
@@ -300,7 +320,16 @@ test('on a phone the top bar fits, Sign in stays reachable and demo control cove
   });
   expect(fits, 'top bar or page overflows horizontally at 390 px').toBe(true);
   await expect(page.locator('.demo-toggle')).toHaveCount(0);
-  if (ADMIN_TOKEN) await expect(page.getByTestId('operator-login')).toBeVisible();
+  const judge = await judgeMode(page.request);
+  if (judge.sandbox) {
+    // Judge mode: the Sandbox chip in the bar, Team sign-in in the ⋮ menu.
+    await expect(page.getByTestId('sandbox-chip')).toBeVisible();
+    await page.getByTestId('topbar-more').click();
+    await expect(page.getByTestId('menu-team-signin')).toBeVisible();
+    await page.keyboard.press('Escape');
+  } else if (ADMIN_TOKEN) {
+    await expect(page.getByTestId('operator-login')).toBeVisible();
+  }
 
   // The status dot has an accessible name, and a tap shows the data source in a tooltip.
   const dot = page.getByTestId('data-source-badge');
@@ -464,10 +493,15 @@ test('command palette, keyboard shortcuts, URL state and the alert centre tabs',
   expect(failedRequests, 'failed requests with palette/shortcuts').toEqual([]);
 });
 
-test('the product tour starts once on a first visit, runs to the end and is not shown again', async ({ page }) => {
+test('first visit: the welcome card shows once, and Take the tour runs the tour to the end', async ({ page }) => {
   const { consoleErrors, failedRequests } = watchForProblems(page);
   await page.goto('/');
-  // Auto-start waits for the first telemetry snapshot.
+  // The welcome card waits for the first telemetry snapshot; the tour starts from it.
+  const welcome = page.getByTestId('welcome-card');
+  await expect(welcome).toBeVisible({ timeout: 30_000 });
+  await expect(welcome).toContainText('26060');
+  await expect(welcome).toContainText('Real vs simulated');
+  await page.getByTestId('welcome-tour').click();
   await expect(page.getByTestId('tour-popover')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('data-source-badge')).not.toHaveAttribute('data-source', 'connecting');
   await expect(page.getByTestId('tour-back')).toBeHidden();         // nothing to go back to on step 1
@@ -483,11 +517,18 @@ test('the product tour starts once on a first visit, runs to the end and is not 
   await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
   expect(await page.evaluate((k) => JSON.parse(localStorage.getItem(k)).outcome, TOUR_KEY)).toBe('completed');
 
-  // Second visit: no tour, even after telemetry arrives.
+  // Second visit: no welcome card and no tour, even after telemetry arrives.
   await page.reload();
   await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
   await page.waitForTimeout(2000);
   await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+  await expect(page.getByTestId('welcome-card')).toHaveCount(0);
+  // The welcome card reopens from Help.
+  await page.getByTestId('help-open').click();
+  await page.getByTestId('help-welcome').click();
+  await expect(page.getByTestId('welcome-card')).toBeVisible();
+  await page.getByTestId('welcome-explore').click();
+  await expect(page.getByTestId('welcome-card')).toHaveCount(0);
 
   // Restartable from the Help menu, and Esc ends it.
   await page.getByTestId('help-open').click();
@@ -531,7 +572,7 @@ test('product tour: ?tour=off suppresses it and ?tour=start forces it', async ({
 test('product tour on a phone: sidebar steps open the drawer, demo control points at the ⋮ menu', async ({ page }) => {
   const { consoleErrors, failedRequests } = watchForProblems(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/');
+  await page.goto('/?tour=start');
   const popover = page.getByTestId('tour-popover');
   await expect(popover).toBeVisible({ timeout: 30_000 });
   const drawer = page.getByTestId('mobile-nav');
@@ -617,9 +658,7 @@ test('3D overview: Buildings list opens the panel, stations switch by fly-over o
 
 test('3D overview under reduced motion: a station switch is a crossfade, not a flight', async ({ browser }) => {
   const context = await browser.newContext({ reducedMotion: 'reduce' });
-  await context.addInitScript((key) => {
-    try { window.localStorage.setItem(key, '{"outcome":"e2e"}'); } catch (err) { console.warn(err); }
-  }, TOUR_KEY);
+  await context.addInitScript(returningVisitor, [TOUR_KEY, WELCOME_KEY]);
   const page = await context.newPage();
   try {
     await page.goto('/?station=maitri');
@@ -633,3 +672,187 @@ test('3D overview under reduced motion: a station switch is a crossfade, not a f
     await context.close();
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+//  Judge mode: public demo scenarios, the visitor sandbox, stories
+//  These may run against the live deployment: a sandbox is private, and a demo scenario
+//  is the public feature itself (it resets itself; each test ends the one it started).
+// ═══════════════════════════════════════════════════════════════
+
+/** A second, independent visitor (own cookies) — like another judge on another laptop. */
+async function secondVisitor(browser) {
+  const context = await browser.newContext();
+  await context.addInitScript(returningVisitor, [TOUR_KEY, WELCOME_KEY]);
+  return { context, page: await context.newPage() };
+}
+
+/** Wait until no demo scenario runs on `station` (another visitor's may be ending). */
+async function waitForFreeStation(request, station) {
+  await expect.poll(async () => {
+    const snap = await (await request.get(`${API}/api/station/${station}/state`)).json();
+    return Boolean(snap.publicDemo?.[station]);
+  }, { timeout: 150_000, intervals: [3000], message: `a demo scenario kept running on ${station}` }).toBe(false);
+}
+
+test('judge mode: two visitors\' sandboxes are isolated, and the shared state is untouched', async ({ page, browser, request }) => {
+  test.skip(!(await judgeMode(request)).sandbox, 'VISITOR_SANDBOX is off on this stack');
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  const ITEM = 'maitri-water';
+  const shared = async () => (await (await request.get(`${API}/api/logistics?stationId=maitri`)).json()).items.find((i) => i.id === ITEM);
+  const before = await shared();
+
+  // Visitor A edits the ledger: it asks, says "sandbox", and shows the tag.
+  await page.goto('/?module=logistics&station=maitri');
+  await expect(page.getByTestId('sandbox-chip')).toBeVisible();
+  await expect(page.getByTestId('sandbox-notice')).toContainText('changes are private and reset after 1 hour');
+  await page.getByTestId(`ledger-edit-${ITEM}`).click();
+  const next = String(Math.max(1, Math.round(before.current / 2)));
+  await page.getByTestId('ledger-current').fill(next);
+  await page.getByTestId('ledger-save').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('toast')).toContainText('in your sandbox');
+  await expect(page.getByTestId(`ledger-row-${ITEM}`).getByTestId('sandbox-tag')).toBeVisible();
+
+  // Visitor B (another browser) and the shared state still see the original value.
+  const b = await secondVisitor(browser);
+  try {
+    await b.page.goto('/?module=logistics&station=maitri');
+    await expect(b.page.getByTestId(`ledger-row-${ITEM}`)).toBeVisible();
+    await expect(b.page.getByTestId(`ledger-row-${ITEM}`).getByTestId('sandbox-tag')).toHaveCount(0);
+    expect((await shared()).current).toBe(before.current);
+
+    // A's sandbox resets on request.
+    await page.getByTestId('sandbox-reset').click();
+    await page.getByTestId('confirm-ok').click();
+    await expect(page.getByTestId('toast')).toContainText('sandbox was reset');
+    await expect(page.getByTestId(`ledger-row-${ITEM}`).getByTestId('sandbox-tag')).toHaveCount(0);
+  } finally {
+    await b.context.close();
+  }
+
+  // Shared-state routes stay team-only for anonymous visitors.
+  for (const [path, data] of [['/api/sim/mode', { mode: 'reanalysis' }], ['/api/ncpor/ingest', undefined],
+    ['/api/connection/toggle?stationId=maitri', undefined]]) {
+    expect((await request.post(`${API}${path}`, data ? { data } : {})).status(), path).toBe(401);
+  }
+  expect(consoleErrors, 'console errors in the sandbox').toEqual([]);
+  expect(failedRequests, 'failed requests in the sandbox').toEqual([]);
+});
+
+test('judge mode: anyone can run a demo scenario, every visitor sees the banner, and it can be ended', async ({ page, browser, request }) => {
+  test.skip(!(await judgeMode(request)).publicDemo, 'PUBLIC_DEMO is off on this stack');
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await waitForFreeStation(request, 'bharati');
+  await page.goto('/?station=bharati');
+  await page.getByTestId('try-demo').click();
+  await expect(page.getByTestId('demo-public-note')).toContainText('reset automatically after 2 minutes');
+  await page.getByTestId('demo-scenario-water_crisis').click();
+  await page.getByTestId('confirm-ok').click();
+  const b = await secondVisitor(browser);
+  try {
+    const banner = page.getByTestId('demo-banner');
+    await expect(banner).toContainText('Demo scenario running: Water system alert (started by a visitor), resets in');
+    await expect(banner).toContainText('Simulated');
+    // Another visitor, on the other station, sees it too.
+    await b.page.goto('/?station=maitri');
+    await expect(b.page.getByTestId('demo-banner')).toContainText('at Bharati');
+    // A second scenario on the same station is refused politely.
+    const busy = await b.page.request.post(`${API}/api/sim/inject/co2_spike?stationId=bharati`);
+    expect([409, 429]).toContain(busy.status());
+    expect((await busy.json()).detail.message).toMatch(/try again in|start another in/);
+    // The event log records it as a public demo.
+    await page.getByTestId('demo-control-panel-close').click();
+    await page.keyboard.press('Escape');
+  } finally {
+    // End the scenario we started (visitors may end a visitor-started one).
+    await page.request.post(`${API}/api/sim/reset?stationId=bharati`);
+    await b.context.close();
+  }
+  await expect(page.getByTestId('demo-banner')).toHaveCount(0, { timeout: 15_000 });
+  const snap = await (await request.get(`${API}/api/station/bharati/state`)).json();
+  expect(snap.eventTimeline.some((e) => /public demo/.test(e.message))).toBe(true);
+  expect(consoleErrors, 'console errors in the public demo').toEqual([]);
+  expect(failedRequests.filter((f) => !/ 40[39] | 429 /.test(f)), 'failed requests in the public demo').toEqual([]);
+});
+
+/** Play a story from the picker (or a deep link) to its last step. */
+async function playStory(page, id) {
+  const popover = page.getByTestId('tour-popover');
+  await expect(popover).toBeVisible({ timeout: 30_000 });
+  let guard = 0;
+  while (await popover.count() && guard < 15) {
+    guard += 1;
+    const step = await popover.getAttribute('data-tour-step');
+    const next = page.getByTestId('tour-next');
+    await expect(next).toBeEnabled({ timeout: 30_000 });
+    const label = await next.textContent();
+    await next.click();
+    if (/Finish story/.test(label)) break;
+    await expect.poll(async () => (await popover.count()) === 0 || (await popover.getAttribute('data-tour-step')) !== step,
+      { timeout: 45_000, message: `story ${id} stuck after step ${step}` }).toBe(true);
+  }
+  await expect(popover).toHaveCount(0, { timeout: 15_000 });
+}
+
+for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
+  for (const id of ['blizzard', 'generator', 'fuel']) {
+    test(`story "${id}" completes on ${label}`, async ({ page, request }) => {
+      const judge = await judgeMode(request);
+      test.skip(id !== 'fuel' && !judge.publicDemo, 'PUBLIC_DEMO is off on this stack');
+      test.skip(id === 'fuel' && !judge.sandbox, 'VISITOR_SANDBOX is off on this stack');
+      test.setTimeout(240_000);
+      const { consoleErrors, failedRequests } = watchForProblems(page);
+      const station = id === 'generator' ? 'bharati' : 'maitri';
+      if (id !== 'fuel') await waitForFreeStation(request, station);
+      // On a live deployment one visitor may start a scenario per minute.
+      if (id !== 'fuel' && IS_REMOTE) await page.waitForTimeout(61_000);
+      await page.setViewportSize(viewport);
+      await page.goto(`/?story=${id}`);                         // deep link
+      await expect(page).not.toHaveURL(/story=/);
+      await playStory(page, id);
+      if (id !== 'fuel') {
+        // The story reset its scenario at the end.
+        await expect.poll(async () => Boolean((await (await request.get(`${API}/api/station/${station}/state`)).json()).publicDemo?.[station]),
+          { timeout: 20_000 }).toBe(false);
+      } else {
+        await page.request.post(`${API}/api/sandbox/reset`);
+      }
+      expect(consoleErrors, `console errors in story ${id}`).toEqual([]);
+      expect(failedRequests, `failed requests in story ${id}`).toEqual([]);
+    });
+  }
+}
+
+test('stories: the picker explains when another scenario is running, and Share this view copies the link', async ({ page, browser, request }) => {
+  const judge = await judgeMode(request);
+  test.skip(!judge.publicDemo || !judge.sandbox, 'judge mode is off on this stack');
+  await waitForFreeStation(request, 'maitri');
+  const b = await secondVisitor(browser);
+  try {
+    // Another visitor runs a different scenario at Maitri.
+    const started = await b.page.request.post(`${API}/api/sim/inject/co2_spike?stationId=maitri`);
+    expect(started.ok(), await started.text()).toBeTruthy();
+    await page.goto('/?station=maitri');
+    await page.getByTestId('help-open').click();
+    await page.getByTestId('help-stories').click();
+    await expect(page.getByTestId('story-note-blizzard')).toContainText(/Another scenario is running at Maitri; try again in \d:\d\d/);
+    await expect(page.getByTestId('story-play-blizzard')).toBeDisabled();
+    await expect(page.getByTestId('story-play-fuel')).toBeEnabled();
+    await page.keyboard.press('Escape');
+  } finally {
+    await b.page.request.post(`${API}/api/sim/reset?stationId=maitri`);
+    await b.context.close();
+  }
+  // Share this view: copies the current URL (page + station).
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/?module=energy&station=bharati');
+  await page.getByTestId('topbar-more').click();
+  await page.getByTestId('menu-share').click();
+  await expect(page.getByTestId('toast')).toContainText(/Link copied|Copy this link/);
+  // About Aurora opens from the ⋮ menu.
+  await page.getByTestId('topbar-more').click();
+  await page.getByTestId('menu-about').click();
+  await expect(page.getByTestId('about-dialog')).toContainText('Data provenance');
+  await expect(page.getByTestId('about-dialog')).toContainText('github.com/Saeesh-Vele/SIH2026A');
+});
+

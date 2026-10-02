@@ -24,6 +24,14 @@ const PYTHON = process.env.AURORA_PYTHON || path.resolve('.venv/bin/python');
 // simulator/data_store/antarctic_observations.db is committed for the offline demo.
 const DB_PATH = process.env.DB_PATH || path.resolve('test-results/e2e-observations.db');
 
+// The local/CI stack runs as the public deployment does (judge mode): writes protected by
+// a team token (a throwaway one unless ADMIN_TOKEN is given), anonymous visitors in a
+// private sandbox, public demo scenarios on. Set in process.env so the spec sees it too.
+// The per-visitor demo cooldown is shortened here only, so several stories can run back to
+// back from one address; the 60 s rule itself is covered by the backend tests. Against
+// E2E_BASE_URL the deployment's own settings apply.
+if (!EXTERNAL_BASE_URL) process.env.ADMIN_TOKEN ||= 'e2e-team-token';
+
 // The services read these from the environment (simulator/config.py), never from argv.
 const serviceEnv = {
   ...process.env,
@@ -39,6 +47,9 @@ const serviceEnv = {
   LOG_LEVEL: 'WARNING',
   DB_PATH,
   GROQ_API_KEY: '',
+  VISITOR_SANDBOX: 'true',
+  PUBLIC_DEMO: 'true',
+  PUBLIC_DEMO_COOLDOWN_S: '3',
 };
 
 export default defineConfig({

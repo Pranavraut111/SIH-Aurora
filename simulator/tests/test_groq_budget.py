@@ -19,8 +19,9 @@ def budget(monkeypatch):
     return sim
 
 
-def _set_cap(monkeypatch, n):
+def _set_cap(monkeypatch, n, per_day=10_000):
     monkeypatch.setattr(sim.app_config, "GROQ_MAX_CALLS_PER_HOUR", n)
+    monkeypatch.setattr(sim.app_config, "GROQ_MAX_CALLS_PER_DAY", per_day)
 
 
 def test_budget_starts_at_the_configured_cap(budget, monkeypatch):
@@ -106,3 +107,24 @@ def test_the_explain_route_reports_llm_unavailable_when_capped(budget, monkeypat
     client = sim.control_app.test_client()
     body = client.post("/api/aurora-explain", json={"station": "maitri", "question": "status"}).get_json()
     assert body["llmAvailable"] is False
+
+
+def test_the_daily_cap_holds_across_hours(budget, monkeypatch):
+    """Groq's free tier is bounded per day (200k tokens), so 24 h counts too."""
+    _set_cap(monkeypatch, 10, per_day=3)
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(sim.time, "time", lambda: clock["t"])
+    assert sim._groq_take_slot() and sim._groq_take_slot()
+    clock["t"] += 2 * 3600                       # a new hour, same day
+    assert sim._groq_take_slot() is True
+    assert sim.groq_budget_remaining() == 0
+    assert sim._groq_take_slot() is False         # the hourly cap has room, the daily one does not
+    clock["t"] += 23 * 3600                       # the first two calls are now over a day old
+    assert sim.groq_budget_remaining() == 2
+
+
+def test_defaults_fit_the_groq_free_tier():
+    import config
+    assert config.GROQ_MAX_CALLS_PER_DAY * 1500 <= 200_000     # ~1.5k tokens a call
+    assert config.GROQ_MAX_CALLS_PER_HOUR <= config.GROQ_MAX_CALLS_PER_DAY
+

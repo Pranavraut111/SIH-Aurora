@@ -288,7 +288,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
                 <StockBar item={i} />
                 <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>Use {formatValue(i.dailyUse, `${i.unit}/day`, i.dailyUse < 10 ? 1 : 0)} · reorder at {formatValue(i.reorderAt, i.unit)}</Typography>
-                  <WriteButton size="small" startIcon={<EditOutlined />} onClick={() => setEditing(i)} aria-label={`Update ${i.name}`}>Update</WriteButton>
+                  <WriteButton size="small" startIcon={<EditOutlined />} onClick={() => setEditing(i)} aria-label={`Update ${i.name}`} data-testid={`ledger-edit-${i.id}`}>Update</WriteButton>
                 </Stack>
               </Box>
             ))}

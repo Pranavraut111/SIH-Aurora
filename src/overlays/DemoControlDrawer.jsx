@@ -131,7 +131,7 @@ export default function DemoControlDrawer({ open, onClose, activeStation, public
       {d && (
         <>
           {(running || active) && (
-            <Box sx={{ p: 4, mb: 4, borderRadius: '10px', bgcolor: 'status.simulatedTint' }} role="status" data-testid="demo-running">
+            <Box sx={(t) => ({ p: 4, mb: 4, borderRadius: '10px', bgcolor: t.vars.palette.aurora.surfaceRaised, border: `1px solid ${t.vars.palette.status.simulated}` })} role="status" data-testid="demo-running">
               <Stack direction="row" sx={{ gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
                 <StatusChip status="simulated" label="Simulated" />
                 <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{running ? scenarioLabel(running) : active.name}</Typography>

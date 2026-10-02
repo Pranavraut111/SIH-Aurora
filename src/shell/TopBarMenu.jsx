@@ -13,13 +13,14 @@ import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
 import LockOutlined from '@mui/icons-material/LockOutlined';
 import LinkOutlined from '@mui/icons-material/LinkOutlined';
 import InfoOutlined from '@mui/icons-material/InfoOutlined';
+import PlayCircleOutlineOutlined from '@mui/icons-material/PlayCircleOutlineOutlined';
 import SensorsOutlined from '@mui/icons-material/SensorsOutlined';
 import SensorsOffOutlined from '@mui/icons-material/SensorsOffOutlined';
 
 export default function TopBarMenu({
   anchorEl, onClose, isConnected, demoActive, scheme, telemetryTime, sourceLabel,
   onOpenLink, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp, onStartTour,
-  phoneOnly = false, onTeamSignIn, onShare, onAbout,
+  phoneOnly = false, onTeamSignIn, onShare, onAbout, onStories,
 }) {
   const pick = (fn) => () => { onClose(); fn(); };
   // Items already in the bar on wider screens are only listed on phones.
@@ -33,6 +34,12 @@ export default function TopBarMenu({
       transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       slotProps={{ paper: { sx: { minWidth: 248, mt: 1 } } }}
     >
+      {onStories && (
+        <MenuItem onClick={pick(onStories)} data-testid="menu-stories">
+          <ListItemIcon><PlayCircleOutlineOutlined fontSize="small" /></ListItemIcon>
+          <ListItemText primary="Play a scenario" secondary="Guided two-minute stories" />
+        </MenuItem>
+      )}
       {onShare && (
         <MenuItem onClick={pick(onShare)} data-testid="menu-share">
           <ListItemIcon><LinkOutlined fontSize="small" /></ListItemIcon>
@@ -51,7 +58,7 @@ export default function TopBarMenu({
           <ListItemText primary="Team sign-in" secondary="Changes the shared station (Aurora team only)" />
         </MenuItem>
       )}
-      {(onShare || onAbout || onTeamSignIn) && <Divider sx={phone} />}
+      {(onShare || onAbout || onTeamSignIn || onStories) && <Divider sx={phone} />}
       <MenuItem onClick={pick(onOpenPalette)} data-testid="menu-palette" sx={phone}>
         <ListItemIcon><SearchOutlined fontSize="small" /></ListItemIcon>
         <ListItemText primary="Search and commands" />

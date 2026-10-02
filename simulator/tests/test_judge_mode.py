@@ -105,6 +105,17 @@ def test_two_visitors_have_separate_sandboxes(judge):
     assert a.cookies.get("aurora_sandbox") != b.cookies.get("aurora_sandbox")
 
 
+def test_what_if_uses_the_visitors_own_ledger(judge):
+    a, b, ub = judge["a"], judge["b"], judge["ub"]
+    ub.tick_station("maitri")                                   # a published snapshot to run against
+    _ledger(a, 500.0)
+    body = {"stationId": "maitri", "scenarioId": "fuel_leak", "intensity": 1.0}
+    mine = a.post("/api/simulation/whatif", json=body).json()
+    theirs = b.post("/api/simulation/whatif", json=body).json()
+    assert mine != theirs                                       # A's autonomy uses A's 500 L, B's the shared stock
+    assert "500" in str(mine)
+
+
 def test_sandbox_writes_are_validated_exactly_like_real_ones(judge):
     a = judge["a"]
     over = _ledger(a, 10 ** 8)                                  # above the tank's max capacity
@@ -292,3 +303,24 @@ def test_visitors_may_reset_only_a_public_demo(judge):
 def test_public_demo_off_means_injection_still_needs_the_token(judge, monkeypatch):
     monkeypatch.setattr(judge["ub"].app_config, "PUBLIC_DEMO", False)
     assert judge["a"].post("/api/sim/inject/blizzard?stationId=maitri").status_code == 401
+
+
+def test_identical_explanations_are_served_from_a_short_cache(judge, monkeypatch):
+    """Several judges asking the same thing at once cost one LLM call."""
+    ub = judge["ub"]
+    calls = []
+
+    def fake_sim(method, path, *, params=None, json_body=None, timeout=None):
+        calls.append(path)
+        return {"explanation": "Storm conditions; suspend outdoor work.", "llmAvailable": True}
+
+    monkeypatch.setattr(ub, "_sim_request", fake_sim)
+    monkeypatch.setattr(ub, "_explain_cache", {})
+    body = {"stationId": "maitri", "question": "status", "freeText": "What should we do?"}
+    first = judge["a"].post("/api/aurora-explain", json=body).json()
+    second = judge["b"].post("/api/aurora-explain", json={**body, "freeText": "  what SHOULD we do? "}).json()
+    assert first["mode"] == "llm" and "cached" not in first
+    assert second["cached"] is True and second["explanation"] == first["explanation"]
+    assert calls == ["/api/aurora-explain"]
+    other = judge["a"].post("/api/aurora-explain", json={**body, "stationId": "bharati"}).json()
+    assert "cached" not in other and calls.count("/api/aurora-explain") == 2

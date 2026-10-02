@@ -17,6 +17,7 @@ import { driver } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import './tour.css';
 import { tourSteps } from './steps';
+import { storySteps } from './stories';
 
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
@@ -77,7 +78,9 @@ function restoreAria(el) {
  * Returns a stop() function.
  */
 export function runTour(kind, app) {
-  const defs = tourSteps(kind);
+  // 'story:<id>' runs a guided story (stories.js): same runner, plus per-step actions.
+  const storyId = kind.startsWith('story:') ? kind.slice(6) : null;
+  const defs = storyId ? storySteps(storyId) : tourSteps(kind);
   if (!defs.length) { app.onEnd('empty'); return () => {}; }
   const reduced = reducedMotion();
   const returnFocus = app.returnFocus ?? document.activeElement;
@@ -88,6 +91,27 @@ export function runTour(kind, app) {
   let outcome = 'closed';
 
   const steps = defs.map(() => ({ popover: { title: '', description: '' } }));
+  const ran = new Set();     // story actions run once, going forward only
+
+  // Helpers a story step's `before` can use (App.jsx adds inject/reset/data…).
+  const storyCtx = {
+    ...(app.story || {}),
+    click: async (sel, timeout = 4000) => {
+      const hit = await waitForTarget([sel], timeout);
+      if (!hit) throw new Error(`story: ${sel} not found`);
+      hit.el.click();
+      await sleep(150);
+    },
+    waitForEl: async (sel, timeout = 4000) => Boolean(await waitForTarget([sel], timeout)),
+  };
+
+  /** Show progress on Next while a story step prepares (e.g. waits for an alert). */
+  function working(on) {
+    const btn = document.querySelector('.aurora-tour .driver-popover-next-btn');
+    if (!btn) return;
+    if (on) { btn.dataset.label = btn.textContent; btn.textContent = 'Working…'; btn.disabled = true; }
+    else if (btn.dataset.label) { btn.textContent = btn.dataset.label; btn.disabled = false; }
+  }
 
   async function setNav(open) {
     if (!app.drawerNav || open === navOpen) return;
@@ -96,16 +120,21 @@ export function runTour(kind, app) {
     if (!open) await sleep(reduced ? 30 : 260);   // let the drawer slide away before the next highlight
   }
 
-  async function prepare(i) {
+  async function prepare(i, forward = true) {
     const def = defs[i];
+    if (def.station && app.getStation?.() !== def.station) { app.setStation(def.station); await sleep(400); }
     if (def.page && app.getModule() !== def.page) app.goTo(def.page);
+    if (def.before && forward && !ran.has(i)) {
+      ran.add(i);
+      await def.before(storyCtx);
+    }
     await setNav(Boolean(def.nav));
     if (def.click) {
       const hit = await waitForTarget([def.click], 2000);
       hit?.el.click();
     }
     const hit = await waitForTarget(def.targets);
-    const ctx = { ...app, target: hit?.sel ?? null };
+    const ctx = { ...app, ...(app.story?.state?.() || {}), target: hit?.sel ?? null };
     rememberAria(hit?.el);
     steps[i].element = hit?.el;   // undefined → a centred popover rather than a stuck tour
     steps[i].popover = {
@@ -121,11 +150,19 @@ export function runTour(kind, app) {
     if (i >= total) { end('completed'); return; }
     if (i < 0) return;
     busy = true;
+    const forward = i > (d.getActiveIndex() ?? -1);
+    working(true);
     try {
-      await prepare(i);
+      await prepare(i, forward);
       if (!finished) d.moveTo(i);
+    } catch (err) {
+      console.error('[story] step failed', err);
+      outcome = 'error';
+      app.onStoryError?.(err);
+      end('error');
     } finally {
       busy = false;
+      if (!finished) working(false);
     }
   }
 
@@ -179,12 +216,12 @@ export function runTour(kind, app) {
       popover.progress.setAttribute('aria-live', 'off');
       popover.previousButton.setAttribute('data-testid', 'tour-back');
       popover.nextButton.setAttribute('data-testid', 'tour-next');
-      if (i === total - 1) popover.nextButton.textContent = kind === 'main' ? 'Finish tour' : 'Done';
+      if (i === total - 1) popover.nextButton.textContent = storyId ? 'Finish story' : kind === 'main' ? 'Finish tour' : 'Done';
       if (i < total - 1) {
         const skip = document.createElement('button');
         skip.type = 'button';
         skip.className = 'aurora-tour-skip';
-        skip.textContent = 'Skip tour';
+        skip.textContent = storyId ? 'Exit story' : 'Skip tour';
         skip.setAttribute('data-testid', 'tour-skip');
         skip.addEventListener('click', () => end('skipped'));
         popover.footerButtons.prepend(skip);

@@ -616,7 +616,9 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
 app.add_middleware(
     CORSMiddleware,
     allow_origins=app_config.ALLOWED_ORIGINS,
-    allow_credentials=False,
+    # The visitor-sandbox session is a cookie (judge mode). Origins are an explicit
+    # allow-list (never '*'), which credentialed CORS requires.
+    allow_credentials=True,
     allow_methods=["GET", "POST"],
     # X-Admin-Token is needed for the operator login. In Docker everything is same-origin
     # behind nginx so no preflight happens, but local dev is Vite:5173 -> backend:8080,
@@ -1040,15 +1042,17 @@ class WhatIfRequest(BaseModel):
     scenarioId: Literal[WHATIF_SCENARIOS]
     intensity: float = Field(1.0, ge=0.5, le=2.0, allow_inf_nan=False)   # multiplier
 
-def _ledger_items(sid: str) -> dict:
-    """The operator-entered logistics ledger for one station, by item id."""
+def _ledger_items(sid: str, session: str | None = None) -> dict:
+    """The operator-entered logistics ledger for one station, by item id, as this visitor
+    sees it (their sandbox ledger edits applied, judge mode)."""
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM logistics_inventory WHERE station_id = ?", (sid,)).fetchall()
-    return {r["id"]: _inventory_item(r) for r in rows}
+    ledger = SANDBOX.get(session, "ledger")
+    return {r["id"]: _inventory_item(_sandbox_ledger_row(r, ledger)[0]) for r in rows}
 
 
 @app.post("/api/simulation/whatif")
-def run_what_if_simulation(req: WhatIfRequest):
+def run_what_if_simulation(req: WhatIfRequest, request: Request):
     """Rule-based what-if: FIXED scenario deltas applied to the published snapshot.
     This is not the physics model: the coefficients below are assumptions, returned in
     `assumptions`, and every consequence line states only what is computed here (or read
@@ -1144,7 +1148,7 @@ def run_what_if_simulation(req: WhatIfRequest):
         sim_gen["gen_fuel_rate"] += extra_burn
         assumptions += [f"unmetered loss {extra_burn:.1f} L/h (16 × intensity)"]
         impacts.append(f"Fuel loss +{extra_burn:.1f} L/h on top of the generator's {gen['gen_fuel_rate']:.1f} L/h.")
-        fuel = _ledger_items(station_id).get(f"{station_id}-fuel")
+        fuel = _ledger_items(station_id, sandbox_session(request)).get(f"{station_id}-fuel")
         if fuel and fuel["unit"] == "L" and gen["gen_fuel_rate"] > 0:
             before = fuel["current"] / (gen["gen_fuel_rate"] * 24)
             after = fuel["current"] / ((gen["gen_fuel_rate"] + extra_burn) * 24)
@@ -1174,7 +1178,7 @@ def run_what_if_simulation(req: WhatIfRequest):
         days_delay = int(60 * k)
         assumptions += [f"resupply delayed {days_delay} days (60 × intensity)",
                         "consumption stays at the ledger's daily use"]
-        items = _ledger_items(station_id).values()
+        items = _ledger_items(station_id, sandbox_session(request)).values()
         short = [i for i in items if i["daysRemaining"] is not None and i["daysRemaining"] < days_delay]
         impacts.append(f"Resupply delayed by {days_delay} days.")
         if short:
@@ -1872,6 +1876,18 @@ class ExplainRequest(BaseModel):
 
 _LLM_FAILURE_PREFIXES = ("LLM explanation", "Decision engine has not")
 
+# Several judges asking the same thing at the same moment get one LLM answer: the cache
+# key is the request plus the station's alert state, so a changed situation is re-asked.
+_explain_cache: dict[tuple, tuple[float, dict]] = {}
+_explain_lock = threading.Lock()
+
+
+def _explain_key(sid: str, req: "ExplainRequest") -> tuple:
+    snap = store.get_published(sid) or {}
+    alerts = tuple(sorted((str(a.get("id")), a.get("level")) for a in snap.get("activeAlerts") or []))
+    scenario = (snap.get("provenance") or {}).get("activeScenario")
+    return (sid, req.question, " ".join(req.freeText.lower().split()), alerts, scenario)
+
 
 @app.post("/api/aurora-explain")
 @app.post("/api/explain")
@@ -1882,12 +1898,23 @@ def get_ai_explanation(req: ExplainRequest):
     summary of the current decision JSON labelled 'offline summary'."""
     sid = require_station(req.stationId or req.station or "maitri")
     reason = None
+    key = _explain_key(sid, req)
+    now = time.time()
+    with _explain_lock:
+        for k in [k for k, (t, _) in _explain_cache.items() if now - t > app_config.EXPLAIN_CACHE_S]:
+            _explain_cache.pop(k, None)
+        hit = _explain_cache.get(key)
+    if hit:
+        return {**hit[1], "cached": True, "cachedAgeS": round(now - hit[0])}
     try:
         res = _sim_request("POST", "/api/aurora-explain", timeout=EXPLAIN_TIMEOUT_S,
                            json_body={"station": sid, "question": req.question, "freeText": req.freeText})
         text = str(res.get("explanation", ""))
         if res.get("llmAvailable") and not text.startswith(_LLM_FAILURE_PREFIXES):
-            return {**res, "station": sid, "mode": "llm", "llmAvailable": True}
+            out = {**res, "station": sid, "mode": "llm", "llmAvailable": True}
+            with _explain_lock:
+                _explain_cache[key] = (time.time(), out)
+            return out
         reason = text or "LLM unavailable"
     except HTTPException as exc:
         reason = str(exc.detail)

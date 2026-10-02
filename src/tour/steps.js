@@ -31,10 +31,12 @@ export const MAIN_TOUR = [
   },
   {
     targets: [t('operator-login')],
-    title: 'Viewing is open; changing needs sign-in',
-    body: ({ writeProtected }) => (writeProtected === true
-      ? 'You can view everything. Sign in with the operator token to change thresholds, the inventory ledger, alerts or the simulator. Every change asks for confirmation first.'
-      : 'Write protection is off on this server, so every control is enabled. On the public deployment, changes need the operator token, and every change asks for confirmation first.'),
+    title: ({ judge }) => (judge?.sandbox ? 'Your own sandbox' : 'Viewing is open; changing needs sign-in'),
+    body: ({ writeProtected, judge }) => (judge?.sandbox
+      ? 'Try everything: change a threshold, edit the inventory ledger, acknowledge an alert, request a command. Your changes are private to you and reset after an hour; nobody else sees them. The Aurora team changes the shared station with Team sign-in, in the ⋮ menu.'
+      : writeProtected === true
+        ? 'You can view everything. Sign in with the operator token to change thresholds, the inventory ledger, alerts or the simulator. Every change asks for confirmation first.'
+        : 'Write protection is off on this server, so every control is enabled. On the public deployment, changes need the operator token, and every change asks for confirmation first.'),
   },
   {
     targets: [t('overview')],
@@ -75,7 +77,7 @@ export const MAIN_TOUR = [
   {
     targets: [t('demo-control'), '[data-testid="topbar-more"]'],
     title: 'Demo control',
-    body: ({ target, writeProtected }) => `${target === '[data-testid="topbar-more"]' ? 'On a phone, Demo control is in this ⋮ menu. It' : 'Demo control'} injects a synthetic fault into the active station so you can watch an alert travel through the system. Injected values are labelled Simulated.${writeProtected === true ? ' Operator sign-in required.' : ''}`,
+    body: ({ target, writeProtected, judge }) => `${target === '[data-testid="topbar-more"]' ? 'On a phone, Demo control is in this ⋮ menu. It' : 'Demo control'} injects a synthetic fault into the active station so you can watch an alert travel through the system. Injected values are labelled Simulated.${judge?.publicDemo ? ' Anyone can run one: it is shared with every visitor, one per station at a time, and resets itself after 2 minutes. "Try a demo" on the station card opens it too.' : writeProtected === true ? ' Operator sign-in required.' : ''}`,
   },
   {
     targets: [t('nav-system')],
