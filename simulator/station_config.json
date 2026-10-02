@@ -585,6 +585,60 @@
             "critical": 2
           }
         }
+      },
+      "scene": {
+        "layout": {
+          "value": "schematic",
+          "source": "docs/phase2-3d-plan.md §2.2: U-shaped tan main building on steel legs, fuel farm, lake-water pump house, containerised modules (NCPOR, Wikipedia, Lonely Planet); all dimensions and positions assumed",
+          "confidence": "low"
+        },
+        "prevailingWindFromDeg": {
+          "value": 120,
+          "source": "assumed (east-south-easterly katabatic wind off the ice sheet); used only when telemetry has no wind direction",
+          "confidence": "low"
+        },
+        "zones": {
+          "generator": {
+            "physical": "Power module east of the main building",
+            "source": "assumed",
+            "confidence": "low"
+          },
+          "heating": {
+            "physical": "West arm of the main building",
+            "source": "assumed",
+            "confidence": "low"
+          },
+          "heatingB": {
+            "physical": "East arm of the main building",
+            "source": "assumed",
+            "confidence": "low"
+          },
+          "waterTank": {
+            "physical": "Lake-water pump house",
+            "source": "NCPOR: lake water pump house; position assumed",
+            "confidence": "low"
+          },
+          "commsMast": {
+            "physical": "Antenna mast",
+            "source": "NCPOR: dedicated satellite channels; mast position assumed",
+            "confidence": "low"
+          },
+          "livingQuarters": {
+            "physical": "Spine of the U-shaped main building",
+            "source": "NCPOR: living, dining and lounge in the main building; which wing is assumed",
+            "confidence": "low"
+          },
+          "storage": {
+            "physical": "Fuel farm (north-west)",
+            "source": "NCPOR: fuel farm and fuel station; position assumed",
+            "confidence": "low"
+          },
+          "lab": {
+            "physical": "Containerised laboratory modules",
+            "source": "NCPOR: containerised laboratory space; position assumed",
+            "confidence": "medium"
+          }
+        }
       }
     },
     "bharati": {
@@ -1166,6 +1220,60 @@
           "low": {
             "warning": 5,
             "critical": 2
+          }
+        }
+      },
+      "scene": {
+        "layout": {
+          "value": "schematic",
+          "source": "docs/phase2-3d-plan.md §2.1: massing from published descriptions (bof architekten, DBZ, New Atlas, e-architect); dimensions and outbuilding positions assumed",
+          "confidence": "low"
+        },
+        "prevailingWindFromDeg": {
+          "value": 90,
+          "source": "assumed (easterly katabatic/coastal winds of the Prydz Bay coast); used only when telemetry has no wind direction",
+          "confidence": "low"
+        },
+        "zones": {
+          "generator": {
+            "physical": "Energy centre, lower level (south section of the main building)",
+            "source": "bof architekten / New Atlas: energy centre on the lower level; its position in the building is assumed",
+            "confidence": "low"
+          },
+          "heating": {
+            "physical": "Roof plant enclosure (heating and air handling)",
+            "source": "New Atlas: plant on the roof level; CHP heat distribution assumed to be here",
+            "confidence": "low"
+          },
+          "heatingB": {
+            "physical": "Lower-level heating, middle section",
+            "source": "assumed",
+            "confidence": "low"
+          },
+          "waterTank": {
+            "physical": "Sea-water pump house on the shore, with treatment in the main building",
+            "source": "Wikipedia (COMNAP): sea-water pump; New Atlas: on-site fresh-water treatment; position assumed",
+            "confidence": "low"
+          },
+          "commsMast": {
+            "physical": "Antenna mast east of the main building",
+            "source": "assumed",
+            "confidence": "low"
+          },
+          "livingQuarters": {
+            "physical": "Upper level: 24 rooms, kitchen, dining, library, lounge",
+            "source": "bof architekten / e-architect: rooms and social spaces on the upper level",
+            "confidence": "medium"
+          },
+          "storage": {
+            "physical": "Kerosene tank farm (west)",
+            "source": "e-architect: kerosene tanks built 2010/11; tank count and position assumed",
+            "confidence": "low"
+          },
+          "lab": {
+            "physical": "Laboratories, lower level (north section)",
+            "source": "bof architekten / e-architect: labs on the lower level; their position in the building is assumed",
+            "confidence": "low"
           }
         }
       }

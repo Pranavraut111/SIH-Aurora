@@ -38,6 +38,11 @@ export function crewLabel(stationId) {
   return typeof n === 'number' ? `≈ ${n} winter crew` : null;
 }
 
+/** The 3D overview's layout notes: {layout, prevailingWindFromDeg, zones: {id: {physical, source, confidence}}}. */
+export function sceneInfo(stationId) {
+  return CONFIG.stations[stationId]?.scene || null;
+}
+
 export function buildingList(stationId) {
   return CONFIG.stations[stationId]?.buildings || [];
 }

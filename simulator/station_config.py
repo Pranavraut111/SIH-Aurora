@@ -51,6 +51,15 @@ def _validate(cfg: dict) -> None:
                     raise StationConfigError(f"{sid}: {sensor}.{d} outside thresholdRange")
                 if (d == "high" and not w < c) or (d == "low" and not w > c):
                     raise StationConfigError(f"{sid}: {sensor}.{d} warning/critical order is wrong")
+        # 3D overview: every subsystem maps to one physical zone, with provenance.
+        zones = st.get("scene", {}).get("zones")
+        if zones is not None:
+            if set(zones) != set(ids):
+                raise StationConfigError(f"{sid}: scene.zones must cover exactly the building ids")
+            for zid, zone in zones.items():
+                complete = zone.get("physical") and zone.get("source")
+                if not complete or zone.get("confidence") not in {"high", "medium", "low"}:
+                    raise StationConfigError(f"{sid}: scene.zones.{zid} needs physical, source and confidence")
         meta = st.get("metadata", {})
         for key in ("name", "fullName", "latitude", "longitude", "elevation_m", "commissionedYear"):
             if not isinstance(meta.get(key), dict) or "value" not in meta[key]:

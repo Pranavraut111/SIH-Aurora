@@ -153,7 +153,7 @@ test('the overview renders live telemetry with a declared data source', async ({
 
   // The 3D twin renders under software WebGL, so the 2D fallback must not be showing.
   await expect(page.getByTestId('station-2d-fallback')).toHaveCount(0);
-  await expect(page.locator('.scene-container canvas')).toBeVisible();
+  await expect(page.getByTestId('scene-canvas')).toBeVisible();
 
   expect(consoleErrors, 'console errors on the overview').toEqual([]);
   expect(failedRequests, 'failed requests on the overview').toEqual([]);
@@ -566,4 +566,70 @@ test('page tours: Tour this page on Weather, Infrastructure, What-if and Adminis
   }
   // The thresholds tour leaves Administration on its thresholds tab.
   await expect(page.getByTestId('admin-tab-thresholds')).toHaveAttribute('aria-selected', 'true');
+});
+
+test('3D overview: Buildings list opens the panel, stations switch by fly-over or pins, and the view is described', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/?station=maitri');
+  const scene = page.getByTestId('station-scene-3d');
+  await expect(scene).toHaveAttribute('data-station', 'maitri');
+  await expect(scene).toHaveAttribute('data-view', 'station');
+  await expect(page.getByTestId('scene-schematic-note')).toHaveText('Schematic layout — positions approximate');
+  await expect(page.getByTestId('scene-live-summary')).toContainText('Maitri station, schematic layout');
+
+  // Every building is reachable without the canvas, with its level as text.
+  await page.getByTestId('scene-buildings-button').click();
+  const generator = page.getByTestId('scene-building-generator');
+  await expect(generator).toContainText(/Normal|Warning|Critical/);
+  await generator.click();
+  await expect(page.getByTestId('building-drawer')).toBeVisible();
+  await page.getByTestId('building-drawer-close').click();
+  await expect(page.getByTestId('building-drawer')).toHaveCount(0);
+
+  // Switching station from the top bar: a fly-over (or a crossfade on the low tier) lands on Bharati.
+  await openStation(page, 'bharati');
+  await expect(scene).toHaveAttribute('data-transition', /flyover|crossfade/);
+  await expect(scene).not.toHaveAttribute('data-flying', 'true', { timeout: 15_000 });
+  await expect(scene).toHaveAttribute('data-station', 'bharati');
+  await expect(scene).toHaveAttribute('data-view', 'station');
+  await page.getByTestId('scene-buildings-button').click();
+  await expect(page.getByTestId('scene-building-storage')).toContainText('Kerosene tank farm');
+  await page.keyboard.press('Escape');
+
+  // The Antarctica view (button or A): both stations pinned; a pin switches station.
+  await page.getByTestId('scene-view-antarctica').click();
+  await expect(scene).toHaveAttribute('data-view', 'antarctica');
+  const pin = page.getByRole('button', { name: 'Fly to Maitri' });
+  await expect(pin).toBeVisible();
+  await pin.click();
+  await expect(page.getByTestId('station-option-maitri')).toHaveAttribute('aria-pressed', 'true');
+  await expect(scene).not.toHaveAttribute('data-flying', 'true', { timeout: 15_000 });
+  await expect(scene).toHaveAttribute('data-station', 'maitri');
+  await expect(scene).toHaveAttribute('data-view', 'station');
+  await page.keyboard.press('a');
+  await expect(scene).toHaveAttribute('data-view', 'antarctica');
+  await page.keyboard.press('a');
+  await expect(scene).toHaveAttribute('data-view', 'station');
+
+  expect(consoleErrors, 'console errors in the 3D overview').toEqual([]);
+  expect(failedRequests, 'failed requests in the 3D overview').toEqual([]);
+});
+
+test('3D overview under reduced motion: a station switch is a crossfade, not a flight', async ({ browser }) => {
+  const context = await browser.newContext({ reducedMotion: 'reduce' });
+  await context.addInitScript((key) => {
+    try { window.localStorage.setItem(key, '{"outcome":"e2e"}'); } catch (err) { console.warn(err); }
+  }, TOUR_KEY);
+  const page = await context.newPage();
+  try {
+    await page.goto('/?station=maitri');
+    const scene = page.getByTestId('station-scene-3d');
+    await expect(scene).toHaveAttribute('data-station', 'maitri');
+    await openStation(page, 'bharati');
+    await expect(scene).toHaveAttribute('data-station', 'bharati');
+    await expect(scene).toHaveAttribute('data-transition', 'crossfade');
+    await expect(scene).not.toHaveAttribute('data-flying', 'true');
+  } finally {
+    await context.close();
+  }
 });

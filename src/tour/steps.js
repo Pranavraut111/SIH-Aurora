@@ -40,7 +40,7 @@ export const MAIN_TOUR = [
     targets: [t('overview')],
     page: 'overview',
     title: 'The station twin',
-    body: 'A 3D model of the station. Building colours follow their alert state; select a building for its live readings. The cards summarise weather, power, fuel and supplies.',
+    body: 'A schematic 3D view of the station: the sun and blowing snow follow the replay clock and the wind; a building in alert is tinted and ringed in its status colour. Select a building, or use the Buildings list, for its live readings. Antarctica (or A) shows both stations on the continent. The cards summarise weather, power, fuel and supplies.',
   },
   {
     targets: [t('nav-monitor')],

@@ -507,6 +507,7 @@ class StationSimulator:
             "speedFactor": self.weather_layer.speed_factor,
             "loop": weather.get("replay_loop"),
             "utcOffsetSource": weather.get("utc_offset_source"),
+            "windFromDeg": weather.get("wind_direction"),   # ERA5 10 m, degrees FROM (reanalysis)
         }
         self._last_weather = weather
 

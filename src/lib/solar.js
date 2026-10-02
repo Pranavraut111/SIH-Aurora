@@ -26,6 +26,28 @@ export function solarElevation(ms, lat, lon) {
   return Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(ha)) / RAD;
 }
 
+/** Sun position {elevation, azimuth} in degrees; azimuth clockwise from true north (90 = east). */
+export function solarPosition(ms, lat, lon) {
+  const n = ms / DAY + 2440587.5 - 2451545.0;
+  const L = (280.46 + 0.9856474 * n) % 360;
+  const g = ((357.528 + 0.9856003 * n) % 360) * RAD;
+  const lambda = (L + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * RAD;
+  const eps = (23.439 - 0.0000004 * n) * RAD;
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda));
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lambda));
+  const gmst = ((18.697374558 + 24.06570982441908 * n) % 24) * 15 * RAD;
+  const ha = gmst + lon * RAD - ra;
+  const phi = lat * RAD;
+  const elev = Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(ha));
+  const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(phi) - Math.sin(phi) * Math.cos(ha));
+  return { elevation: elev / RAD, azimuth: ((az / RAD) % 360 + 360) % 360 };
+}
+
+/** Solar azimuth in degrees, clockwise from true north. */
+export function solarAzimuth(ms, lat, lon) {
+  return solarPosition(ms, lat, lon).azimuth;
+}
+
 /** Local mean solar time (from longitude alone) as a Date-like UTC offset in ms. */
 export function solarTimeOffsetMs(lon) {
   return (lon / 15) * 3_600_000;
