@@ -450,3 +450,10 @@ the startup path); 3D chunk **600 kB** raw / 157 kB gzip (≤ 650); assets: none
   automatic downgrade. Day/twilight/night and calm shots pin the scene's clock and wind through a
   development-only hook (`setDebugEnvironment`, reachable only in dev builds); the blizzard,
   alert and `live-like-*` shots use real telemetry (fault injection / the current replay time).
+
+**Live verification (2026-10-02, after `update.sh`)** on a real GPU (headless Chromium, Metal),
+against https://aurora-sih.centralindia.cloudapp.azure.com under the production CSP: high tier,
+scene renders, canvas click and Buildings list open the building panel, the fly-over runs
+(`docs/phase2/final/live-deployed-midflight.png`) and lands in Bharati, the Antarctica pin flies
+back; no CSP violations, console errors or failed requests. Full e2e smoke against live: 13 passed,
+2 skipped (state-changing tests are skipped on a remote deployment by design).
