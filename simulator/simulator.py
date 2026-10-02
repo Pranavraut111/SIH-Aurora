@@ -662,23 +662,25 @@ class StationSimulator:
 
         return readings
 
-    def inject_scenario(self, scenario_id: str) -> dict:
+    def inject_scenario(self, scenario_id: str, duration_s: float | None = None, source: str = "team") -> dict:
         scenario = SCENARIOS.get(scenario_id)
         if not scenario:
             return {"error": f"Unknown scenario: {scenario_id}"}
 
-        duration_ticks = int(scenario["duration"] / TICK_INTERVAL)
+        duration = scenario["duration"] if duration_s is None else duration_s
+        duration_ticks = int(duration / TICK_INTERVAL)
         expiry = self.tick_count + duration_ticks
         self.active_scenario = scenario_id
 
         for key, target in scenario["injections"].items():
             self.active_injections[key] = (target, expiry)
 
-        self.log_event("injection", f"Scenario: {scenario['name']}")
-        log.info(f"[{self.station_id}] SCENARIO: {scenario['name']} ({scenario['duration']}s)")
+        by = " (public demo, started by a visitor)" if source == "public-demo" else ""
+        self.log_event("injection", f"Scenario: {scenario['name']}{by}, {int(duration)} s")
+        log.info(f"[{self.station_id}] SCENARIO: {scenario['name']} ({duration:g}s){by}")
         return {
             "scenario": scenario_id, "name": scenario["name"],
-            "station": self.station_id, "duration": scenario["duration"],
+            "station": self.station_id, "duration": duration, "source": source,
         }
 
     def inject_single(self, building_id, sensor_id, target, duration=20):
@@ -689,7 +691,7 @@ class StationSimulator:
             return {"injected": key, "target": target, "station": self.station_id}
         return {"error": f"Sensor not found: {key}"}
 
-    def reset(self):
+    def reset(self, reason: str | None = None):
         self.active_injections.clear()
         self.active_scenario = None
         self.active_patterns.clear()
@@ -698,7 +700,7 @@ class StationSimulator:
                 self.values[building_id][sensor_id] = config["nominal"]
         if self.physics_model:
             self.physics_model = StationPhysicsModel(self.station_id)
-        self.log_event("reset", "All sensors reset to nominal")
+        self.log_event("reset", f"All sensors reset to nominal{f' ({reason})' if reason else ''}")
         return {"status": "reset", "station": self.station_id}
 
     def get_data_source_info(self) -> dict:
@@ -793,9 +795,18 @@ def inject_scenario(scenario_id):
     station_id = flask_request.args.get("station", "maitri")
     if scenario_id not in SCENARIOS:
         raise RequestError(404, f"Unknown scenario '{scenario_id}'. Known: {', '.join(SCENARIOS)}")
+    duration = flask_request.args.get("duration")
+    if duration is not None:
+        try:
+            duration = float(duration)
+        except ValueError as exc:
+            raise RequestError(422, "duration must be a number of seconds") from exc
+        if not (math.isfinite(duration) and 1 <= duration <= 600):
+            raise RequestError(422, "duration must be 1–600 s")
+    source = "public-demo" if flask_request.args.get("source") == "public-demo" else "team"
     with stations_lock:
         sim = _get_station(station_id)
-        result = sim.inject_scenario(scenario_id)
+        result = sim.inject_scenario(scenario_id, duration, source)
     return jsonify(result)
 
 
@@ -824,9 +835,12 @@ def inject_single():
 @control_app.route("/reset", methods=["POST"])
 def reset():
     station_id = flask_request.args.get("station", "maitri")
+    reasons = {"public-demo-auto": "public demo ended automatically",
+               "public-demo": "public demo reset by a visitor", "nightly": "nightly reset"}
+    reason = reasons.get(flask_request.args.get("source", ""))
     with stations_lock:
         sim = _get_station(station_id)
-        result = sim.reset()
+        result = sim.reset(reason)
     return jsonify(result)
 
 

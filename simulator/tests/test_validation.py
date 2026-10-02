@@ -106,6 +106,23 @@ def test_simulator_routes_reject_unknown_station_and_scenario(sim_client):
                                                    "sensorId": "nope", "target": 1}).status_code == 404
 
 
+def test_public_demo_injection_runs_for_its_duration_and_is_labelled(sim_client):
+    import simulator
+    r = sim_client.post("/inject/co2_spike?station=bharati&duration=120&source=public-demo")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["duration"] == 120 and body["source"] == "public-demo"
+    sim = simulator._get_station("bharati")
+    assert sim.event_log[-1]["message"] == "Scenario: CO2 Spike (public demo, started by a visitor), 120 s"
+    expiry = {v[1] for v in sim.active_injections.values()}
+    assert expiry == {sim.tick_count + int(120 / simulator.TICK_INTERVAL)}
+    assert sim_client.post("/reset?station=bharati&source=public-demo-auto").status_code == 200
+    assert sim.event_log[-1]["message"] == "All sensors reset to nominal (public demo ended automatically)"
+    assert sim_client.post("/inject/co2_spike?station=bharati&duration=9999").status_code == 422
+    assert sim_client.post("/inject/co2_spike?station=bharati&duration=abc").status_code == 422
+    sim_client.post("/reset?station=bharati")
+
+
 # ── static proofs ─────────────────────────────────────────────
 
 def _python_files():

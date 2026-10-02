@@ -202,18 +202,22 @@ def test_acknowledge_is_rejected_without_a_token(protected):
 
 # ── The session probe the UI logs in with ───────────────────────────────────
 def test_session_reports_protection_on_and_a_valid_token(protected):
+    def core(body):
+        return {k: body[k] for k in ("writeProtected", "authenticated")}
     body = protected.get("/api/admin/session").json()
-    assert body == {"writeProtected": True, "authenticated": False}
+    assert core(body) == {"writeProtected": True, "authenticated": False}
+    assert body["sandbox"] is False and body["publicDemo"] is False   # judge mode is opt-in
 
     ok = protected.get("/api/admin/session", headers={"X-Admin-Token": TOKEN}).json()
-    assert ok == {"writeProtected": True, "authenticated": True}
+    assert core(ok) == {"writeProtected": True, "authenticated": True}
 
     bad = protected.get("/api/admin/session", headers={"X-Admin-Token": WRONG}).json()
-    assert bad == {"writeProtected": True, "authenticated": False}
+    assert core(bad) == {"writeProtected": True, "authenticated": False}
 
 
 def test_session_reports_no_protection_when_the_token_is_unset(unprotected):
-    assert unprotected.get("/api/admin/session").json() == {
+    body = unprotected.get("/api/admin/session").json()
+    assert {k: body[k] for k in ("writeProtected", "authenticated")} == {
         "writeProtected": False, "authenticated": True}
 
 
