@@ -24,6 +24,18 @@ import { maitri } from './stations/maitri';
 
 export const STATION_DEFS = { bharati, maitri };
 
+/** True for CPU (software) WebGL implementations, judged by the unmasked renderer string. */
+export function isSoftwareRenderer(gl) {
+  try {
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(name || ''));
+  } catch (err) {
+    console.warn('[StationScene] could not read the WebGL renderer', err);
+    return false;
+  }
+}
+
 const HORIZON_MIN = 0.1;   // keep the horizon at least 10 % below the top edge when fitting
 const SWAP_FADE_MS = 350;  // crossfade between the station and continent scenes inside a flight
 
@@ -68,6 +80,17 @@ export class SceneEngine {
     renderer.domElement.style.display = 'block';
     container.appendChild(renderer.domElement);
     this.renderer = renderer;
+
+    // Software WebGL (SwiftShader, llvmpipe, Microsoft Basic Render — VMs, remote desktops,
+    // CI) rasterises on the CPU and would starve everything else on the machine: start on
+    // the low tier with the snow at ~5 fps, and crossfade rather than fly.
+    this.softwareGL = isSoftwareRenderer(renderer.getContext());
+    if (this.softwareGL) {
+      this.tierName = 'low'; this.tier = TIER.low;
+      renderer.setPixelRatio(1);
+      this.idleInterval = 200;
+    }
+    container.dataset.quality = this.softwareGL ? 'low-software' : this.tierName;
 
     // Crossfade layer: a 2D snapshot of the last frame that fades out over the new one.
     const fade = document.createElement('canvas');

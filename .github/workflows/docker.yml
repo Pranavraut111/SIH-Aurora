@@ -366,7 +366,9 @@ jobs:
           assert fresh, f'no station received a recent batch: {ages}'
           print('simulator ingesting with the token set; batch ages:', ages)
           "
-          docker compose logs --tail=40 simulator | grep -i "401" \
+          # Match the simulator's own rejection message, not any "401" (log timestamps such
+          # as "15:16:51,401" contain it).
+          docker compose logs --tail=40 simulator | grep -E "rejected telemetry \(401\)|HTTP/1\.[01]\" 401 " \
             && { echo "::error::the simulator was rejected with 401"; exit 1; } || true
 
       # nginx answers 404 for the ingest route before the backend sees it, so even the

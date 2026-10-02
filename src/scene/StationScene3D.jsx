@@ -99,7 +99,6 @@ export default function StationScene3D({
           },
         },
       });
-      engine.container.dataset.quality = engine.tierName;
       if (import.meta.env.DEV) container.auroraEngine = engine;   // dev screenshots only
       engineRef.current = engine;
     } catch (err) {
