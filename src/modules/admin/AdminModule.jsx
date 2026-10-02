@@ -30,6 +30,7 @@ import ScrollX from '../../ui/ScrollX';
 import SectionCard from '../../ui/SectionCard';
 import { ErrorState, LoadingBlock } from '../../ui/States';
 import WriteButton from '../../ui/WriteButton';
+import { SandboxNotice, SandboxTag } from '../../ui/Sandbox';
 import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
@@ -58,7 +59,7 @@ function DataSources({ stationNames, onIngest, busy, system }) {
           </Box>
           <Stack direction="row" sx={{ gap: 2, flexWrap: 'wrap' }}>
             {STATION_IDS.map((sid) => (
-              <WriteButton key={sid} variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} disabled={busy}
+              <WriteButton team key={sid} variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} disabled={busy}
                 onClick={() => onIngest(sid)} data-testid={`admin-ingest-${sid}`}>
                 Ingest {stationNames[sid]}
               </WriteButton>
@@ -94,7 +95,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
   const meta = MODULES.admin;
   const confirm = useConfirm();
   const toast = useToast();
-  const { writeProtected, canWrite } = useAdminToken();
+  const { writeProtected, canWrite, sandbox } = useAdminToken();
   const [tab, setTab] = useState('sources');
   const [state, setState] = useState({ station: null, config: null, error: null });
   const [attempt, setAttempt] = useState(0);
@@ -118,7 +119,10 @@ export default function AdminModule({ activeStation = 'maitri' }) {
   const effective = cfg?.stationId === activeStation ? cfg.thresholds : null;
   const valueOf = (s, dir, lvl) => edits[s]?.[dir]?.[lvl] ?? String(effective?.[s]?.[dir]?.[lvl] ?? '');
   const setEdit = (s, dir, lvl, v) => setEdits((p) => ({ ...p, [s]: { ...p[s], [dir]: { ...p[s]?.[dir], [lvl]: v } } }));
-  const isOverridden = (s) => (cfg?.thresholdOverrides || []).some((o) => o.sensor === s && o.stationId === activeStation);
+  const isOverridden = (s) => (cfg?.thresholdOverrides || []).some((o) => o.sensor === s && o.stationId === activeStation && !o.sandbox);
+  const inMySandbox = (s) => (cfg?.sandboxOverrides || []).some((o) => o.sensor === s);
+  // A visitor's Reset removes only their own sandbox values; the team's resets the shared override.
+  const canReset = (s) => (sandbox ? inMySandbox(s) : isOverridden(s));
   const nameOk = OPERATOR_NAME_RE.test(name.trim());
   const stationNames = Object.fromEntries(STATION_IDS.map((sid) => [sid, stationMeta(sid).name]));
 
@@ -168,7 +172,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
     try {
       const res = await apiPost('/admin/config', { stationId: activeStation, thresholds: changes, updatedBy: name.trim() });
       persistOperatorName(name);
-      toast({ text: `Saved ${res.valuesSaved} value(s). The alert engine uses them from the next tick.` });
+      toast({ text: res.sandbox
+        ? `Saved ${res.valuesSaved} value(s) in your sandbox. Only you see them; live alerts keep using the shared thresholds.`
+        : `Saved ${res.valuesSaved} value(s). The alert engine uses them from the next tick.` });
       reload();
     } catch (err) {
       console.error('[Admin] save thresholds failed', err);
@@ -214,9 +220,10 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                   Defaults come from station_config.json; saved values are per-station overrides in SQLite. An alert clears after
                   {' '}{cfg.alertResolveTicks} consecutive normal ticks.
                 </Typography>
+                <SandboxNotice>Your threshold changes are checked like real ones and kept for you only; the live alerts keep using the station&apos;s shared thresholds.</SandboxNotice>
                 {!canWrite && (
                   <Alert severity="info" sx={{ mb: 3 }} data-testid="thresholds-readonly">
-                    Read-only: sign in as operator to edit thresholds.
+                    Read-only: use Team sign-in (⋮ menu) to edit thresholds.
                   </Alert>
                 )}
                 <ScrollX label="Alert thresholds, scrollable">
@@ -236,6 +243,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                           <TableCell sx={{ pl: 0, minWidth: 200 }} title={rule.basis}>
                             {rule.name}
                             {isOverridden(s) && <Chip size="small" label="Override" sx={{ ml: 1 }} />}
+                            <SandboxTag show={inMySandbox(s)} sx={{ ml: 1 }} />
                             <Typography variant="caption" component="div" sx={{ color: 'text.secondary', typography: 'mono', fontSize: 11 }}>{s} · {rule.building}</Typography>
                           </TableCell>
                           <TableCell sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>{rule.unit} ({rule.min}–{rule.max})</TableCell>
@@ -250,7 +258,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                             </TableCell>
                           ))}
                           <TableCell sx={{ pr: 0 }}>
-                            {isOverridden(s) && <WriteButton size="small" onClick={() => reset(s, rule.name)} data-testid={`admin-reset-${s}`}>Reset</WriteButton>}
+                            {canReset(s) && <WriteButton size="small" onClick={() => reset(s, rule.name)} data-testid={`admin-reset-${s}`}>Reset</WriteButton>}
                           </TableCell>
                         </TableRow>
                       ))}

@@ -54,6 +54,10 @@ export function usePolling(task, intervalMs, { key = '', enabled = true, maxBack
       }
     }
 
+    // A write anywhere in the app (see services/api.js) refreshes every panel at once.
+    const onDataChanged = () => { if (!running) schedule(0); };
+    window.addEventListener('aurora:data-changed', onDataChanged);
+
     const onVisibility = () => {
       if (document.hidden) clearTimeout(timer);
       else schedule(0);
@@ -64,6 +68,7 @@ export function usePolling(task, intervalMs, { key = '', enabled = true, maxBack
       stopped = true;
       clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('aurora:data-changed', onDataChanged);
     };
   }, [enabled, intervalMs, key, maxBackoffMs]);
 }

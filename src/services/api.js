@@ -24,6 +24,16 @@ export class ApiError extends Error {
   }
 }
 
+/** Events after a successful write: panels refresh now (usePolling), and a sandbox write
+ *  also makes the telemetry socket reconnect so it carries the visitor's sandbox overlay. */
+export const DATA_CHANGED = 'aurora:data-changed';
+export const SANDBOX_CHANGED = 'aurora:sandbox-changed';
+function announceChange(data) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(DATA_CHANGED));
+  if (data && typeof data === 'object' && data.sandbox) window.dispatchEvent(new CustomEvent(SANDBOX_CHANGED));
+}
+
 function joinUrl(base, path) {
   if (/^https?:\/\//i.test(path)) return path;
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
@@ -36,7 +46,9 @@ function joinUrl(base, path) {
 export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const init = { method, headers: { ...headers }, signal: controller.signal };
+  // credentials: the visitor-sandbox session is an httpOnly cookie (judge mode). Same-origin
+  // in production; in development Vite (5173) → backend (8080) needs it explicitly.
+  const init = { method, headers: { ...headers }, signal: controller.signal, credentials: 'include' };
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
@@ -77,6 +89,7 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
     if (res.status === 401) clearToken();
     throw new ApiError(`HTTP ${res.status} from ${method} ${url}`, { kind: 'http', status: res.status, url, body: data });
   }
+  if (method !== 'GET') announceChange(data);
   return data;
 }
 

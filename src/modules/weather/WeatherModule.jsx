@@ -438,7 +438,7 @@ export default function WeatherModule({
   const station = stationMeta(activeStation).name;
   const deltaTemp = temp != null && tempAgo != null ? temp - tempAgo : null;
   const ingestButton = (
-    <WriteButton variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} onClick={runIngest}
+    <WriteButton team variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} onClick={runIngest}
       disabled={ingesting} data-testid="ncpor-ingest">
       {ingesting ? 'Ingesting…' : 'Ingest NCPOR data'}
     </WriteButton>

@@ -35,6 +35,7 @@ const OverviewHUD = lazy(() => import('./components/OverviewHUD'));
 const AlertCentre = lazy(() => import('./overlays/AlertCentre'));
 const LinkDrawer = lazy(() => import('./overlays/LinkDrawer'));
 const DemoControlDrawer = lazy(() => import('./overlays/DemoControlDrawer'));
+const DemoBanner = lazy(() => import('./shell/DemoBanner'));
 const EventsDrawer = lazy(() => import('./overlays/EventsDrawer'));
 const CommandPalette = lazy(() => import('./shell/CommandPalette'));
 const ShortcutsDialog = lazy(() => import('./shell/ShortcutsDialog'));
@@ -106,7 +107,8 @@ export default function App() {
   const dependencyAlerts = stationData.dependencyAlerts || [];
   const eventTimeline = stationData.eventTimeline || [];
   const updatedAt = telemetryBadge === 'connecting' ? null : stationData.timestamp;
-  const demoActive = Boolean(stationData.provenance?.activeScenario);
+  const demoActive = Boolean(stationData.provenance?.activeScenario || stationData.publicDemo?.[activeStation]);
+  const anyDemoRunning = Object.keys(stationData.publicDemo || {}).length > 0;
 
   // ── Product tour ──────────────────────────────────────────
   // driver.js loads on first start. The run context reads live values through refs,
@@ -211,6 +213,18 @@ export default function App() {
     trackConnectionToggle(!isConnected);
     return toggleConnection();
   }, [toggleConnection, isConnected]);
+
+  // "Share this view": the URL already carries ?module=&station= (useUrlState).
+  const shareView = useCallback(async () => {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({ text: 'Link copied: it opens this page and station.' });
+    } catch (err) {
+      console.warn('[share] clipboard unavailable', err);
+      toast({ text: `Copy this link: ${url}` });
+    }
+  }, [toast]);
 
   const handleAlertClick = useCallback((buildingId) => {
     setSelectedBuilding(buildingId);
@@ -375,7 +389,17 @@ export default function App() {
         signInOpen={signInOpen}
         onSignInOpenChange={setSignInOpen}
         demoActive={demoActive}
+        onShare={shareView}
       />
+
+      <div className="demo-banner-slot">
+        {anyDemoRunning && (
+          <Suspense fallback={null}>
+            <DemoBanner publicDemo={stationData.publicDemo} receivedAt={stationData.receivedAt} activeStation={activeStation}
+              onOpenDemo={() => show('demo')} onStationChange={handleStationChange} />
+          </Suspense>
+        )}
+      </div>
 
       <div className="app-layout-body">
         <SideNav
@@ -430,6 +454,7 @@ export default function App() {
                     replay={stationData.replay}
                     onOverlayBand={setHudBand}
                     onOpenTwinInspector={() => setShowTwinInspector(true)}
+                    onOpenDemo={() => show('demo')}
                   />
                 </Suspense>
               </ErrorBoundary>
@@ -480,7 +505,8 @@ export default function App() {
             offlineQueueSize={stationData.offlineQueueSize || 0} telemetryBadge={telemetryBadge} provenance={stationData.provenance} />
         )}
         {mounted.events && <EventsDrawer open={open === 'events'} onClose={close} events={eventTimeline} />}
-        {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation} />}
+        {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation}
+          publicDemo={stationData.publicDemo} receivedAt={stationData.receivedAt} />}
         {mounted.palette && <CommandPalette open={open === 'palette'} onClose={close} commands={commands} />}
         {mounted.help && <ShortcutsDialog open={open === 'help'} onClose={close} onStartTour={() => startTour('main')} />}
       </Suspense>

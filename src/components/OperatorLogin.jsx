@@ -13,6 +13,7 @@ import { lazy, Suspense, useState } from 'react';
 import { Box, ButtonBase } from '@mui/material';
 import LockOpenOutlined from '@mui/icons-material/LockOpenOutlined';
 import LockOutlined from '@mui/icons-material/LockOutlined';
+import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
 import { useAdminToken } from '../hooks/useAdminToken';
 import Hint from '../ui/Hint';
 import { useToast } from '../ui/feedbackContext';
@@ -36,7 +37,8 @@ const buttonSx = (theme) => ({
 const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
 
 export default function OperatorLogin({ dialogOpen, onDialogOpenChange }) {
-  const { loggedIn, writeProtected, login, logout } = useAdminToken();
+  const { loggedIn, writeProtected, login, logout, judge } = useAdminToken();
+  const [chipHint, setChipHint] = useState(false);
   const toast = useToast();
   const [ownOpen, setOwnOpen] = useState(false);
   const open = (dialogOpen ?? ownOpen) && !loggedIn;
@@ -72,7 +74,7 @@ export default function OperatorLogin({ dialogOpen, onDialogOpenChange }) {
     return (
       <Hint title="Signed in as operator: controls that change state are enabled. Click to sign out.">
         <ButtonBase
-          onClick={() => { logout(); toast({ severity: 'info', text: 'Signed out. Aurora is read-only again.' }); }}
+          onClick={() => { logout(); toast({ severity: 'info', text: judge.sandbox ? 'Signed out. Your changes go to your private sandbox again.' : 'Signed out. Aurora is read-only again.' }); }}
           data-testid="operator-logout"
           aria-label="Operator: signed in. Sign out"
           sx={(theme) => ({
@@ -86,6 +88,40 @@ export default function OperatorLogin({ dialogOpen, onDialogOpenChange }) {
           <span>Operator</span>
         </ButtonBase>
       </Hint>
+    );
+  }
+
+  const dialog = open && (
+    <Suspense fallback={null}>
+      <OperatorLoginDialog
+        open={open}
+        value={value}
+        error={error}
+        busy={busy}
+        onChange={(v) => { setValue(v); setError(''); }}
+        onClose={close}
+        onSubmit={submit}
+      />
+    </Suspense>
+  );
+
+  // Judge mode: visitors can try everything; their writes go to a private sandbox. The
+  // team sign-in (shared state) lives in the ⋮ menu, so the bar shows what a visitor is in.
+  if (judge.sandbox) {
+    const ttl = Math.round((judge.sandboxTtlS || 3600) / 60);
+    return (
+      <>
+        <Hint pinned={chipHint} onHide={() => setChipHint(false)}
+          title={`You are in your own sandbox: try everything. Changes you make (thresholds, inventory, alert acknowledgements, commands) are private to you and reset after ${ttl === 60 ? '1 hour' : `${ttl} min`}. Demo scenarios are shared with other visitors and reset after 2 minutes.`}>
+          <ButtonBase onClick={() => setChipHint((v) => !v)} data-testid="sandbox-chip"
+            aria-label="Sandbox: your changes are private and reset after 1 hour"
+            sx={(theme) => ({ ...buttonSx(theme), color: 'primary.main', bgcolor: 'aurora.accentTint', '&:hover': { color: 'text.primary' } })}>
+            <ScienceOutlined />
+            <span>Sandbox</span>
+          </ButtonBase>
+        </Hint>
+        {dialog}
+      </>
     );
   }
 
@@ -113,19 +149,7 @@ export default function OperatorLogin({ dialogOpen, onDialogOpenChange }) {
         </ButtonBase>
       </Hint>
 
-      {open && (
-        <Suspense fallback={null}>
-          <OperatorLoginDialog
-            open={open}
-            value={value}
-            error={error}
-            busy={busy}
-            onChange={(v) => { setValue(v); setError(''); }}
-            onClose={close}
-            onSubmit={submit}
-          />
-        </Suspense>
-      )}
+      {dialog}
     </>
   );
 }

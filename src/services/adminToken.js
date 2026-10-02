@@ -12,6 +12,9 @@
 
 let token = null;
 let writeProtected = null;   // null = not yet known
+// Judge mode (GET /api/admin/session): anonymous visitors write to a private sandbox
+// (VISITOR_SANDBOX) and may run the predefined demo scenarios (PUBLIC_DEMO).
+let judge = { sandbox: false, publicDemo: false, sandboxTtlS: 3600, publicDemoDurationS: 120 };
 const listeners = new Set();
 
 function notify() {
@@ -55,7 +58,31 @@ export function getWriteProtection() {
  * the backend is the thing that actually enforces this.
  */
 export function canWrite() {
+  return writeProtected !== true || token !== null || judge.sandbox;
+}
+
+/** Writes that change the real shared state (simulator mode, ingest, link toggle): team only. */
+export function canWriteShared() {
   return writeProtected !== true || token !== null;
+}
+
+/** True when this visitor's writes go to their private sandbox rather than the shared state. */
+export function inSandbox() {
+  return judge.sandbox && token === null;
+}
+
+export function getJudgeMode() {
+  return judge;
+}
+
+export function setJudgeMode(next) {
+  const merged = {
+    sandbox: Boolean(next?.sandbox), publicDemo: Boolean(next?.publicDemo),
+    sandboxTtlS: next?.sandboxTtlS ?? judge.sandboxTtlS, publicDemoDurationS: next?.publicDemoDurationS ?? judge.publicDemoDurationS,
+  };
+  if (JSON.stringify(merged) === JSON.stringify(judge)) return;
+  judge = merged;
+  notify();
 }
 
 export function setToken(value) {

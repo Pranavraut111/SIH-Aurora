@@ -70,7 +70,7 @@ export default function LinkDrawer({ open, onClose, isConnected, onToggleConnect
       </Box>
       <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 2 }}>{src.help}</Typography>
       <Box sx={{ mt: 5 }}>
-        <WriteButton variant={isConnected ? 'outlined' : 'contained'} color={isConnected ? 'error' : 'primary'}
+        <WriteButton team variant={isConnected ? 'outlined' : 'contained'} color={isConnected ? 'error' : 'primary'}
           startIcon={isConnected ? <LinkOffOutlined /> : <LinkOutlined />} onClick={toggle} data-testid="link-toggle">
           {isConnected ? 'Simulate link loss' : 'Restore link'}
         </WriteButton>

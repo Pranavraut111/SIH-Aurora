@@ -9,7 +9,8 @@
 
 .aurora-app {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* top bar · demo-scenario banner slot (empty unless a scenario runs) · body */
+  grid-template-rows: auto auto minmax(0, 1fr);
   /* An explicit column: an implicit `auto` one grows to the widest child's min-content
      (e.g. a scrollable tab bar) and pushes the page past a phone's width. */
   grid-template-columns: minmax(0, 1fr);

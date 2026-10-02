@@ -129,6 +129,9 @@ export function useStationData(activeStation = 'maitri') {
             timestamp: state.timestamp || Date.now(),
             energy: state.energy ?? null,
             replay: state.replay ?? null,      // ERA5 replay clock of this tick (null: wall clock)
+            // Demo scenarios running on any station (judge mode), with the time they were received.
+            publicDemo: state.publicDemo ?? null,
+            receivedAt: Date.now(),
             connected: true,
             bandwidth: state.bandwidth ?? null,
             signalQuality: state.signalQuality ?? null,
@@ -320,6 +323,22 @@ export function useStationData(activeStation = 'maitri') {
       stopBrowserDemo();
     };
   }, []);
+
+  // A visitor's first sandbox write creates their session cookie; the socket only reads it
+  // when it opens, so reconnect to receive their sandbox overlay (their acknowledgements).
+  useEffect(() => {
+    const onSandbox = () => {
+      const old = wsRef.current;
+      if (!old || isManuallyDisconnectedRef.current) return;
+      old._switching = true;
+      old.close();
+      wsRef.current = null;
+      clearTimeout(reconnectTimer.current);
+      connectWebSocket();
+    };
+    window.addEventListener('aurora:sandbox-changed', onSandbox);
+    return () => window.removeEventListener('aurora:sandbox-changed', onSandbox);
+  }, [connectWebSocket]);
 
   // When station changes: reset history and re-subscribe the WS to the new station.
   // Compare against the socket's own station (not a "first run" flag) so React
