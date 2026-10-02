@@ -70,7 +70,7 @@ alone). Chips use the colour as text on a 16 % (dark) / 10 % (light) tint.
 |---|---|---|---|
 | Normal | `#5DBB86` | `#17703F` | 6.2 / 5.6 · 4.9 / 5.3 |
 | Warning | `#E0A84A` | `#8A5800` | 6.9 / 6.1 · 4.9 / 5.2 |
-| Critical | `#F0716A` | `#B3261E` | 5.1 / 4.8 · 5.3 / 5.5 |
+| Critical | `#F47E77` (was `#F0716A` until 1B-3: 4.29:1 on its tint over surface.raised) | `#B3261E` | 4.6 on tint over raised · 5.3 / 5.5 |
 | Offline | `#9AA3AE` | `#5C6672` | 5.7 / 5.2 · 4.7 / 5.1 |
 | Simulated (not real) | `#A99BE8` | `#5B47B3` | 6.0 / 5.4 · 5.7 / 6.1 |
 
@@ -576,3 +576,48 @@ neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
   Canada, Wind Chill Index* (caption + tooltip with the table name). The pytest network guard
   now also blocks `requests.request` / `Session.request`, and Playwright uses its own ports
   (18080 / 18001 / 15173), so a stack left running cannot change test results.
+
+## 14. Rollout 1B — checkpoint 3 (System, overlays, cleanup) — screenshots in `docs/ui-redesign/1b-3/`
+
+- **Administration** (`modules/admin`): Data sources (NCPOR ingest per station; ERA5; NPDC
+  marked "not integrated"), Alert thresholds (editable table, overrides marked, reset per
+  sensor, change count, name for the audit trail), Access, Station configuration.
+- **Overlays** (`src/overlays`, one `SideSheet`): alert centre with **Active /
+  Acknowledged / History**, telemetry link, event log, Demo Control; the operator sign-in
+  dialog was already on the design system. All follow the active colour scheme.
+- **2D fallback**: the active station's buildings, laid out by dependency depth, compact,
+  padded clear of the HUD band; `data-status` + visible status text.
+- **Command palette** (⌘K / Ctrl+K): pages, stations, panels, theme, sign-in, help; word-prefix
+  matching; combobox semantics. **Shortcuts**: `?` help, `g` + letter (keys live in
+  `navigation.js`), Esc closes (MUI). **URL state**: `?module=&station=`, refresh-safe and
+  shareable; back/forward restore the page.
+- **Feedback**: `FeedbackProvider` (toasts + `useConfirm`, UI half lazy-loaded). Every
+  state-changing action confirms first: NCPOR ingest (Weather, Administration), threshold save
+  and reset, ledger edit, remote dispatch, alert acknowledge (alert centre and Remote), link
+  toggle, demo inject and reset, replay / test-mode switch. Results are toasts; errors stay until
+  dismissed.
+- **Tour targets** (§6): `station-switcher`, `status-strip`, `alert-centre`, `operator-login`,
+  `overview`, `nav-monitor|operate|analyse|system`, `nav-ai`, `nav-twinInspector`,
+  `demo-control` (phones: `demo-control-menu`), plus `help` and `command-palette`.
+- **Removed**: `LegacySurface`, every legacy panel/overlay and its CSS, `index.css`,
+  framer-motion, react-icons, Space Grotesk / Inter / JetBrains Mono.
+
+  | | Before (1B-2) | After (1B-3) |
+  |---|---|---|
+  | Startup JS (entry + preloads) | 469.8 kB raw / 150.0 kB gzip | 480.5 kB / 153.8 kB |
+  | All JS | 2,141 kB / 649 kB gzip | 2,045 kB / 626 kB gzip |
+  | CSS | 83.1 kB / 31.3 kB gzip | 8.7 kB / 1.5 kB gzip |
+  | Font files | 143 files, 1.90 MB | 36 files, 446 kB |
+
+  Startup grew by the palette/shortcut/URL/toast plumbing (everything heavy is lazy).
+- **Claims corrected**: Administration promised "role-based access" and showed demo users with
+  access badges (there is one operator token; the users are HARDCODED-DEMO, now "Example roles,
+  not enforced"); the event timeline claimed a "detection → analysis → action → outcome" log and
+  mapped alert/decision/automation/link events the simulator never logs; Demo Control's generator
+  scenario "cascades to heating, water, comms" and the blizzard's "heating demand spikes" are not
+  simulated (injections override only their own sensors; descriptions now say so and list the
+  targets, which `/scenarios` now returns); the link drawer said link loss was simulated "in the
+  browser" (the backend flag is toggled too); the 2D fallback always listed the first station's
+  buildings; `index.html` promised "AI-powered forecasting and smart automation".
+- **Token change**: dark critical `#F0716A` → `#F47E77` (4.29:1 → 4.6:1 on its tint over
+  surface.raised, found by axe on the alert centre).

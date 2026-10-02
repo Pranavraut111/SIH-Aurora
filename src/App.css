@@ -77,17 +77,9 @@
   padding: 24px 32px 64px;
 }
 
-/* Legacy panels keep their own spacing until they are rebuilt (rollout 1B). */
-.module-content-scroll.legacy {
-  padding: 24px;
-}
-
 @media (max-width: 899.95px) {
   .module-page {
     padding: 16px 16px 48px;
-  }
-  .module-content-scroll.legacy {
-    padding: 12px;
   }
 }
 
@@ -96,7 +88,7 @@
   @page { margin: 14mm; }
   html, body, #root, .aurora-app { height: auto !important; overflow: visible !important; background: #fff !important; }
   .aurora-app { display: block !important; }
-  .topbar, .sidebar-nav, .no-print, [data-legacy-surface] { display: none !important; }
+  .topbar, .sidebar-nav, .no-print { display: none !important; }
   .app-layout-body, .main-stage, .module-content-scroll { display: block !important; overflow: visible !important; height: auto !important; }
   .module-page { max-width: none !important; padding: 0 !important; }
   .report-document { border: 0 !important; box-shadow: none !important; padding: 0 !important; max-width: none !important; }

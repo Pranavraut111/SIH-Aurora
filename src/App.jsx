@@ -2,17 +2,21 @@
    Aurora — Antarctic station digital twin.
    App shell (docs/ui-redesign.md §4): ONE top bar (station switcher, status
    chips, Sign in), sectioned sidebar with the station mini-card, and the main
-   stage — the 3D overview or one module page.
+   stage — the 3D overview or one module page. The page and station live in
+   the URL (?module=&station=); ⌘K opens the command palette, "?" the
+   shortcuts, "g" + a letter navigates.
    ═══════════════════════════════════════════════════════════════ */
-import { useState, useCallback, lazy, Suspense } from 'react';
+import { useState, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useMediaQuery } from '@mui/material';
-import { useTheme } from '@mui/material/styles';
+import { useColorScheme, useTheme } from '@mui/material/styles';
 import ErrorBoundary from './components/ErrorBoundary';
 import PanelFallback from './components/PanelFallback';
 import TopBar from './shell/TopBar';
 import SideNav from './shell/SideNav';
-import { MODULES } from './shell/navigation';
-import LegacySurface from './ui/LegacySurface';
+import { MODULES, NAV_ACTIONS } from './shell/navigation';
+import { initialUrlState, useUrlState } from './shell/urlState';
+import { useShortcuts } from './shell/useShortcuts';
+import { STATION_IDS, stationMeta } from './data/stationConfig';
 import { useStationData } from './hooks/useStationData';
 import { useDatabase } from './hooks/useDatabase';
 import { trackModuleView, trackBuildingView, trackConnectionToggle, trackStationSwitch } from './services/analyticsService';
@@ -20,22 +24,24 @@ import './App.css';
 
 // ── Code splitting ─────────────────────────────────────────
 // Everything below is fetched only when it is first shown, which keeps three.js
-// (the 3D twin), recharts (the charts) and the legacy overlays (with framer-motion
-// and react-icons) out of the initial bundle — the main chunk stays under 500 kB.
+// (the 3D twin), recharts (the charts), MUI's Modal-based drawers and dialogs and
+// every page out of the initial bundle — startup JS stays under 500 kB.
 const OverviewHUD = lazy(() => import('./components/OverviewHUD'));
-const AlertFeed = lazy(() => import('./components/AlertFeed'));
-const ConnectionPanel = lazy(() => import('./components/ConnectionPanel'));
-const DemoControl = lazy(() => import('./components/DemoControl'));
+const AlertCentre = lazy(() => import('./overlays/AlertCentre'));
+const LinkDrawer = lazy(() => import('./overlays/LinkDrawer'));
+const DemoControlDrawer = lazy(() => import('./overlays/DemoControlDrawer'));
+const EventsDrawer = lazy(() => import('./overlays/EventsDrawer'));
+const CommandPalette = lazy(() => import('./shell/CommandPalette'));
+const ShortcutsDialog = lazy(() => import('./shell/ShortcutsDialog'));
 const StationScene = lazy(() => import('./components/StationScene'));
 const BuildingDrawer = lazy(() => import('./modules/infrastructure/BuildingDrawer'));
-const EventTimeline = lazy(() => import('./components/EventTimeline'));
 const TwinInspectorDialog = lazy(() => import('./modules/twin/TwinInspectorDialog'));
 const AiModule = lazy(() => import('./modules/ai/AiModule'));
 const WeatherModule = lazy(() => import('./modules/weather/WeatherModule'));
 const WhatIfModule = lazy(() => import('./modules/whatif/WhatIfModule'));
 const LogisticsModule = lazy(() => import('./modules/logistics/LogisticsModule'));
 const RemoteModule = lazy(() => import('./modules/remote/RemoteModule'));
-const AdminPanel = lazy(() => import('./components/AdminPanel'));
+const AdminModule = lazy(() => import('./modules/admin/AdminModule'));
 const ReportsModule = lazy(() => import('./modules/reports/ReportsModule'));
 const InfrastructureModule = lazy(() => import('./modules/infrastructure/InfrastructureModule'));
 const EnergyModule = lazy(() => import('./modules/energy/EnergyModule'));
@@ -49,24 +55,24 @@ export default function App() {
   const [hudBand, setHudBand] = useState(0);   // px of HUD cards along the scene's bottom
 
   // ── State ──────────────────────────────────────────────────
-  const [activeModule, setActiveModule] = useState('overview');
-  const [activeStation, setActiveStation] = useState('maitri');
+  // Page and station start from the URL (refresh-safe, shareable) and stay in it.
+  const [activeModule, setActiveModule] = useState(() => initialUrlState().module);
+  const [activeStation, setActiveStation] = useState(() => initialUrlState().station);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedBuilding, setSelectedBuilding] = useState(null);
   const [, setHoveredBuilding] = useState(null);   // hover is tracked by the scene; no consumer yet
-  const [showTimeline, setShowTimeline] = useState(false);
   const [showTwinInspector, setShowTwinInspector] = useState(false);
-  const [showConnectionDrawer, setShowConnectionDrawer] = useState(false);
-  const [showAlertsDrawer, setShowAlertsDrawer] = useState(false);
-  // Drawers are mounted on first open (their chunks load then) and stay mounted so
-  // their own close animation still runs.
-  const [showDemo, setShowDemo] = useState(false);
-  const [mounted, setMounted] = useState({ alerts: false, link: false, demo: false });
-  const openAlerts = useCallback(() => { setMounted((m) => ({ ...m, alerts: true })); setShowAlertsDrawer(true); }, []);
-  const openLink = useCallback(() => { setMounted((m) => ({ ...m, link: true })); setShowConnectionDrawer(true); }, []);
-  const toggleDemo = useCallback(() => { setMounted((m) => ({ ...m, demo: true })); setShowDemo((v) => !v); }, []);
-  const closeDemo = useCallback(() => setShowDemo(false), []);
+  // Drawers and dialogs: mounted on first open (their chunks load then) and kept mounted
+  // so their close transition still runs. `open` is the one that is showing.
+  const [open, setOpen] = useState(null);       // 'alerts' | 'link' | 'events' | 'demo' | 'palette' | 'help'
+  const [mounted, setMounted] = useState({});
+  const show = useCallback((id) => { setMounted((m) => (m[id] ? m : { ...m, [id]: true })); setOpen(id); }, []);
+  const close = useCallback(() => setOpen(null), []);
+  const openAlerts = useCallback(() => show('alerts'), [show]);
+  const openLink = useCallback(() => show('link'), [show]);
+  const { mode, systemMode, setMode } = useColorScheme();
+  const scheme = (mode === 'system' ? systemMode : mode) || 'dark';
 
   // ── Live data (station-aware) ─────────────────────────────
   const { stationData, dataSource, toggleConnection, acknowledgeAlert } = useStationData(activeStation);
@@ -118,6 +124,13 @@ export default function App() {
     trackModuleView(moduleId, activeStation);
   }, [activeStation]);
 
+  // Back / forward restore the page and station from the URL.
+  useUrlState(activeModule, activeStation, (next) => {
+    setActiveModule(next.module);
+    setActiveStation(next.station);
+    setSelectedBuilding(null);
+  });
+
   const handleNavAction = useCallback((action) => {
     if (action === 'twinInspector') setShowTwinInspector(true);
   }, []);
@@ -128,13 +141,42 @@ export default function App() {
   }, [activeStation]);
 
   const handleToggleConnection = useCallback(() => {
-    toggleConnection();
     trackConnectionToggle(!isConnected);
+    return toggleConnection();
   }, [toggleConnection, isConnected]);
 
   const handleAlertClick = useCallback((buildingId) => {
     setSelectedBuilding(buildingId);
   }, []);
+
+  // ── Command palette + shortcuts ───────────────────────────
+  const commands = useMemo(() => [
+    ...Object.entries(MODULES).map(([id, m]) => ({
+      id: `go-${id}`, group: 'Pages', label: `Go to ${m.label}`, keys: ['g', m.key], keywords: m.description, run: () => handleModuleChange(id),
+    })),
+    { id: 'twin', group: 'Pages', label: 'Open the Twin inspector', keys: ['g', NAV_ACTIONS.twinInspector.key], keywords: 'causal chain assumptions replay', run: () => setShowTwinInspector(true) },
+    ...STATION_IDS.map((sid) => ({
+      id: `station-${sid}`, group: 'Station', label: `Switch to ${stationMeta(sid).name}`, keywords: stationMeta(sid).region, run: () => handleStationChange(sid),
+    })),
+    { id: 'alerts', group: 'Panels', label: 'Open the alert centre', keywords: 'alarms acknowledge history', run: openAlerts },
+    { id: 'link', group: 'Panels', label: 'Telemetry link details', keywords: 'connection source', run: openLink },
+    { id: 'events', group: 'Panels', label: 'Open the event log', keywords: 'timeline', run: () => show('events') },
+    { id: 'demo', group: 'Panels', label: 'Open demo control', keywords: 'inject scenario fault', run: () => show('demo') },
+    { id: 'theme', group: 'Settings', label: `Switch to ${scheme === 'dark' ? 'light' : 'dark'} theme`, keywords: 'colour color mode', run: () => setMode(scheme === 'dark' ? 'light' : 'dark') },
+    { id: 'signin', group: 'Settings', label: 'Sign in or out as operator', keywords: 'login token write', run: () => document.querySelector('[data-testid="operator-login"], [data-testid="operator-logout"]')?.click() },
+    { id: 'help', group: 'Settings', label: 'Keyboard shortcuts', keys: ['?'], run: () => show('help') },
+  ], [handleModuleChange, handleStationChange, openAlerts, openLink, show, scheme, setMode]);
+
+  useShortcuts({
+    onPalette: () => show('palette'),
+    onHelp: () => show('help'),
+    onGo: (key) => {
+      if (key === NAV_ACTIONS.twinInspector.key) { setShowTwinInspector(true); return true; }
+      const id = Object.keys(MODULES).find((m) => MODULES[m].key === key);
+      if (id) handleModuleChange(id);
+      return Boolean(id);
+    },
+  });
 
   // ── Render module panel ───────────────────────────────────
   const panelName = `${MODULES[activeModule]?.title ?? 'Module'} panel`;
@@ -206,7 +248,7 @@ export default function App() {
           />
         );
       case 'admin':
-        return <AdminPanel activeStation={activeStation} />;
+        return <AdminModule activeStation={activeStation} />;
       case 'ai':
         return <AiModule activeStation={activeStation} updatedAt={updatedAt} />;
       default:
@@ -219,25 +261,19 @@ export default function App() {
   // exiting ones never unmounted and every visited module stayed on screen).
   // Each page has its own ErrorBoundary so one crash never blanks the app.
   function renderModulePage() {
-    const migrated = MODULES[activeModule]?.migrated;
-    const page = (
-      <ErrorBoundary name={panelName} resetKey={activeStation}>
-        <Suspense fallback={<PanelFallback name={panelName} />}>
-          {renderModulePanelInner()}
-        </Suspense>
-      </ErrorBoundary>
-    );
-    return migrated ? (
-      // Focusable so the page scrolls from the keyboard even when every control on it is
-      // disabled (signed out): axe scrollable-region-focusable.
+    // Focusable so the page scrolls from the keyboard even when every control on it is
+    // disabled (signed out): axe scrollable-region-focusable.
+    return (
       <div key={activeModule} className="module-content-scroll" data-testid="module-panel" data-module={activeModule}
         tabIndex={0} role="region" aria-label={MODULES[activeModule]?.title}>
-        <div className="module-page">{page}</div>
+        <div className="module-page">
+          <ErrorBoundary name={panelName} resetKey={activeStation}>
+            <Suspense fallback={<PanelFallback name={panelName} />}>
+              {renderModulePanelInner()}
+            </Suspense>
+          </ErrorBoundary>
+        </div>
       </div>
-    ) : (
-      <LegacySurface key={activeModule} className="module-content-scroll legacy" data-testid="module-panel" data-module={activeModule}>
-        {page}
-      </LegacySurface>
     );
   }
 
@@ -255,8 +291,10 @@ export default function App() {
         updatedAt={updatedAt}
         onOpenLink={openLink}
         onOpenAlerts={openAlerts}
-        onToggleTimeline={() => setShowTimeline(prev => !prev)}
-        onOpenDemo={toggleDemo}
+        onToggleTimeline={() => show('events')}
+        onOpenDemo={() => show('demo')}
+        onOpenPalette={() => show('palette')}
+        onOpenHelp={() => show('help')}
         demoActive={demoActive}
       />
 
@@ -277,12 +315,14 @@ export default function App() {
 
         <main className="main-stage" id="main">
           {activeModule === 'overview' ? (
-            <LegacySurface className="overview-stage" data-tour="overview">
+            // The 3D overview and the HUD over it stay dark in both schemes (decision, §9).
+            <div className="overview-stage" data-tour="overview" data-color-scheme="dark">
               {/* 3D Twin Scene — unchanged until the Phase 2 rebuild */}
               <div className="scene-container">
                 <ErrorBoundary name="3D station view">
                   <Suspense fallback={<PanelFallback name="3D station view" />}>
                     <StationScene
+                      activeStation={activeStation}
                       avoidBottom={hudOverlays ? hudBand : 0}
                       alertStates={stationData.alerts}
                       selectedBuilding={selectedBuilding}
@@ -310,7 +350,7 @@ export default function App() {
                   />
                 </Suspense>
               </ErrorBoundary>
-            </LegacySurface>
+            </div>
           ) : renderModulePage()}
         </main>
       </div>
@@ -346,41 +386,21 @@ export default function App() {
         </ErrorBoundary>
       )}
 
-      {/* ── Overlays (legacy styling until rollout 1B) ── */}
-      <LegacySurface sx={{ display: 'contents' }}>
-        <Suspense fallback={null}>
-          {mounted.link && (
-            <ConnectionPanel
-              isOpen={showConnectionDrawer}
-              onClose={() => setShowConnectionDrawer(false)}
-              isConnected={isConnected}
-              onToggleConnection={handleToggleConnection}
-              offlineQueueSize={stationData.offlineQueueSize || 0}
-              telemetryBadge={telemetryBadge}
-              provenance={stationData.provenance}
-            />
-          )}
-
-          {mounted.alerts && (
-            <AlertFeed
-              isOpen={showAlertsDrawer}
-              onClose={() => setShowAlertsDrawer(false)}
-              alerts={activeAlerts}
-              onAlertClick={handleAlertClick}
-              onAcknowledge={acknowledgeAlert}
-              activeStation={activeStation}
-              canAcknowledge={dataSource === 'websocket'}
-            />
-          )}
-
-
-          {showTimeline && (
-            <EventTimeline events={eventTimeline} onClose={() => setShowTimeline(false)} />
-          )}
-
-          {mounted.demo && <DemoControl activeStation={activeStation} isOpen={showDemo} onClose={closeDemo} />}
-        </Suspense>
-      </LegacySurface>
+      {/* ── Drawers and dialogs (mounted on first open) ── */}
+      <Suspense fallback={null}>
+        {mounted.alerts && (
+          <AlertCentre open={open === 'alerts'} onClose={close} alerts={activeAlerts} onAlertClick={handleAlertClick}
+            onAcknowledge={acknowledgeAlert} activeStation={activeStation} canAcknowledge={dataSource === 'websocket'} />
+        )}
+        {mounted.link && (
+          <LinkDrawer open={open === 'link'} onClose={close} isConnected={isConnected} onToggleConnection={handleToggleConnection}
+            offlineQueueSize={stationData.offlineQueueSize || 0} telemetryBadge={telemetryBadge} provenance={stationData.provenance} />
+        )}
+        {mounted.events && <EventsDrawer open={open === 'events'} onClose={close} events={eventTimeline} />}
+        {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation} />}
+        {mounted.palette && <CommandPalette open={open === 'palette'} onClose={close} commands={commands} />}
+        {mounted.help && <ShortcutsDialog open={open === 'help'} onClose={close} />}
+      </Suspense>
     </div>
   );
 }

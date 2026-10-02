@@ -38,7 +38,7 @@ export const status = {
   dark: {
     normal: { main: '#5DBB86', tint: 'rgba(93, 187, 134, 0.16)' },
     warning: { main: '#E0A84A', tint: 'rgba(224, 168, 74, 0.16)' },
-    critical: { main: '#F0716A', tint: 'rgba(240, 113, 106, 0.16)' },
+    critical: { main: '#F47E77', tint: 'rgba(244, 126, 119, 0.16)' },   // 4.6:1 on its tint over surface.raised
     offline: { main: '#9AA3AE', tint: 'rgba(154, 163, 174, 0.16)' },
     simulated: { main: '#A99BE8', tint: 'rgba(169, 155, 232, 0.16)' },
   },

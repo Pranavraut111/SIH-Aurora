@@ -10,7 +10,7 @@
    ═══════════════════════════════════════════════════════════════ */
 import { useState } from 'react';
 import {
-  Alert, Box, Chip, Dialog, DialogContent, DialogTitle, IconButton, LinearProgress, Stack, Tab, Table, TableBody,
+  Box, Chip, Dialog, DialogContent, DialogTitle, IconButton, LinearProgress, Stack, Tab, Table, TableBody,
   TableCell, TableHead, TableRow, Tabs, TextField, ToggleButton, ToggleButtonGroup, Typography, useMediaQuery,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -23,6 +23,7 @@ import { describeFailure } from '../../lib/failure';
 import ProvenanceChip from '../../ui/Provenance';
 import { ErrorState, LoadingBlock } from '../../ui/States';
 import WriteButton from '../../ui/WriteButton';
+import { useConfirm, useToast } from '../../ui/feedbackContext';
 
 const SOURCE_KIND = { reanalysis: 'REANALYSIS', real: 'REAL', synthetic: 'SIMULATED', 'hardcoded-demo': 'HARDCODED-DEMO' };
 const BASIS = {
@@ -91,7 +92,9 @@ export default function TwinInspectorDialog({ activeStation, isOpen, onClose, re
   const [state, setState] = useState({ station: null, data: null, error: null });
   const [replayDate, setReplayDate] = useState(lastWeek);
   const [speed, setSpeed] = useState(120);
-  const [mode, setMode] = useState({ busy: false, msg: null, ok: null });
+  const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
+  const toast = useToast();
 
   usePolling(async (isActive) => {
     try {
@@ -113,15 +116,27 @@ export default function TwinInspectorDialog({ activeStation, isOpen, onClose, re
   const r = d?.dataSource?.replay;
 
   async function switchMode(body, label) {
-    setMode({ busy: true, msg: `${label}…`, ok: null });
+    const ok = await confirm(body.mode === 'reanalysis' ? {
+      title: `Replay ERA5 from ${body.date} at ${body.speed}×?`,
+      body: 'Both stations restart on the new 7-day window (downloaded if not cached). History, deltas and averages start again.',
+      confirmLabel: 'Start replay', danger: true,
+    } : {
+      title: 'Switch to developer test mode?',
+      body: 'Both stations restart on random-walk weather and equipment; every value is then labelled Simulated.',
+      confirmLabel: 'Switch to test mode', danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
     try {
       await apiPost('/sim/mode', body, { timeoutMs: 35000 });
-      setMode({ busy: false, msg: `${label}: done. Both stations restarted.`, ok: true });
+      toast({ text: `${label}: done. Both stations restarted.` });
       if (body.mode === 'reanalysis') setTab('chain');
     } catch (err) {
       console.error('[TwinInspector] mode switch failed', err);
       const detail = typeof err?.body?.detail === 'string' ? ` (${err.body.detail})` : '';
-      setMode({ busy: false, msg: err?.status === 503 ? `Simulator offline: mode not changed${detail}` : `Mode not changed: ${describeFailure(err)}`, ok: false });
+      toast({ severity: 'error', text: err?.status === 503 ? `Simulator offline: mode not changed${detail}` : `Mode not changed: ${describeFailure(err)}` });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -143,7 +158,6 @@ export default function TwinInspectorDialog({ activeStation, isOpen, onClose, re
         </Tabs>
       </Box>
       <DialogContent sx={{ pt: 4 }} tabIndex={0}>
-        {mode.msg && <Alert severity={mode.ok === false ? 'error' : mode.ok ? 'success' : 'info'} sx={{ mb: 3 }} role="status">{mode.msg}</Alert>}
         {!ready && <LoadingBlock lines={8} />}
         {ready && state.error && tab !== 'replay' && <ErrorState>The twin inspector is unavailable because {describeFailure(state.error)}. Retrying.</ErrorState>}
 
@@ -249,14 +263,14 @@ export default function TwinInspectorDialog({ activeStation, isOpen, onClose, re
               </Stack>
               <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 1 }}>{speed}× = {formatNumber(speed / 60, 1)} simulated hours per real minute</Typography>
               <Box sx={{ mt: 3 }}>
-                <WriteButton variant="contained" disabled={mode.busy} onClick={() => switchMode({ mode: 'reanalysis', date: replayDate, speed }, 'Switching to ERA5 replay')}>
+                <WriteButton variant="contained" disabled={busy} onClick={() => switchMode({ mode: 'reanalysis', date: replayDate, speed }, 'Switching to ERA5 replay')}>
                   Start replay
                 </WriteButton>
               </Box>
             </Step>
             <Step title="Developer test mode">
               <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>Random-walk weather and equipment instead of the ERA5 replay. Every value is then labelled Simulated.</Typography>
-              <WriteButton variant="outlined" disabled={mode.busy} onClick={() => switchMode({ mode: 'simulation' }, 'Switching to test mode')}>Switch to test mode</WriteButton>
+              <WriteButton variant="outlined" disabled={busy} onClick={() => switchMode({ mode: 'simulation' }, 'Switching to test mode')}>Switch to test mode</WriteButton>
             </Step>
           </Stack>
         )}

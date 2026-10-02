@@ -197,7 +197,9 @@ STATION_PROFILES = {
 SCENARIOS = {
     "generator_failure": {
         "name": "Generator Failure",
-        "description": "Generator power drops, RPM falls. Cascades to heating, water, comms.",
+        "description": ("Overrides generator power, speed and coolant toward fault values. Downstream "
+                        "buildings are flagged as cascade risks by the alert rules; their readings are "
+                        "not changed."),
         "duration": 30,
         "injections": {
             "generator.gen_power": 25.0,
@@ -207,7 +209,8 @@ SCENARIOS = {
     },
     "heating_failure": {
         "name": "Heating System Failure",
-        "description": "Heating Zone A output drops. Living quarters temperature falls.",
+        "description": ("Overrides Heating Zone A supply temperature and flow, and the living-quarters "
+                        "temperature, toward fault values."),
         "duration": 25,
         "injections": {
             "heating.heat_a_temp": 32.0,
@@ -217,7 +220,9 @@ SCENARIOS = {
     },
     "blizzard": {
         "name": "Blizzard Event",
-        "description": "Extreme wind and cold. Comms degrade, heating demand spikes.",
+        "description": ("Overrides outside wind and temperature and the comms signal toward storm values. "
+                        "The physics model does not see injected weather, so heating demand is not "
+                        "recomputed."),
         "duration": 40,
         "injections": {
             "lab.env_wind": 145.0,
@@ -227,7 +232,7 @@ SCENARIOS = {
     },
     "water_crisis": {
         "name": "Water System Alert",
-        "description": "Water tank level critical. pH imbalanced.",
+        "description": "Overrides the water-tank level and pH toward fault values.",
         "duration": 20,
         "injections": {
             "waterTank.water_level": 8.0,
@@ -236,7 +241,7 @@ SCENARIOS = {
     },
     "co2_spike": {
         "name": "CO2 Spike",
-        "description": "Ventilation failure — CO2 rising in living quarters.",
+        "description": "Overrides living-quarters CO2 and humidity toward a ventilation-failure level.",
         "duration": 20,
         "injections": {
             "livingQuarters.lq_co2": 1600.0,
@@ -766,6 +771,8 @@ def list_scenarios():
             "name": s["name"], "description": s["description"],
             "duration": s["duration"],
             "affectedSensors": list(s["injections"].keys()),
+            # Target of each override; a value moves 30 % of the way there per tick.
+            "targets": dict(s["injections"]),
         }
     station_id = flask_request.args.get("station", "maitri")
     sim = _get_station(station_id)

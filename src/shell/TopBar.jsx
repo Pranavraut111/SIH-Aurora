@@ -14,6 +14,8 @@ import { AppBar, Box, ButtonBase, IconButton, Toolbar, Typography } from '@mui/m
 import { useColorScheme } from '@mui/material/styles';
 import DarkModeOutlined from '@mui/icons-material/DarkModeOutlined';
 import HistoryOutlined from '@mui/icons-material/HistoryOutlined';
+import KeyboardOutlined from '@mui/icons-material/KeyboardOutlined';
+import SearchOutlined from '@mui/icons-material/SearchOutlined';
 import LightModeOutlined from '@mui/icons-material/LightModeOutlined';
 import MenuOutlined from '@mui/icons-material/MenuOutlined';
 import MoreVertOutlined from '@mui/icons-material/MoreVertOutlined';
@@ -75,7 +77,7 @@ const showBelow = (bp) => ({ display: { xs: 'inline-flex', [bp]: 'none' } });
 export default function TopBar({
   activeStation, onStationChange, isDesktop, onOpenNav,
   telemetryBadge, isConnected, alertCount, criticalCount, updatedAt,
-  onOpenLink, onOpenAlerts, onToggleTimeline, onOpenDemo, demoActive,
+  onOpenLink, onOpenAlerts, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp, demoActive,
 }) {
   const now = useNow(1000);
   const scheme = useSchemeToggle();
@@ -157,8 +159,21 @@ export default function TopBar({
           </Typography>
         )}
 
+        <Hint title="Search and commands (⌘K / Ctrl+K)" sx={hideBelow('sm')}>
+          <BarChip onClick={onOpenPalette} aria-label="Open the command palette" data-testid="palette-open" data-tour="command-palette"
+            sx={{ bgcolor: 'transparent', border: 1, borderColor: 'divider' }}>
+            <SearchOutlined />
+            <Box component="span" sx={{ display: { xs: 'none', lg: 'inline' } }}>Search</Box>
+            <Box component="kbd" sx={{ display: { xs: 'none', lg: 'inline' }, fontFamily: 'inherit', fontSize: 12, color: 'text.secondary', ml: 1 }}>⌘K</Box>
+          </BarChip>
+        </Hint>
+        <Hint title="Keyboard shortcuts (?)" sx={hideBelow('md')}>
+          <IconButton onClick={onOpenHelp} aria-label="Keyboard shortcuts" data-testid="help-open" data-tour="help">
+            <KeyboardOutlined fontSize="small" />
+          </IconButton>
+        </Hint>
         <Hint title="Demo control: inject a synthetic fault" sx={hideBelow('sm')}>
-          <IconButton onClick={onOpenDemo} aria-label={`Demo control${demoActive ? ' (scenario active)' : ''}`} data-testid="demo-control-open"
+          <IconButton onClick={onOpenDemo} data-tour="demo-control" aria-label={`Demo control${demoActive ? ' (scenario active)' : ''}`} data-testid="demo-control-open"
             sx={{ position: 'relative' }}>
             <ScienceOutlined fontSize="small" />
             {demoActive && <StatusDot status="simulated" size={7} sx={{ position: 'absolute', top: 6, right: 6 }} />}
@@ -197,6 +212,8 @@ export default function TopBar({
               onOpenLink={onOpenLink}
               onToggleTimeline={onToggleTimeline}
               onOpenDemo={onOpenDemo}
+              onOpenPalette={onOpenPalette}
+              onOpenHelp={onOpenHelp}
             />
           </Suspense>
         )}

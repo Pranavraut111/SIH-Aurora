@@ -27,6 +27,7 @@ function NavItem({ id, label, Icon, selected, collapsed, onClick }) {
       aria-label={collapsed ? label : undefined}
       className={`sidebar-item${selected ? ' active' : ''}`}
       data-testid={`nav-${id}`}
+      data-tour={`nav-${id}`}
       sx={{ mx: 3, px: collapsed ? 0 : 3, justifyContent: collapsed ? 'center' : 'flex-start' }}
     >
       <ListItemIcon sx={{ minWidth: collapsed ? 0 : 32, justifyContent: 'center' }}>

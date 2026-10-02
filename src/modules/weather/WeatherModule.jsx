@@ -15,13 +15,12 @@
    ═══════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from 'react';
 import {
-  Alert, Box, Button, Card, Grid, MenuItem, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow,
+  Box, Card, Grid, MenuItem, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow,
   Tabs, TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from '@mui/material';
 import CloudDownloadOutlined from '@mui/icons-material/CloudDownloadOutlined';
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Scatter, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import { apiGet, apiPost } from '../../services/api';
-import { useAdminToken } from '../../hooks/useAdminToken';
 import { useSeries, valueAgo } from '../../hooks/useSeries';
 import { stationMeta } from '../../data/stationConfig';
 import { formatDateTimeIST, formatNumber, formatShortDateTimeIST, formatValue, isNum } from '../../lib/format';
@@ -39,6 +38,8 @@ import { EmptyState, ErrorState, LoadingBlock } from '../../ui/States';
 import { describeFailure } from '../../lib/failure';
 import { StatusChip } from '../../ui/Status';
 import { MODULES, sectionLabel } from '../../shell/navigation';
+import { useConfirm, useToast } from '../../ui/feedbackContext';
+import WriteButton from '../../ui/WriteButton';
 
 const KEYS = ['lab.env_temp', 'lab.env_wind', 'lab.env_pressure', 'lab.env_humidity'];
 const HOUR = 3_600_000;
@@ -359,7 +360,8 @@ export default function WeatherModule({
   sensorData = {}, activeStation = 'maitri', provenance, telemetrySource, timestamp, replay, updatedAt, activeAlerts = [],
 }) {
   const meta = MODULES.environmental;
-  const { canWrite, writeBlockedTitle } = useAdminToken();
+  const confirm = useConfirm();
+  const toast = useToast();
   const env = sensorData.lab || {};
   const temp = num(env.env_temp);
   const wind = num(env.env_wind);
@@ -408,19 +410,27 @@ export default function WeatherModule({
   const chartDataset = current?.data?.window?.dataset ?? obsRecords[0]?.dataset ?? null;
 
   // ── Ingest (write) ──
-  const [ingest, setIngest] = useState({ busy: false, result: null });
+  const [ingesting, setIngesting] = useState(false);
   async function runIngest() {
-    setIngest({ busy: true, result: null });
+    const ok = await confirm({
+      title: `Ingest NCPOR data for ${stationMeta(activeStation).name}?`,
+      body: 'Fetches the NCPOR AWS live page and stores the new observations in the station database.',
+      confirmLabel: 'Ingest',
+    });
+    if (!ok) return;
+    setIngesting(true);
     try {
       const res = await apiPost(`/ncpor/ingest?stationId=${activeStation}`);
       const r = res?.results?.[activeStation];
-      setIngest({ busy: false, result: r?.status === 'success'
-        ? { ok: true, text: `Ingested ${formatNumber(r.records_ingested)} records from ${r.source} (${(r.parameters || []).length} series).` }
-        : { ok: false, text: `Ingest failed: ${r?.error || r?.message || 'no result returned'}. Nothing was stored.` } });
+      toast(r?.status === 'success'
+        ? { text: `Ingested ${formatNumber(r.records_ingested)} records from ${r.source} (${(r.parameters || []).length} series).` }
+        : { severity: 'error', text: `Ingest failed: ${r?.error || r?.message || 'no result returned'}. Nothing was stored.` });
       setAttempt((n) => n + 1);
     } catch (err) {
       console.error('[WeatherModule] ingest failed', err);
-      setIngest({ busy: false, result: { ok: false, text: `Ingest failed: ${describeFailure(err)}.` } });
+      toast({ severity: 'error', text: `Ingest failed: ${describeFailure(err)}.` });
+    } finally {
+      setIngesting(false);
     }
   }
 
@@ -428,10 +438,10 @@ export default function WeatherModule({
   const station = stationMeta(activeStation).name;
   const deltaTemp = temp != null && tempAgo != null ? temp - tempAgo : null;
   const ingestButton = (
-    <Button variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} onClick={runIngest}
-      disabled={ingest.busy || !canWrite} data-testid="ncpor-ingest">
-      {ingest.busy ? 'Ingesting…' : 'Ingest NCPOR data'}
-    </Button>
+    <WriteButton variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} onClick={runIngest}
+      disabled={ingesting} data-testid="ncpor-ingest">
+      {ingesting ? 'Ingesting…' : 'Ingest NCPOR data'}
+    </WriteButton>
   );
 
   return (
@@ -447,14 +457,9 @@ export default function WeatherModule({
             detail={provenance?.weatherSource ? `Weather source: ${provenance.weatherSource}.` : undefined} />}
           {chartDataset && <ProvenanceChip kind={datasetKind(chartDataset) || 'REANALYSIS'} subject="Charts" detail={`Stored dataset: ${chartDataset}.`} />}
         </>}
-        actions={writeBlockedTitle ? <Tooltip title={writeBlockedTitle}><span>{ingestButton}</span></Tooltip> : ingestButton}
+        actions={ingestButton}
       />
 
-      {ingest.result && (
-        <Alert severity={ingest.result.ok ? 'success' : 'warning'} sx={{ mb: 4 }} onClose={() => setIngest({ busy: false, result: null })}>
-          {ingest.result.text}
-        </Alert>
-      )}
 
       <Typography variant="h2" sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>Current weather</Typography>
       <Box component="section" aria-label="Current weather" data-testid="weather-kpis" sx={{

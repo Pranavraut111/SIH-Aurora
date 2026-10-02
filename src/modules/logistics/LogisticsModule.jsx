@@ -29,6 +29,7 @@ import SectionCard from '../../ui/SectionCard';
 import { EmptyState, ErrorState, LoadingBlock } from '../../ui/States';
 import { StatusChip } from '../../ui/Status';
 import WriteButton from '../../ui/WriteButton';
+import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
 const hidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
@@ -47,6 +48,7 @@ function autonomyText(item) {
 }
 
 function EditDialog({ item, stationId, onClose, onSaved }) {
+  const confirm = useConfirm();
   const [current, setCurrent] = useState(String(item.current));
   const [daily, setDaily] = useState(String(item.dailyUse));
   const [name, setName] = useState(getOperatorName);
@@ -61,6 +63,12 @@ function EditDialog({ item, stationId, onClose, onSaved }) {
   async function save(e) {
     e.preventDefault();
     if (curError || dailyError || nameError) return;
+    const ok = await confirm({
+      title: `Write ${item.name} to the ledger?`,
+      body: `Stock ${formatValue(item.current, item.unit)} → ${formatValue(cur, item.unit)}; daily use ${formatValue(item.dailyUse, item.unit)} → ${formatValue(Number(daily), item.unit)}. Recorded in the audit log as ${name.trim()}.`,
+      confirmLabel: 'Save to ledger',
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -114,7 +122,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
   const wide = useMediaQuery(theme.breakpoints.up('md'), { noSsr: true });
   const [state, setState] = useState({ station: null, items: null, history: null, error: null });
   const [editing, setEditing] = useState(null);
-  const [notice, setNotice] = useState(null);
+  const toast = useToast();
   const [attempt, setAttempt] = useState(0);
 
   usePolling(async (isActive) => {
@@ -154,7 +162,6 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
         provenance={<ProvenanceChip kind="OPERATOR-ENTERED" subject="Inventory" detail="Not telemetry. The physics model keeps its own stock estimates under Infrastructure → Logistics Store." />}
       />
 
-      {notice && <Alert severity="success" sx={{ mb: 4 }} onClose={() => setNotice(null)} data-testid="logistics-save-status">{notice}</Alert>}
       {state.error && (
         <ErrorState sx={{ mb: 4 }} onRetry={reload}>
           The ledger could not be loaded because {describeFailure(state.error)}.{ready ? ' Showing the last values received.' : ''}
@@ -311,7 +318,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
 
       {editing && (
         <EditDialog item={editing} stationId={activeStation} onClose={() => setEditing(null)}
-          onSaved={(msg) => { setEditing(null); setNotice(msg); reload(); }} />
+          onSaved={(msg) => { setEditing(null); toast({ text: msg }); reload(); }} />
       )}
     </Box>
   );

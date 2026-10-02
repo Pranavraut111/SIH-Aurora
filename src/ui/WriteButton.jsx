@@ -9,7 +9,7 @@ import { useAdminToken } from '../hooks/useAdminToken';
 export default function WriteButton({ disabled, tooltip, children, ...rest }) {
   const { canWrite, writeBlockedTitle } = useAdminToken();
   const blocked = !canWrite;
-  const button = <Button disabled={disabled || blocked} {...rest}>{children}</Button>;
+  const button = <Button disabled={disabled || blocked} data-write-blocked={blocked || undefined} {...rest}>{children}</Button>;
   const title = blocked ? `${writeBlockedTitle}: sign in to use this.` : tooltip;
   // A disabled button gets no pointer events, so the tooltip wraps a span.
   return title ? <Tooltip title={title}><span style={{ display: 'inline-flex' }}>{button}</span></Tooltip> : button;

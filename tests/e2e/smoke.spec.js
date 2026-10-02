@@ -35,7 +35,7 @@ const MODULES = [
   ['simulation', /Run a scenario to see/i],
   ['ai', /Anomaly evidence/i],
   ['reports', /Station status report/i],
-  ['admin', /System Administration & Ingestion Pipeline/i],
+  ['admin', /Station configuration/i],
 ];
 
 /** Vite's dev client and source maps are not the app under test. */
@@ -207,20 +207,20 @@ test('viewing needs no login, and writes are refused without one', async ({ page
     await expect(page.locator('.module-content-scroll')).toBeVisible();
   }
 
-  // A write control is disabled, with the reason in its tooltip. The thresholds form
-  // lives behind the "Alert Threshold Rules" tab of System Admin.
+  // A write control is disabled because nobody is signed in (WriteButton marks why). The
+  // thresholds form lives behind the "Alert thresholds" tab of Administration.
   await openModule(page, 'admin');
-  await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
-  const save = page.locator('button.btn-save-admin');
+  await page.getByTestId('admin-tab-thresholds').click();
+  const save = page.getByTestId('admin-save');
   await expect(save).toBeVisible();
   await expect(save).toBeDisabled();
-  await expect(save).toHaveAttribute('title', 'Operator login required');
+  await expect(save).toHaveAttribute('data-write-blocked', 'true');
 
-  // ...and so is the ingest button on the Data Sources tab.
-  await page.locator('.admin-tab', { hasText: 'Data Sources' }).click();
-  const sync = page.locator('button.btn-sync-source').first();
+  // ...and so is the ingest button on the Data sources tab.
+  await page.getByTestId('admin-tab-sources').click();
+  const sync = page.getByTestId('admin-ingest-maitri');
   await expect(sync).toBeDisabled();
-  await expect(sync).toHaveAttribute('title', 'Operator login required');
+  await expect(sync).toHaveAttribute('data-write-blocked', 'true');
 
   // The API agrees: the same write is a 401 unauthenticated and a 200 with the token.
   // The 401 is deterministic — require_admin rejects before the proxy is attempted.
@@ -234,11 +234,11 @@ test('viewing needs no login, and writes are refused without one', async ({ page
           { timeout: 30_000, message: 'authenticated write never succeeded' })
     .toBe(200);
 
-  // Signing in enables the controls again.
+  // Signing in enables the controls again (Save stays disabled until something changes).
   await operatorLogin(page);
   await expect(sync).toBeEnabled();
-  await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
-  await expect(save).toBeEnabled();
+  await page.getByTestId('admin-tab-thresholds').click();
+  await expect(save).not.toHaveAttribute('data-write-blocked', 'true');
 
   expect(consoleErrors, 'console errors while signed out').toEqual([]);
   expect(failedRequests.filter((f) => !f.startsWith('401')), 'unexpected failed requests').toEqual([]);
@@ -269,7 +269,7 @@ test('on a phone the top bar fits, Sign in stays reachable and demo control cove
   await page.getByTestId('topbar-more').click();
   await page.getByTestId('menu-demo-control').click();
   await expect(page.getByTestId('demo-control-panel')).toBeVisible();
-  await page.getByTestId('demo-control-close').click();
+  await page.getByTestId('demo-control-panel-close').click();
   await expect(page.getByTestId('demo-control-panel')).toHaveCount(0);
 
   expect(consoleErrors, 'console errors on a phone').toEqual([]);
@@ -333,10 +333,57 @@ test('operate and analyse pages: read-only what-if, twin inspector, and an audit
   const next = String(Number(await input.inputValue()) - 1);
   await input.fill(next);
   await page.getByTestId('ledger-save').click();
-  await expect(page.getByTestId('logistics-save-status')).toContainText(/Saved/);
+  // Every state-changing action asks first.
+  await expect(page.getByTestId('confirm-dialog')).toContainText(/Write .* to the ledger/);
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('toast')).toContainText(/Saved/);
   await expect(page.getByTestId('logistics-history')).toContainText(`→ ${next}`);
   expect(loggedIn || !ADMIN_TOKEN).toBe(true);
 
   expect(consoleErrors, 'console errors on operate/analyse pages').toEqual([]);
   expect(failedRequests, 'failed requests on operate/analyse pages').toEqual([]);
 });
+
+test('command palette, keyboard shortcuts, URL state and the alert centre tabs', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/?module=energy&station=bharati');
+  // The URL opens the page and station directly (refresh-safe, shareable).
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'energy');
+  await expect(page.getByTestId('station-option-bharati')).toHaveAttribute('aria-pressed', 'true');
+
+  // ⌘K / Ctrl+K → type → Enter navigates, and the URL follows.
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+  await page.getByTestId('palette-input').fill('weather');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
+  await expect(page).toHaveURL(/module=environmental&station=bharati/);
+
+  // "g" then a letter navigates; "?" opens the help; Esc closes it.
+  await page.locator('body').click({ position: { x: 5, y: 300 } });
+  await page.keyboard.press('g');
+  await page.keyboard.press('a');
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'ai');
+  await page.keyboard.press('?');
+  await expect(page.getByTestId('shortcuts-dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('shortcuts-dialog')).toHaveCount(0);
+
+  // Back returns to the previous page; a reload keeps the current one.
+  await page.goBack();
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
+  await page.reload();
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
+
+  // The alert centre has Active / Acknowledged / History.
+  await page.getByTestId('alerts-pill').click();
+  await expect(page.getByTestId('alert-drawer')).toBeVisible();
+  for (const tab of ['active', 'acknowledged', 'history']) {
+    await page.getByTestId(`alerts-tab-${tab}`).click();
+    await expect(page.getByTestId(`alerts-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+  }
+
+  expect(consoleErrors, 'console errors with palette/shortcuts').toEqual([]);
+  expect(failedRequests, 'failed requests with palette/shortcuts').toEqual([]);
+});
+

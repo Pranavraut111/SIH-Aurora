@@ -26,6 +26,7 @@ import SectionCard from '../../ui/SectionCard';
 import { ErrorState, LoadingBlock } from '../../ui/States';
 import { StatusChip } from '../../ui/Status';
 import WriteButton from '../../ui/WriteButton';
+import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
 const hidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
@@ -52,7 +53,8 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
   const now = useNow(60_000);
   const [state, setState] = useState({ station: null, commands: null, catalog: null, error: null });
   const [busy, setBusy] = useState(null);
-  const [notice, setNotice] = useState(null);
+  const confirm = useConfirm();
+  const toast = useToast();
   const [ackBusy, setAckBusy] = useState(null);
 
   const load = async (isActive = () => true) => {
@@ -77,24 +79,36 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
   const unacked = activeAlerts.filter((a) => !a.acknowledged);
 
   async function dispatch(subsystem, command) {
+    const ok = await confirm({
+      title: `Request “${label(command)}”?`,
+      body: `Recorded for ${stationMeta(activeStation).name} as ${getOperatorName()}: queued, then acknowledged by the backend (simulated). Nothing is sent to equipment.`,
+      confirmLabel: 'Record request',
+    });
+    if (!ok) return;
     setBusy(command);
     try {
       const d = await apiPost('/remote/dispatch', { stationId: activeStation, subsystem, command, parameters: {}, issuedBy: getOperatorName() });
-      setNotice({ ok: true, text: `${label(command)}: ${d?.status ?? 'queued (simulated)'}. Recorded only; nothing was sent to equipment.` });
+      toast({ text: `${label(command)}: ${d?.status ?? 'queued (simulated)'}. Recorded only; nothing was sent to equipment.` });
       await load().catch((e) => console.error('[Remote] refresh failed', e));
     } catch (err) {
       console.error('[Remote] dispatch failed', err);
-      setNotice({ ok: false, text: `Not recorded: ${describeApiError(err)}` });
+      toast({ severity: 'error', text: `Not recorded: ${describeApiError(err)}` });
     } finally {
       setBusy(null);
     }
   }
 
-  async function acknowledge(id) {
-    setAckBusy(id);
-    const res = await onAcknowledgeAlert?.(id);
+  async function acknowledge(a) {
+    const ok = await confirm({
+      title: 'Acknowledge this alert?',
+      body: `${a.buildingName}: ${a.message} Recorded as acknowledged by ${getOperatorName()}; it stays listed until the reading is normal again.`,
+      confirmLabel: 'Acknowledge',
+    });
+    if (!ok) return;
+    setAckBusy(a.id);
+    const res = await onAcknowledgeAlert?.(a.id);
     setAckBusy(null);
-    if (res && !res.ok) setNotice({ ok: false, text: `Acknowledge failed: ${res.error}` });
+    toast(res?.ok ? { text: `Acknowledged: ${a.buildingName}.` } : { severity: 'error', text: `Acknowledge failed: ${res?.error || 'no response'}` });
   }
 
   return (
@@ -112,7 +126,6 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
         Simulated dispatch. A request is recorded as “queued (simulated)” and later “acknowledged (simulated)” by the backend.
         Nothing is sent to station equipment and the twin is not changed.
       </Alert>
-      {notice && <Alert severity={notice.ok ? 'success' : 'error'} sx={{ mb: 4 }} onClose={() => setNotice(null)} data-testid="remote-notice">{notice.text}</Alert>}
       {state.error && <ErrorState sx={{ mb: 4 }}>The command log could not be loaded because {describeFailure(state.error)}. Retrying automatically.</ErrorState>}
 
       <Typography variant="h2" sx={hidden}>Summary</Typography>
@@ -174,7 +187,7 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
                       {a.acknowledged ? (
                         <Typography variant="body2" sx={{ color: 'text.secondary' }}>Acknowledged by {a.acknowledgedBy}</Typography>
                       ) : canAcknowledge ? (
-                        <WriteButton size="small" variant="outlined" onClick={() => acknowledge(a.id)} disabled={ackBusy === a.id}>
+                        <WriteButton size="small" variant="outlined" onClick={() => acknowledge(a)} disabled={ackBusy === a.id}>
                           {ackBusy === a.id ? 'Acknowledging…' : 'Acknowledge'}
                         </WriteButton>
                       ) : (

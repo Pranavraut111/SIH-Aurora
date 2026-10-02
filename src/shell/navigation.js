@@ -3,8 +3,7 @@
    section, label, icon and page-header copy. The sidebar, page header,
    (later) command palette and product tour all read from here.
 
-   `migrated: true` marks modules already rebuilt on the new design system;
-   the rest render their legacy panel inside <LegacySurface> until rollout 1B.
+   `key` is the letter of the "g then letter" shortcut (shell/shortcuts.js).
    ═══════════════════════════════════════════════════════════════ */
 import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined';
 import ApartmentOutlined from '@mui/icons-material/ApartmentOutlined';
@@ -20,50 +19,50 @@ import TuneOutlined from '@mui/icons-material/TuneOutlined';
 
 export const MODULES = {
   overview: {
-    label: 'Overview', section: 'monitor', Icon: DashboardOutlined,
+    label: 'Overview', key: 'o', section: 'monitor', Icon: DashboardOutlined,
     title: 'Station overview', description: '3D digital twin of the station with live subsystem status.',
   },
   environmental: {
-    label: 'Weather', section: 'monitor', Icon: ThermostatOutlined, migrated: true,
+    label: 'Weather', key: 'w', section: 'monitor', Icon: ThermostatOutlined,
     title: 'Weather', description: 'Live surface weather, stored AWS and ERA5 observations, and anomaly, forecast and risk tools.',
   },
   infrastructure: {
-    label: 'Infrastructure', section: 'monitor', Icon: ApartmentOutlined, migrated: true,
+    label: 'Infrastructure', key: 'i', section: 'monitor', Icon: ApartmentOutlined,
     title: 'Infrastructure', description: 'Building telemetry and the dependency graph between subsystems.',
   },
   energy: {
-    label: 'Energy grid', section: 'monitor', Icon: BoltOutlined, migrated: true,
+    label: 'Energy grid', key: 'e', section: 'monitor', Icon: BoltOutlined,
     title: 'Energy grid', description: 'Diesel generation, fuel burn and the electrical and heating load it supplies.',
   },
   logistics: {
-    label: 'Logistics', section: 'operate', Icon: Inventory2Outlined, migrated: true,
+    label: 'Logistics', key: 'l', section: 'operate', Icon: Inventory2Outlined,
     title: 'Logistics and supplies', description: 'Operator-entered inventory ledger and supply autonomy.',
   },
   remote: {
-    label: 'Remote commands', section: 'operate', Icon: SettingsRemoteOutlined, migrated: true,
+    label: 'Remote commands', key: 'r', section: 'operate', Icon: SettingsRemoteOutlined,
     title: 'Remote commands', description: 'Simulated command dispatch and its audit log. Nothing reaches real equipment.',
   },
   simulation: {
-    label: 'What-if scenarios', section: 'analyse', Icon: TuneOutlined, migrated: true,
+    label: 'What-if scenarios', key: 's', section: 'analyse', Icon: TuneOutlined,
     title: 'What-if scenarios', description: 'Rule-based what-if: hypothetical hazards applied to the current snapshot.',
   },
   ai: {
-    label: 'AI diagnostics', section: 'analyse', Icon: InsightsOutlined, migrated: true,
+    label: 'AI diagnostics', key: 'a', section: 'analyse', Icon: InsightsOutlined,
     title: 'AI diagnostics', description: 'Physics-residual anomaly detection, decisions and forecasts.',
   },
   reports: {
-    label: 'Reports', section: 'analyse', Icon: DescriptionOutlined, migrated: true,
+    label: 'Reports', key: 'p', section: 'analyse', Icon: DescriptionOutlined,
     title: 'Station reports', description: 'Status report with print, CSV and JSON export.',
   },
   admin: {
-    label: 'Administration', section: 'system', Icon: SettingsOutlined,
+    label: 'Administration', key: 'd', section: 'system', Icon: SettingsOutlined,
     title: 'Administration', description: 'Data sources, alert thresholds and station configuration.',
   },
 };
 
 /** Sidebar actions that open a tool instead of switching module. */
 export const NAV_ACTIONS = {
-  twinInspector: { label: 'Twin inspector', section: 'analyse', Icon: AccountTreeOutlined },
+  twinInspector: { label: 'Twin inspector', key: 't', section: 'analyse', Icon: AccountTreeOutlined },
 };
 
 export const NAV_SECTIONS = [
