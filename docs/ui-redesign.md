@@ -479,3 +479,26 @@ neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
   3 Sep"), or "Today (wall clock)" without one.
 - **Main chart:** raw samples as a thin faint line, the moving average as the primary line, a
   legend, and a tooltip with both values and the (replay) time.
+
+### 11.2 Pre-1B fixes (2026-10-02) — screenshots in `docs/ui-redesign/v2b/`
+
+- **Energy chart → "Generation and fuel burn"** (not "generation vs demand": in this model the
+  generator supplies exactly the modelled demand, so the two lines would coincide). Generation on
+  the left axis (kW), fuel burn on the right (L/h); each as a faint thin raw line (no fill) plus
+  its moving average as the primary line; legend and a tooltip with both values. Same 30 min of
+  telemetry and the same replay-clock logic as the KPIs.
+- **Electrical demand:** shares are of the modelled consumers and round to exactly 100 %
+  (largest remainder). Load variation is model noise, shown signed in kW, with no share and no
+  segment in the bar.
+- **Overview below lg:** content under the 3D scene follows the active scheme (light in light
+  mode); only cards over the scene stay dark.
+- **Overview from lg:** the HUD reports the height of its card band; the scene fits the station
+  above it with a lens shift (`camera.setViewOffset`) and, on short screens, a mild zoom-out —
+  the camera and orbit controls are unchanged. The scene publishes the station's on-screen box
+  (`data-model-box`); checked at 1280×720 … 1920×1200: no card overlaps the station.
+- **Mini-card:** coordinates on one line; elevation and "≈ 25 winter crew" on the next.
+- **Fuel autonomy:** a stock gauge against `metadata.fuelTankCapacity_L` in station_config.json.
+  No station has a documented tank capacity, so the field is `null` and the card says "Tank
+  capacity not configured" (the ledger's `max` is an operator-entered seed, not a tank spec).
+- **Phone status dot:** a button named "Data source: …"; a tap pins a tooltip with the label and
+  its explanation (touch has no hover).

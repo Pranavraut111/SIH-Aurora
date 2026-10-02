@@ -27,7 +27,7 @@ function coordText(lat, lon) {
 }
 
 function dayLine(sun) {
-  const below = `${Math.abs(sun.max).toFixed(1)}° below the horizon at noon`;
+  const below = `${Math.abs(sun.max).toFixed(1)}° below at noon`;
   switch (sun.state) {
     case 'polar-night': return { label: 'Polar night', detail: `sun ${below}` };
     case 'polar-day': return { label: 'Polar day', detail: 'midnight sun' };
@@ -45,7 +45,7 @@ function Locator({ activeStation, onStationChange }) {
       role="group"
       aria-label={`Locator map: ${active.name} at ${coordText(active.latitude, active.longitude).join(', ')}`}
       sx={(theme) => ({
-        width: 88, height: 88, flex: 'none', display: 'block',
+        width: 72, height: 72, flex: 'none', display: 'block',
         '& .ring': { fill: 'none', stroke: theme.vars.palette.divider, strokeWidth: 0.75 },
         '& .land': { fill: theme.vars.palette.aurora.surfaceRaised, stroke: theme.vars.palette.aurora.borderControl, strokeWidth: 0.75, strokeLinejoin: 'round' },
         '& .other': { fill: theme.vars.palette.background.paper, stroke: theme.vars.palette.text.secondary, strokeWidth: 1.25, cursor: 'pointer' },
@@ -82,7 +82,7 @@ function SunPath({ sun, now }) {
   const lo = Math.min(-10, ...curve.map((p) => p[1]));
   const hi = Math.max(10, ...curve.map((p) => p[1]));
   const W = 100;
-  const H = 20;
+  const H = 16;
   const x = (t) => ((t - t0) / (t1 - t0)) * W;
   const y = (e) => 1 + (1 - (e - lo) / (hi - lo)) * (H - 2);
   const d = curve.map(([t, e], i) => `${i ? 'L' : 'M'}${x(t).toFixed(2)} ${y(e).toFixed(2)}`).join('');
@@ -106,6 +106,8 @@ export default function StationMiniCard({ activeStation, onStationChange, replay
   const solar = hhmm.format(new Date(now + solarTimeOffsetMs(meta.longitude)));
   const [lat, lon] = coordText(meta.latitude, meta.longitude);
   const day = dayLine(sun);
+  const line = { fontSize: 12, lineHeight: '16px', color: 'text.secondary', whiteSpace: 'nowrap' };
+  const fig = { typography: 'mono', fontSize: 12, color: 'text.primary' };
 
   return (
     <Box
@@ -122,29 +124,29 @@ export default function StationMiniCard({ activeStation, onStationChange, replay
         <Locator activeStation={activeStation} onStationChange={onStationChange} />
         <Box sx={{ minWidth: 0 }}>
           <Typography sx={{ fontSize: 15, fontWeight: 600, lineHeight: '20px' }}>{meta.name}</Typography>
-          <Typography component="p" sx={{ typography: 'mono', fontSize: 12, lineHeight: '16px', color: 'text.secondary', mt: 0.5 }}>
-            {lat}<br />{lon}
-          </Typography>
           <Hint title="Local mean solar time at the shown instant, from the station's longitude. station_config.json records no official station time zone." sx={{ mt: 1 }}>
-            <Box component="span" tabIndex={0} sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
-              Solar <Box component="span" sx={{ typography: 'mono', fontSize: 12, color: 'text.primary' }}>{solar}</Box>
-            </Box>
+            <Box component="span" tabIndex={0} sx={line}>Solar <Box component="span" sx={fig}>{solar}</Box></Box>
           </Hint>
+          <Box sx={{ ...line, mt: 0.5 }}>IST <Box component="span" sx={fig}>{istHHMM(now).replace(' IST', '')}</Box></Box>
         </Box>
       </Stack>
 
-      <Hint title={onReplay
-        ? 'The ERA5 replay clock of the latest snapshot: the day and time the twin is showing, in IST.'
-        : 'No replay clock for this data source: the station today, on the wall clock.'} sx={{ display: 'block', mt: 3 }}>
-        <Box tabIndex={0} data-testid="mini-card-clock" sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
-          {onReplay ? 'Replay date ' : 'Today (wall clock) '}
-          <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{formatDayIST(now)}</Box>
-          {' · '}<Box component="span" sx={{ typography: 'mono', fontSize: 12, color: 'text.primary' }}>{istHHMM(now)}</Box>
-        </Box>
+      {/* Coordinates on one line; elevation and crew on the next (station_config.json). */}
+      <Box data-testid="mini-card-coords" sx={{ ...line, ...fig, color: 'text.secondary', mt: 2.5 }}>{lat}, {lon}</Box>
+      <Hint title="Winter crew size has medium confidence in station_config.json (needs NCPOR confirmation)." sx={{ display: 'block', mt: 0.5 }}>
+        <Box tabIndex={0} sx={line}>{meta.elevation_m} m · ≈ {meta.personnelWinter} winter crew</Box>
       </Hint>
 
-      <Hint title={`Computed from the sun's position for the station's coordinates at the ${onReplay ? 'replay' : 'wall-clock'} time. Model-derived; geometric horizon, no refraction.`} sx={{ display: 'block', mt: 1 }}>
-        <Box tabIndex={0} data-testid="polar-day-line" sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
+      <Hint title={onReplay
+        ? 'The ERA5 replay clock of the latest snapshot: the day the twin is showing (IST).'
+        : 'No replay clock for this data source: the station today, on the wall clock.'} sx={{ display: 'block', mt: 2.5 }}>
+        <Box tabIndex={0} data-testid="mini-card-clock" sx={line}>
+          {onReplay ? 'Replay date ' : 'Today (wall clock) '}
+          <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{formatDayIST(now)}</Box>
+        </Box>
+      </Hint>
+      <Hint title={`Computed from the sun's position for the station's coordinates at the ${onReplay ? 'replay' : 'wall-clock'} time. Model-derived; geometric horizon, no refraction.`} sx={{ display: 'block', mt: 0.5 }}>
+        <Box tabIndex={0} data-testid="polar-day-line" sx={{ ...line, whiteSpace: 'normal' }}>
           <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{day.label}</Box>
           {day.detail && ` · ${day.detail}`}
         </Box>

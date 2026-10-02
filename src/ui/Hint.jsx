@@ -4,12 +4,14 @@
    handful of app-bar and sidebar labels; this positions one fixed-position box
    below (or right of) its trigger instead. Shows after 400 ms on hover and at
    once on keyboard focus, hides on leave/blur/Escape, and is linked to the
-   trigger with aria-describedby. Page content keeps using MUI Tooltip.
+   trigger with aria-describedby. `pinned` shows it on demand (touch has no
+   hover: a tap can pin it); `onHide` reports dismissal. Page content keeps
+   using MUI Tooltip.
    ═══════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 
-export default function Hint({ title, placement = 'bottom', children, sx }) {
+export default function Hint({ title, placement = 'bottom', pinned = false, onHide, children, sx }) {
   const id = useId();
   const anchor = useRef(null);
   const timer = useRef(null);
@@ -30,7 +32,16 @@ export default function Hint({ title, placement = 'bottom', children, sx }) {
             : { left: cx, top: r.bottom + 8, transform: 'translateX(-50%)' });
     }, delay);
   }, [placement]);
-  const hide = useCallback(() => { clearTimeout(timer.current); setPos(null); }, []);
+  const onHideRef = useRef(onHide);
+  useEffect(() => { onHideRef.current = onHide; });
+  const hide = useCallback(() => { clearTimeout(timer.current); setPos(null); onHideRef.current?.(); }, []);
+
+  useEffect(() => {
+    if (!pinned) return undefined;
+    show(0);
+    const t = setTimeout(hide, 5000);                 // a pinned hint dismisses itself
+    return () => { clearTimeout(t); setPos(null); };  // un-pinned: hide
+  }, [pinned, show, hide]);
 
   useEffect(() => {
     if (!pos) return undefined;
@@ -48,9 +59,9 @@ export default function Hint({ title, placement = 'bottom', children, sx }) {
       ref={anchor}
       aria-describedby={pos ? id : undefined}
       onMouseEnter={() => show(400)}
-      onMouseLeave={hide}
+      onMouseLeave={() => { if (!pinned) hide(); }}
       onFocus={(e) => { if (e.target.matches?.(':focus-visible')) show(0); }}
-      onBlur={hide}
+      onBlur={() => hide()}
       sx={[{ display: 'inline-flex', flex: 'none', minWidth: 0 }, ...(Array.isArray(sx) ? sx : [sx])]}
     >
       {children}

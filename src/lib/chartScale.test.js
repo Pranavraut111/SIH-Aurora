@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitDomain } from './chartScale';
+import { fitDomain, sharesTo100 } from './chartScale';
 import { windChill } from './windChill';
 
 describe('fitDomain', () => {
@@ -24,5 +24,16 @@ describe('windChill', () => {
   it('is undefined outside the formula range', () => {
     expect(windChill(15, 30)).toBeNull();
     expect(windChill(-20, 2)).toBeNull();
+  });
+});
+
+describe('sharesTo100', () => {
+  it('rounds consumer shares so they add up to exactly 100', () => {
+    const shares = sharesTo100([44, 22.1, 8, 3, 1.5]);
+    expect(shares.reduce((a, b) => a + b, 0)).toBe(100);
+    expect(shares).toEqual([56, 28, 10, 4, 2]);
+  });
+  it('is all zeros when there is nothing to share', () => {
+    expect(sharesTo100([0, 0])).toEqual([0, 0]);
   });
 });

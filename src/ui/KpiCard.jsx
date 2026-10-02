@@ -43,6 +43,8 @@ export default function KpiCard({
   context,
   status,              // 'warning' | 'critical' | undefined (normal = no chip)
   progress,            // 0–100, optional bar under the value
+  progressLabel,       // accessible name of the bar
+  footnote,            // one short line right under the bar (e.g. what the bar measures)
   series,              // [[ts, value], …] for the sparkline
   delta,               // number: change vs `deltaLabel`
   deltaLabel,
@@ -94,9 +96,13 @@ export default function KpiCard({
           <LinearProgress
             variant="determinate"
             value={Math.max(0, Math.min(100, progress))}
-            aria-label={`${label} ${Math.round(progress)}%`}
+            aria-label={progressLabel ?? `${label} ${Math.round(progress)}%`}
             color={status === 'critical' ? 'error' : status === 'warning' ? 'warning' : 'primary'}
           />
+        )}
+
+        {footnote && (
+          <Typography variant="caption" component="p" data-testid={testId ? `${testId}-footnote` : undefined} sx={{ color: 'text.secondary', m: 0 }}>{footnote}</Typography>
         )}
 
         {series !== undefined && (

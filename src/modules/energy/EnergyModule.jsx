@@ -17,7 +17,7 @@ import { useState } from 'react';
 import {
   Alert, Box, Button, Grid, Skeleton, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography,
 } from '@mui/material';
-import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import { apiGet } from '../../services/api';
 import { usePolling } from '../../hooks/usePolling';
 import { rollingMean, useSeries, valueAgo } from '../../hooks/useSeries';
@@ -25,7 +25,7 @@ import { sensorCatalog, stationMeta } from '../../data/stationConfig';
 import { formatDateTimeIST, formatNumber, formatShortDateTimeIST, formatTimeIST, formatValue, isNum } from '../../lib/format';
 import { formatSpan, movingAverage, onModelClock } from '../../lib/modelClock';
 import { useChartTheme } from '../../theme/chartTheme';
-import { fitDomain } from '../../lib/chartScale';
+import { fitDomain, sharesTo100 } from '../../lib/chartScale';
 import KpiCard from '../../ui/KpiCard';
 import PageHeader from '../../ui/PageHeader';
 import ProvenanceChip from '../../ui/Provenance';
@@ -73,35 +73,61 @@ function ChartTip({ active, payload, clock, maLabel, chart }) {
   if (!active || !payload?.length) return null;
   const row = payload[0].payload;
   const when = clock.kind === 'replay' ? `${formatDateTimeIST(row.time)} (replay)` : formatTimeIST(row.time);
+  const line = (label, avg, rawV, unit) => (
+    <Box sx={{ display: 'grid', gridTemplateColumns: 'auto auto auto', columnGap: 2 }}>
+      <Box sx={{ color: chart.tooltip.labelStyle.color }}>{label}</Box>
+      <Box sx={{ textAlign: 'right' }}><b>{formatValue(avg, unit, 1)}</b></Box>
+      <Box sx={{ textAlign: 'right', color: chart.tooltip.labelStyle.color }}>raw {formatValue(rawV, unit, 1)}</Box>
+    </Box>
+  );
   return (
     <Box sx={{ ...chart.tooltip.contentStyle, boxShadow: chart.mode === 'dark' ? '0 8px 24px rgba(0,0,0,.45)' : '0 8px 24px rgba(23,27,33,.12)' }}>
-      <Box sx={{ color: chart.tooltip.labelStyle.color, mb: 0.5 }}>{when}</Box>
-      <Box>{maLabel}: <b>{formatValue(row.avg, 'kW', 1)}</b></Box>
-      <Box sx={{ color: chart.tooltip.labelStyle.color }}>Raw: {formatValue(row.kw, 'kW', 1)}</Box>
+      <Box sx={{ color: chart.tooltip.labelStyle.color, mb: 0.5 }}>{when} · {maLabel}</Box>
+      {line('Generation', row.genAvg, row.gen, 'kW')}
+      {line('Fuel burn', row.fuelAvg, row.fuel, 'L/h')}
     </Box>
   );
 }
 
-function OutputChart({ points, loaded, ratedKW, lowWarnKW, clock }) {
+/** Join two series sampled on the same ticks (one snapshot each) by time. */
+function joinByTime(a, b) {
+  const byT = new Map((b || []).map(([t, v]) => [t, v]));
+  return (a || []).filter(([t]) => byT.has(t)).map(([t, v]) => [t, v, byT.get(t)]);
+}
+
+function OutputChart({ powerPoints, fuelPoints, loaded, ratedKW, lowWarnKW, clock }) {
   const chart = useChartTheme();
+  const joined = joinByTime(powerPoints, fuelPoints);
   if (!loaded) return <Skeleton variant="rounded" height={300} />;
-  if (!points || points.length < 2) {
+  if (joined.length < 2) {
     return (
       <Box sx={{ height: 300, display: 'grid', placeItems: 'center' }}>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>Collecting samples. The chart fills in as telemetry arrives.</Typography>
       </Box>
     );
   }
-  // Primary line: trailing moving average on the model clock; raw samples stay visible, faint.
-  const avg = movingAverage(points, clock.maMs);
-  const data = points.map(([time, kw], i) => ({ time, kw, avg: avg[i][1] }));
+  // Primary lines: trailing moving averages on the model clock; raw samples stay visible,
+  // thin and faint, with no fill. Generation on the left axis, fuel burn on the right.
+  const genAvg = movingAverage(joined.map(([t, g]) => [t, g]), clock.maMs);
+  const fuelAvg = movingAverage(joined.map(([t, , f]) => [t, f]), clock.maMs);
+  const data = joined.map(([time, gen, fuel], i) => ({ time, gen, fuel, genAvg: genAvg[i][1], fuelAvg: fuelAvg[i][1] }));
   const maLabel = `${formatSpan(clock.maMs)} average`;
-  const values = data.map((d) => d.kw);
-  const dataMax = Math.max(...values);
+  const gens = data.map((d) => d.gen);
+  const dataMax = Math.max(...gens);
   // Rated capacity is drawn when it is near enough to keep the line readable; otherwise the
   // axis stays fitted to the data and the caption says the reference is off scale.
   const showRated = isNum(ratedKW) && ratedKW <= dataMax * 1.3;
-  const domain = fitDomain(values, { include: showRated ? [ratedKW] : [] });
+  // Fuel burn is linear in generation (Willans line), so the two lines share a shape: give
+  // each its own band, generation in the upper half and fuel burn in the lower half.
+  const band = (vals, where) => {
+    const lo = Math.min(...vals);
+    const hi = Math.max(...vals);
+    const pad = Math.max(hi - lo, Math.abs(hi) * 0.02) * 1.1;
+    return where === 'upper' ? [lo - pad] : [hi + pad];
+  };
+  const domain = fitDomain(gens, { include: [...band(gens, 'upper'), ...(showRated ? [ratedKW] : [])] });
+  const fuels = data.map((d) => d.fuel);
+  const fuelDomain = fitDomain(fuels, { include: band(fuels, 'lower') });
   const inRange = (y) => isNum(y) && y >= domain[0] && y <= domain[1];
   const offScale = [
     isNum(ratedKW) && !inRange(ratedKW) && `rated capacity ${formatValue(ratedKW, 'kW')}`,
@@ -109,42 +135,48 @@ function OutputChart({ points, loaded, ratedKW, lowWarnKW, clock }) {
   ].filter(Boolean);
   const span = data.at(-1).time - data[0].time;
   const tickFmt = clock.kind === 'replay' ? formatShortDateTimeIST : hhmm;
+  const [cGen, cFuel] = chart.series;
 
   return (
     <>
       <ChartLegend items={[
-        { label: `${maLabel} (${clock.suffix})`, color: chart.accent, width: 2, opacity: 1 },
-        { label: `Raw (one sample per tick)`, color: chart.accent, width: 1, opacity: 0.45 },
+        { label: `Generation, ${maLabel} (kW, left)`, color: cGen, width: 2, opacity: 1 },
+        { label: `Fuel burn, ${maLabel} (L/h, right)`, color: cFuel, width: 2, opacity: 1 },
+        { label: 'Raw samples, one per tick', color: chart.labelFill, width: 1, opacity: 0.5 },
       ]} />
       <Box sx={{ height: 300 }} role="img"
-        aria-label={`Generator output over the last ${formatSpan(span)} of ${clock.suffix}: ${maLabel.toLowerCase()} between ${formatValue(Math.min(...avg.map((p) => p[1])), 'kW', 1)} and ${formatValue(Math.max(...avg.map((p) => p[1])), 'kW', 1)}, latest ${formatValue(avg.at(-1)[1], 'kW', 1)}; raw latest ${formatValue(values.at(-1), 'kW', 1)}`}>
+        aria-label={`Generation and fuel burn over the last ${formatSpan(span)} of ${clock.suffix}. Generation ${maLabel.toLowerCase()} latest ${formatValue(genAvg.at(-1)[1], 'kW', 1)}; fuel burn ${maLabel.toLowerCase()} latest ${formatValue(fuelAvg.at(-1)[1], 'L/h', 1)}.`}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 0, bottom: 0, left: 0 }}>
             <CartesianGrid stroke={chart.grid} vertical={false} />
             <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} scale="time"
               tickFormatter={tickFmt} tick={chart.tick} stroke={chart.axis} tickLine={false} minTickGap={clock.kind === 'replay' ? 72 : 48} />
-            <YAxis tick={chart.tick} stroke={chart.axis} tickLine={false} axisLine={false} width={44}
+            <YAxis yAxisId="kw" tick={chart.tick} stroke={chart.axis} tickLine={false} axisLine={false} width={44}
               domain={domain} ticks={domain.ticks} tickFormatter={(v) => formatNumber(v)} />
+            <YAxis yAxisId="lph" orientation="right" tick={chart.tick} stroke={chart.axis} tickLine={false} axisLine={false} width={40}
+              domain={fuelDomain} ticks={fuelDomain.ticks} tickFormatter={(v) => formatNumber(v)} />
             {inRange(ratedKW) && (
-              <ReferenceLine y={ratedKW} stroke={chart.referenceLine.neutral} strokeDasharray="4 4"
+              <ReferenceLine yAxisId="kw" y={ratedKW} stroke={chart.referenceLine.neutral} strokeDasharray="4 4"
                 label={{ value: `Rated ${formatValue(ratedKW, 'kW')}`, position: 'insideTopRight', fill: chart.labelFill, fontSize: 12 }} />
             )}
             {inRange(lowWarnKW) && (
-              <ReferenceLine y={lowWarnKW} stroke={chart.referenceLine.warning} strokeDasharray="4 4"
+              <ReferenceLine yAxisId="kw" y={lowWarnKW} stroke={chart.referenceLine.warning} strokeDasharray="4 4"
                 label={{ value: `Low-power warning ${formatValue(lowWarnKW, 'kW')}`, position: 'insideBottomRight', fill: chart.labelFill, fontSize: 12 }} />
             )}
             <ChartTooltip cursor={chart.tooltip.cursor} wrapperStyle={{ outline: 'none' }}
               content={<ChartTip clock={clock} maLabel={maLabel} chart={chart} />} />
-            <Line type="linear" dataKey="kw" stroke={chart.accent} strokeOpacity={0.45} strokeWidth={1} dot={false}
-              activeDot={false} isAnimationActive={false} />
-            <Area type="monotone" dataKey="avg" stroke={chart.accent} strokeWidth={2} fill={chart.accent}
-              fillOpacity={chart.areaOpacity} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: chart.accent }} isAnimationActive={false} />
+            <Line yAxisId="kw" type="linear" dataKey="gen" stroke={cGen} strokeOpacity={0.25} strokeWidth={1} dot={false} activeDot={false} isAnimationActive={false} />
+            <Line yAxisId="lph" type="linear" dataKey="fuel" stroke={cFuel} strokeOpacity={0.25} strokeWidth={1} dot={false} activeDot={false} isAnimationActive={false} />
+            <Line yAxisId="kw" type="monotone" dataKey="genAvg" stroke={cGen} strokeWidth={2} dot={false}
+              activeDot={{ r: 4, strokeWidth: 0, fill: cGen }} isAnimationActive={false} />
+            <Line yAxisId="lph" type="monotone" dataKey="fuelAvg" stroke={cFuel} strokeWidth={2} dot={false}
+              activeDot={{ r: 4, strokeWidth: 0, fill: cFuel }} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
       </Box>
       {offScale.length > 0 && (
         <Typography variant="body2" sx={{ color: 'text.secondary', mt: 2 }} data-testid="chart-off-scale">
-          Axis fitted to the data; {offScale.join(' and ')} {offScale.length > 1 ? 'are' : 'is'} outside the visible range.
+          Left axis fitted to the data; {offScale.join(' and ')} {offScale.length > 1 ? 'are' : 'is'} outside the visible range.
         </Typography>
       )}
     </>
@@ -159,19 +191,19 @@ function DemandBreakdown({ rows, variation, total, matchesGeneration }) {
   const chart = useChartTheme();
   const colour = (i) => chart.series[i % chart.series.length];
   const showVariation = isNum(variation) && Math.abs(variation) >= 0.05;
-  const segments = [
-    ...rows.map((r, i) => ({ ...r, color: colour(i) })),
-    ...(showVariation && variation > 0 ? [{ label: 'Load variation', kw: variation, color: chart.rest }] : []),
-  ];
+  // Shares are of the modelled consumers only, rounded so they add up to exactly 100 %.
+  // Load variation is model noise, not a consumer: shown signed in kW, outside the shares and the bar.
+  const consumersKW = rows.reduce((sum, r) => sum + (r.kw ?? 0), 0);
+  const shares = sharesTo100(rows.map((r) => r.kw ?? 0));
   return (
     <Stack sx={{ gap: 5 }}>
       <Box
         role="img"
-        aria-label={`Electrical demand split, total ${formatValue(total, 'kW', 1)}`}
+        aria-label={`Electrical demand split across ${rows.length} consumers, ${formatValue(consumersKW, 'kW', 1)} in total`}
         sx={{ display: 'flex', height: 14, borderRadius: '4px', overflow: 'hidden', gap: '2px' }}
       >
-        {segments.map((r) => (
-          <Box key={r.label} sx={{ flex: `${Math.max(r.kw ?? 0, 0)} 0 0`, backgroundColor: r.color }} />
+        {rows.map((r, i) => (
+          <Box key={r.label} sx={{ flex: `${Math.max(r.kw ?? 0, 0)} 0 0`, backgroundColor: colour(i) }} />
         ))}
       </Box>
       <Table size="small" aria-label="Electrical demand by consumer">
@@ -190,23 +222,22 @@ function DemandBreakdown({ rows, variation, total, matchesGeneration }) {
               </TableCell>
               <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1' }}>{formatNumber(r.kw, 1)}</TableCell>
               <TableCell align="right" sx={{ pr: 0, fontFeatureSettings: '"tnum" 1', color: 'text.secondary' }}>
-                {r.kw != null && total ? `${formatNumber((r.kw / total) * 100)}%` : '—'}
+                {consumersKW > 0 ? `${shares[i]}%` : '—'}
               </TableCell>
             </TableRow>
           ))}
+          <TableRow>
+            <TableCell sx={{ pl: 0, fontWeight: 600 }}>Consumers</TableCell>
+            <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1', fontWeight: 600 }}>{formatNumber(consumersKW, 1)}</TableCell>
+            <TableCell align="right" sx={{ pr: 0, fontFeatureSettings: '"tnum" 1', fontWeight: 600 }}>100%</TableCell>
+          </TableRow>
           {showVariation && (
-            <TableRow>
-              <TableCell sx={{ pl: 0 }}>
-                <Stack direction="row" sx={{ alignItems: 'center', gap: 2, color: 'text.secondary' }}>
-                  <Swatch color={chart.rest} />Load variation (unallocated)
-                </Stack>
-              </TableCell>
+            <TableRow data-testid="load-variation-row">
+              <TableCell sx={{ pl: 0, color: 'text.secondary' }}>Load variation (model noise)</TableCell>
               <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1', color: 'text.secondary' }}>
                 {variation > 0 ? '+' : '−'}{formatNumber(Math.abs(variation), 1)}
               </TableCell>
-              <TableCell align="right" sx={{ pr: 0, fontFeatureSettings: '"tnum" 1', color: 'text.secondary' }}>
-                {total ? `${formatNumber((Math.abs(variation) / total) * 100)}%` : '—'}
-              </TableCell>
+              <TableCell align="right" sx={{ pr: 0, color: 'text.secondary' }}>n/a</TableCell>
             </TableRow>
           )}
           <TableRow>
@@ -216,12 +247,11 @@ function DemandBreakdown({ rows, variation, total, matchesGeneration }) {
           </TableRow>
         </TableBody>
       </Table>
-      {showVariation && (
-        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          The model has no storage, so the generator supplies exactly the total demand. Load
-          variation is the model&rsquo;s ±2 % noise on that total, which the consumers do not carry.
-        </Typography>
-      )}
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+        Shares are of the modelled consumers. The model has no storage, so the generator supplies
+        the total demand: the consumers plus the model&rsquo;s ±2 % load variation, which no
+        consumer carries and which is therefore not given a share.
+      </Typography>
     </Stack>
   );
 }
@@ -321,6 +351,10 @@ export default function EnergyModule({
   const avgBurn = avg.mean ?? fuelRateLph;
   const stockL = fuelItem && fuelItem.unit === 'L' ? num(fuelItem.current) : null;
   const autonomyDays = stockL != null && avgBurn ? stockL / (avgBurn * 24) : null;
+  // Stock gauge: ledger stock vs the tank capacity in station_config.json. Never invented:
+  // with no configured capacity the card says so instead of drawing a gauge.
+  const tankL = num(stationMeta(activeStation).fuelTankCapacity_L);
+  const stockPct = stockL != null && tankL ? (stockL / tankL) * 100 : null;
 
   const heatingDemand = num(energy?.heatingDemand_kW);
   const wasteShare = num(twinData?.wasteHeatRecovery);
@@ -386,6 +420,11 @@ export default function EnergyModule({
           sparkBucketMs={clock.sparkBucketMs}
           context={avg.mean != null ? `${formatSpan(Math.min(avg.spanMs || clock.avgMs, clock.avgMs))} average ${formatValue(avg.mean, 'L/h', 1)} (${clock.suffix})` : '—'} />
         <KpiCard label="Fuel autonomy" value={autonomyDays} unit="days" testId="kpi-autonomy" sx={{ gridArea: 'b' }}
+          progress={stockPct ?? undefined}
+          progressLabel={stockPct != null ? `Fuel stock ${formatNumber(stockPct)}% of ${formatValue(tankL, 'L')} tank capacity` : undefined}
+          footnote={stockL == null ? null : stockPct != null
+            ? `${formatNumber(stockPct)}% of ${formatValue(tankL, 'L')} tank`
+            : 'Tank capacity not configured'}
           context={autonomyContext({ fuelError, stockL, avg, clock })} />
         <KpiCard label="Coolant temperature" value={coolantC} unit="°C" decimals={1} testId="kpi-coolant" sx={{ gridArea: 'c' }}
           status={sensorStatus(activeAlerts, 'gen_temp')}
@@ -400,14 +439,14 @@ export default function EnergyModule({
       <Grid container spacing={4}>
         <Grid size={{ xs: 12, lg: 7 }}>
           <SectionCard
-            title="Generator output"
+            title="Generation and fuel burn"
             subtitle={clock.kind === 'replay'
-              ? `kW · last ${formatSpan(spanMs)} of ERA5 replay time (${replay?.speedFactor ?? '—'}× real time) · times in IST`
-              : `kW · last ${formatSpan(spanMs)}, wall clock, one sample per 2 s tick · times in IST`}
+              ? `Last ${WINDOW_MIN} min of telemetry = ${formatSpan(spanMs)} of ERA5 replay time (${replay?.speedFactor ?? '—'}× real time) · times in IST`
+              : `Last ${formatSpan(spanMs)} of telemetry, wall clock, one sample per 2 s tick · times in IST`}
             provenance={<ProvenanceChip kind={telemetryKind} />}
             testId="energy-output-chart"
           >
-            <OutputChart points={powerPts} loaded={loaded} clock={clock} ratedKW={ratedKW} lowWarnKW={catalog.gen_power?.low?.warning} />
+            <OutputChart powerPoints={powerPts} fuelPoints={fuelPts} loaded={loaded} clock={clock} ratedKW={ratedKW} lowWarnKW={catalog.gen_power?.low?.warning} />
           </SectionCard>
         </Grid>
         <Grid size={{ xs: 12, lg: 5 }}>

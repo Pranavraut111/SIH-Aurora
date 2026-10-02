@@ -44,6 +44,10 @@ const EnergyModule = lazy(() => import('./modules/energy/EnergyModule'));
 export default function App() {
   const theme = useTheme();
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'), { noSsr: true });
+  // From lg up the HUD floats over the 3D scene (bottom band), so the scene is drawn with a
+  // lens shift that lifts the station clear of it; below lg the HUD sits under the scene.
+  const hudOverlays = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true });
+  const [hudBand, setHudBand] = useState(0);   // px of HUD cards along the scene's bottom
 
   // ── State ──────────────────────────────────────────────────
   const [activeModule, setActiveModule] = useState('overview');
@@ -254,6 +258,7 @@ export default function App() {
                 <ErrorBoundary name="3D station view">
                   <Suspense fallback={<PanelFallback name="3D station view" />}>
                     <StationScene
+                      avoidBottom={hudOverlays ? hudBand : 0}
                       alertStates={stationData.alerts}
                       selectedBuilding={selectedBuilding}
                       onBuildingClick={handleBuildingClick}
@@ -275,6 +280,7 @@ export default function App() {
                     telemetrySource={telemetryBadge}
                     provenance={stationData.provenance}
                     replay={stationData.replay}
+                    onOverlayBand={setHudBand}
                     onOpenTwinInspector={() => setShowTwinInspector(true)}
                   />
                 </Suspense>

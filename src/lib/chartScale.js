@@ -20,3 +20,15 @@ export function fitDomain(values, { include = [] } = {}) {
   domain.ticks = Array.from({ length: Math.round((b - a) / step) + 1 }, (_, i) => +(a + i * step).toFixed(6));
   return domain;
 }
+
+/** Integer percentages of `values` that add up to exactly 100 (largest-remainder rounding). */
+export function sharesTo100(values) {
+  const total = values.reduce((a, v) => a + Math.max(v, 0), 0);
+  if (!(total > 0)) return values.map(() => 0);
+  const exact = values.map((v) => (Math.max(v, 0) / total) * 100);
+  const out = exact.map(Math.floor);
+  let left = 100 - out.reduce((a, v) => a + v, 0);
+  exact.map((v, i) => [v - Math.floor(v), i]).sort((a, b) => b[0] - a[0])
+    .forEach(([, i]) => { if (left > 0) { out[i] += 1; left -= 1; } });
+  return out;
+}

@@ -68,7 +68,14 @@
           "iig_maitri",
           "dozer_sase",
           "sankalp_sase"
-        ]
+        ],
+        "fuelTankCapacity_L": {
+          "value": null,
+          "source": "not recorded: no documented bulk-fuel tank capacity for this station. The logistics ledger's 'max' is an operator-entered seed value, not a tank specification",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "set a value (litres) to enable the fuel stock gauge on the Energy page"
+        }
       },
       "buildings": [
         {
@@ -644,7 +651,14 @@
         "ncporSources": [
           "imd_bharati",
           "iig_bharati"
-        ]
+        ],
+        "fuelTankCapacity_L": {
+          "value": null,
+          "source": "not recorded: no documented bulk-fuel tank capacity for this station. The logistics ledger's 'max' is an operator-entered seed value, not a tank specification",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "set a value (litres) to enable the fuel stock gauge on the Energy page"
+        }
       },
       "buildings": [
         {

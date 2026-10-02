@@ -55,8 +55,15 @@ function StationScene3D({
   onBuildingClick,
   onBuildingHover,
   onFatal,
+  // Height (px) of the band of overlay cards along the bottom of the canvas. The station is
+  // fitted into the space above it with a lens shift (and a mild zoom-out when that space is
+  // short), without moving the camera: orbit controls are unaffected.
+  avoidBottom = 0,
 }) {
   const containerRef = useRef(null);
+  const avoidRef = useRef(avoidBottom);
+  useEffect(() => { avoidRef.current = avoidBottom; });
+  const frameCount = useRef(0);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
   const cameraRef = useRef(null);
@@ -576,6 +583,28 @@ function StationScene3D({
     });
 
     rendererRef.current?.render(sceneRef.current, cameraRef.current);
+
+    // Publish the station's on-screen box (container px) about twice a second, so layout
+    // checks can verify that no overlay card covers the model.
+    frameCount.current += 1;
+    if (frameCount.current % 30 === 0 && containerRef.current && cameraRef.current) {
+      // Union of each mesh's own box (one box around everything over-states the silhouette).
+      const { clientWidth: w, clientHeight: h } = containerRef.current;
+      let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+      const box = new THREE.Box3();
+      const v = new THREE.Vector3();
+      Object.values(buildingMeshes.current).forEach(({ group }) => group.traverse((o) => {
+        if (!o.isMesh) return;
+        box.setFromObject(o);
+        for (let i = 0; i < 8; i += 1) {
+          v.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(cameraRef.current);
+          const sx = ((v.x + 1) / 2) * w;
+          const sy = ((1 - v.y) / 2) * h;
+          x0 = Math.min(x0, sx); y0 = Math.min(y0, sy); x1 = Math.max(x1, sx); y1 = Math.max(y1, sy);
+        }
+      }));
+      if (Number.isFinite(x0)) containerRef.current.dataset.modelBox = [x0, y0, x1, y1].map(Math.round).join(',');
+    }
   }, [alertStates, selectedBuilding]);
 
   // ── Mouse & Click Raycasting ────────────────────────────────
@@ -644,10 +673,26 @@ function StationScene3D({
     const height = container.clientHeight;
     if (width === 0 || height === 0) return;
 
-    cameraRef.current.aspect = width / height;
-    cameraRef.current.updateProjectionMatrix();
+    const camera = cameraRef.current;
+    camera.aspect = width / height;
+    const band = avoidRef.current || 0;
+    if (band > 0) {
+      // Measured at zoom 1: the station is ~0.37 × the canvas height tall, centred ~0.03 × h
+      // below the middle. Fit it into the free area above the band, with a 24 px margin.
+      const free = Math.max(height - band - 24, height * 0.3);
+      camera.zoom = Math.min(1, free / (0.37 * height * 1.12));
+      const centre = height / 2 + camera.zoom * 0.03 * height;
+      camera.setViewOffset(width, height, 0, centre - free / 2, width, height);
+    } else {
+      camera.zoom = 1;
+      camera.clearViewOffset();
+    }
+    camera.updateProjectionMatrix();
     rendererRef.current.setSize(width, height);
   }, []);
+
+  // Re-fit when the overlay band changes height.
+  useEffect(() => { handleResize(); }, [avoidBottom, handleResize]);
 
   useEffect(() => {
     try {

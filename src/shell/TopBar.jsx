@@ -81,6 +81,7 @@ export default function TopBar({
   const scheme = useSchemeToggle();
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuLoaded, setMenuLoaded] = useState(false);
+  const [sourceHint, setSourceHint] = useState(false);
 
   const source = dataSourceInfo(telemetryBadge);
   const warningCount = alertCount - criticalCount;
@@ -107,8 +108,9 @@ export default function TopBar({
         {/* ── Status chips ─────────────────────────────────── */}
         <Box role="region" aria-label="Station status" data-tour="status-strip"
           sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0, ml: { sm: 1, md: 2 } }}>
-          <Hint title={source.help}>
+          <Hint title={`${source.label}. ${source.help}`} pinned={sourceHint} onHide={() => setSourceHint(false)}>
             <BarChip data-testid="data-source-badge" data-source={telemetryBadge} aria-label={`Data source: ${source.label}`}
+              onClick={() => setSourceHint((v) => !v)}
               sx={{ px: { xs: 0, md: 2.5 }, backgroundColor: { xs: 'transparent', md: undefined } }}>
               <StatusDot status={source.status} />
               <Box component="span" sx={{ display: { xs: 'none', md: 'inline' } }}>{source.label}</Box>

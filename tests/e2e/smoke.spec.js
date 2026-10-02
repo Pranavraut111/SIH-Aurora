@@ -259,6 +259,12 @@ test('on a phone the top bar fits, Sign in stays reachable and demo control cove
   await expect(page.locator('.demo-toggle')).toHaveCount(0);
   if (ADMIN_TOKEN) await expect(page.getByTestId('operator-login')).toBeVisible();
 
+  // The status dot has an accessible name, and a tap shows the data source in a tooltip.
+  const dot = page.getByTestId('data-source-badge');
+  await expect(dot).toHaveAccessibleName(/^Data source: /);
+  await dot.click();
+  await expect(page.getByRole('tooltip')).toContainText(/simulator|fallback|demo|connecting/i);
+
   // Demo control opens from the overflow menu.
   await page.getByTestId('topbar-more').click();
   await page.getByTestId('menu-demo-control').click();

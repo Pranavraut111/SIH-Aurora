@@ -7,11 +7,13 @@
      15 min ago, wind chill), then wind, generation and subsystem status.
      Values are live telemetry; history is the backend's rolling window.
 
-   From lg up the HUD floats over the scene; below lg it sits in normal flow
-   under a fixed-height scene (App.css), so it never covers the twin on phones.
+   From lg up the HUD floats over the scene and stays dark (it sits on the dark
+   3D twin); below lg it sits in normal flow under a fixed-height scene (App.css)
+   and follows the active colour scheme, like any page.
    ═══════════════════════════════════════════════════════════════ */
-import { useState } from 'react';
-import { Box, Button, Card, Stack, Typography } from '@mui/material';
+import { useEffect, useRef, useState } from 'react';
+import { Box, Button, Card, Stack, Typography, useMediaQuery } from '@mui/material';
+import { useColorScheme, useTheme } from '@mui/material/styles';
 import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
 import CloudOffOutlined from '@mui/icons-material/CloudOffOutlined';
 import MicNoneOutlined from '@mui/icons-material/MicNoneOutlined';
@@ -42,7 +44,7 @@ function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer,
   const text = formatNumber(value, decimals);
   return (
     <Card component="section" aria-label={label} data-testid={testId} sx={(theme) => ({
-      p: 4, minWidth: 0, boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
+      p: { xs: 4, lg: 3.5 }, minWidth: 0, boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
       display: 'grid', gap: 2, alignItems: 'center',
       gridTemplateColumns: { xs: 'minmax(0, 1fr) minmax(0, 0.9fr)', lg: '1fr' },
     })}>
@@ -57,7 +59,7 @@ function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer,
           {unit && isNum(value) && <Typography component="span" sx={{ color: 'text.secondary', fontSize: 13, fontWeight: 500 }}>{unit}</Typography>}
         </Stack>
       </Box>
-      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={28} bucketMs={bucketMs} />}</Box>
+      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={24} bucketMs={bucketMs} />}</Box>
     </Card>
   );
 }
@@ -81,8 +83,31 @@ export default function OverviewHUD({
   telemetrySource,
   replay,
   provenance,
+  onOverlayBand,
   onOpenTwinInspector,
 }) {
+  const theme = useTheme();
+  const overlays = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true });
+  const { mode, systemMode } = useColorScheme();
+  const scheme = overlays ? 'dark' : ((mode === 'system' ? systemMode : mode) || 'dark');
+  // Report how tall the band of overlay cards is (from the scene's bottom edge up to the
+  // highest card), so the scene can fit the station above it.
+  const rootRef = useRef(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || !onOverlayBand) return undefined;
+    const measure = () => {
+      if (!overlays) { onOverlayBand(0); return; }
+      const bottom = root.getBoundingClientRect().bottom;
+      const tops = [...root.querySelectorAll('[data-testid=hud-station-card], [data-testid=hud-kpis]')].map((e) => e.getBoundingClientRect().top);
+      onOverlayBand(tops.length ? Math.round(bottom - Math.min(...tops)) : 0);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(root);
+    root.querySelectorAll(':scope > *').forEach((e) => ro.observe(e));
+    return () => ro.disconnect();
+  }, [overlays, onOverlayBand]);
   const station = stationMeta(activeStation);
   const envData = sensorData?.lab || {};
   const genData = sensorData?.generator || {};
@@ -227,8 +252,15 @@ export default function OverviewHUD({
 
   return (
     <Box
+      ref={rootRef}
       className="overview-hud"
+      // Re-scopes the theme variables: dark over the scene, the active scheme below it.
+      data-color-scheme={scheme}
       sx={{
+        colorScheme: scheme,
+        color: 'text.primary',
+        bgcolor: { xs: 'background.default', lg: 'transparent' },
+        flex: { xs: 1, lg: 'none' },
         position: { xs: 'relative', lg: 'absolute' },
         inset: { lg: 0 },
         zIndex: 40,
@@ -258,7 +290,7 @@ export default function OverviewHUD({
 
       {/* ── Station card ─────────────────────────────────── */}
       <Card component="section" aria-label={`${station.fullName}`} data-testid="hud-station-card" sx={(theme) => ({
-        p: { xs: 5, sm: 6 }, width: { lg: 420 }, flex: 'none', boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
+        p: { xs: 5, sm: 6, lg: 5 }, width: { lg: 400 }, flex: 'none', boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
         order: { xs: 2, lg: 0 },
       })}>
         <Typography variant="overline" component="p" sx={{ color: 'text.secondary' }}>Station</Typography>
