@@ -157,8 +157,7 @@ export class SceneEngine {
     this.stationId = id;
     this.buildWorld(id);
     this.continent?.setSelected(id);
-    if (this.view === 'antarctica') this.useView('antarctica');
-    else this.goHome();
+    this.goHome();   // a station switch always lands in that station, as the fly-over does
     this.afterStationChange();
     if (transition === 'crossfade' && from) { this.container.dataset.transition = 'crossfade'; this.fadeOut(200); }
   }
@@ -561,8 +560,8 @@ export class SceneEngine {
     if (!this.visible || document.hidden) { this.running = false; return; }
     if (this.flight) this.advanceFlight(now);
     const moved = this.flight ? true : this.controls.update();
-    // When only the snow moves, 30 fps is plenty: skip alternate frames.
-    const minInterval = moved || this.needsFrame ? 0 : 30;
+    // When only the snow moves, 30 fps is plenty (4–5 fps on a struggling device, see trackPerformance).
+    const minInterval = moved || this.needsFrame ? 0 : (this.idleInterval || 30);
     if (now - this.last >= minInterval) {
       this.time += this.reducedMotion ? 0 : dt;
       this.last = now;
@@ -593,15 +592,23 @@ export class SceneEngine {
     this.cb.onPins?.(out);
   }
 
-  /** Downgrade to the low tier if frames are slow (after a short warm-up). */
+  /**
+   * Adapt to the device, judged every ~1.5 s of drawing: slow frames on the high tier drop to
+   * the low tier; very slow frames on the low tier also slow the snow down to ~5 fps, so the
+   * page (telemetry, alerts, input) keeps the main thread.
+   */
   trackPerformance(dt) {
-    if (this.tierName === 'low' || this.reducedMotion || this.flight) return;
+    if (this.reducedMotion || this.flight) return;
     this.frameTimes.push(dt * 1000);
-    if (this.frameTimes.length < 90) return;
-    const recent = this.frameTimes.slice(-60);
-    const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
-    if (this.frameTimes.length > 200) this.frameTimes = [];
-    if (avg > 40) this.setTier('low');
+    const total = this.frameTimes.reduce((a, b) => a + b, 0);
+    if (total < 1500 || this.frameTimes.length < 8) return;
+    const avg = total / this.frameTimes.length;
+    this.frameTimes = [];
+    if (this.tierName === 'high' && avg > 55) this.setTier('low');   // under ~18 fps
+    else if (this.tierName === 'low' && avg > 120 && this.idleInterval !== 200) {   // under ~8 fps
+      this.idleInterval = 200;
+      this.container.dataset.quality = 'low-slow';
+    }
   }
 
   setTier(name) {
