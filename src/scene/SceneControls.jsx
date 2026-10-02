@@ -20,7 +20,7 @@ const panelSx = (t) => ({
 
 export default function SceneControls({
   view, onViewChange, antarcticaEnabled, zones, selectedBuilding, onSelectBuilding,
-  summary, environment, stationName, aboutLines,
+  summary, environment, stationName, aboutLines, pins = [], onPinSelect, flying,
 }) {
   const [open, setOpen] = useState(null);   // 'buildings' | 'about' | null
   const listId = useId(); const aboutId = useId();
@@ -99,6 +99,23 @@ export default function SceneControls({
           </Paper>
         )}
       </Box>
+
+      {view === 'antarctica' && !flying && pins.map((p) => p.pos && (
+        <ButtonBase key={p.id} data-testid={`scene-pin-${p.id}`} aria-pressed={p.selected}
+          aria-label={p.selected ? `${p.name}, selected station: show the station` : `Fly to ${p.name}`}
+          onClick={() => onPinSelect(p.id)}
+          sx={(t) => ({
+            ...panelSx(t), position: 'absolute', left: 0, top: 0, pointerEvents: 'auto',
+            // Above the pin head; flipped below it when that would leave the scene's top edge.
+            transform: `translate(${Math.round(p.pos[0])}px, ${Math.round(p.pos[1])}px) translate(-50%, ${p.pos[1] < 96 ? '14px' : 'calc(-100% - 6px)'})`,
+            px: 2, py: 1, gap: 1.5, display: 'flex', alignItems: 'baseline', whiteSpace: 'nowrap',
+            borderColor: p.selected ? t.vars.palette.primary.main : t.vars.palette.divider,
+            '&:hover, &.Mui-focusVisible': { bgcolor: t.vars.palette.aurora.surfaceRaised },
+          })}>
+          <Typography component="span" sx={{ fontSize: 13, fontWeight: 600 }}>{p.name}</Typography>
+          <Typography component="span" sx={{ display: { xs: 'none', sm: 'inline' }, fontSize: 12, color: 'text.secondary', fontFamily: '"IBM Plex Mono", monospace' }}>{p.coords}</Typography>
+        </ButtonBase>
+      ))}
 
       <Box sx={srOnly} aria-live="polite" data-testid="scene-live-summary">{summary}</Box>
       <Box sx={srOnly} data-testid="scene-environment">{environment}</Box>

@@ -11,7 +11,7 @@
    ═══════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 import { makeNoise, padWeight, smoothstep } from '../noise';
-import { corrugatedTexture, flagTexture, standard, tanPanelTexture } from '../materials';
+import { corrugatedTexture, flagTexture, srgb, standard, tanPanelTexture } from '../materials';
 import { Batcher, commonMaterials, container, latticeMast, makeZone, pipeline, tankFarm } from '../builders';
 
 const LEGS = 1.8;
@@ -177,7 +177,9 @@ function build(group) {
 
   b.build(group);
 
-  return [
+  // The main building is occupied all year: its windows are lit after dark.
+  const night = [{ mat: mats.glass, color: srgb('#FFD39A'), intensity: 1.6 }];
+  const zones = [
     makeZone('livingQuarters', { box: { x: 0, y: LEGS, z: -12, w: 60.8, h: H + 0.8, d: 11.8 }, ring: { x: 0, z: -12, y: 0, r: 31 } }),
     makeZone('heating', { box: { x: -24.5, y: LEGS, z: 9.3, w: 11.8, h: H + 0.8, d: 24.4 }, ring: { x: -24.5, z: 9, y: 0, r: 15 } }),
     makeZone('heatingB', { box: { x: 24.5, y: LEGS, z: 9.3, w: 11.8, h: H + 0.8, d: 24.4 }, ring: { x: 24.5, z: 9, y: 0, r: 15 } }),
@@ -187,4 +189,5 @@ function build(group) {
     makeZone('waterTank', { box: { x: -74, y: 1, z: 40, w: 5.6, h: 3.8, d: 5.2 }, ring: { x: -74, z: 40, y: 1, r: 6 } }),
     makeZone('commsMast', { box: { x: 30, y: 0.5, z: -50, w: 4, h: 23, d: 4 }, ring: { x: 30, z: -50, y: 0.5, r: 5 } }),
   ];
+  return { zones, night };
 }

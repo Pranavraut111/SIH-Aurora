@@ -65,16 +65,39 @@ export function createAtmosphere(scene, { shadowSize, shadowExtent }) {
   scene.add(sun);
   scene.add(sun.target);
   // A faint, fixed cool fill so the station stays legible in polar night (moon/skylight stand-in).
-  const fill = new THREE.DirectionalLight(srgb('#8FA6C8'), 0.3);
+  // Cool "moonlight" fill: dim by day, the main light at night so terrain and buildings stay legible.
+  const fill = new THREE.DirectionalLight(srgb('#9DB4D8'), 0.3);
   fill.position.set(-300, 500, 200);
   scene.add(fill);
+  scene.add(fill.target);
+
+  // Stars: a cheap point dome, visible only once the sky is dark.
+  const starGeo = new THREE.BufferGeometry();
+  const sp = new Float32Array(900 * 3);
+  let seed = 17;
+  const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 900; i += 1) {
+    const u = r(); const v = 0.06 + 0.94 * r();
+    const th = u * Math.PI * 2; const y = v; const rr = Math.sqrt(1 - y * y);
+    sp.set([Math.cos(th) * rr, y, Math.sin(th) * rr], i * 3);
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+  const starMat = new THREE.PointsMaterial({ color: 0xdfe8f5, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  const stars = new THREE.Points(starGeo, starMat);
+  stars.frustumCulled = false;
+  stars.renderOrder = -9;
+  scene.add(stars);
 
   scene.fog = new THREE.Fog(0xffffff, 200, 2400);
 
   const sunDir = new THREE.Vector3(0, 1, 0);
 
-  /** Apply the sun position and drift; `focus` = the point the shadow camera centres on. */
-  function update({ elevation, azimuth }, drift, focus) {
+  /**
+   * Apply the sun position and drift; `focus` = the point the shadow camera centres on.
+   * The moonlight fill comes from high behind the viewer (`camPos`), so the faces the
+   * operator looks at stay legible at night.
+   */
+  function update({ elevation, azimuth }, drift, focus, camPos) {
     const a = atmosphere(elevation);
     sunDir.copy(sunVector(Math.max(elevation, 1.5), azimuth));
     sun.position.copy(focus).addScaledVector(sunDir, 900);
@@ -82,6 +105,13 @@ export function createAtmosphere(scene, { shadowSize, shadowExtent }) {
     sun.intensity = a.sunIntensity;
     sun.color.copy(srgb(a.sunColor));
     sun.castShadow = a.sunIntensity > 0.05;
+    fill.intensity = a.moon;
+    if (camPos) {
+      const back = camPos.clone().sub(focus).setY(0).normalize();
+      fill.position.copy(focus).addScaledVector(back, 300).add(new THREE.Vector3(0, 520, 0));
+      fill.target.position.copy(focus);
+    }
+    starMat.opacity = Math.max(0, Math.min(0.8, (-elevation - 6) / 8)) * (1 - Math.min(1, drift * 1.5));
     hemi.color.copy(srgb(a.hemiSky));
     hemi.groundColor.copy(srgb(a.hemiGround));
     hemi.intensity = a.hemiIntensity;
@@ -92,14 +122,14 @@ export function createAtmosphere(scene, { shadowSize, shadowExtent }) {
     skyMat.uniforms.uHaze.value = Math.min(0.85, drift * 0.9);
     // Haze: fog colour = the horizon, so distant terrain dissolves into the sky.
     scene.fog.color.copy(srgb(a.horizon));
-    scene.fog.near = 120;
+    scene.fog.near = 120 - 100 * Math.min(1, drift);
     scene.fog.far = visibilityMetres(drift);
     return { exposure: a.exposure, sunIntensity: a.sunIntensity, sunDir };
   }
 
   function dispose() {
-    sky.geometry.dispose(); skyMat.dispose();
+    sky.geometry.dispose(); skyMat.dispose(); starGeo.dispose(); starMat.dispose();
   }
 
-  return { update, sky, sun, dispose, sunDir };
+  return { update, sky, sun, stars, dispose, sunDir };
 }

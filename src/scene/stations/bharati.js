@@ -12,7 +12,7 @@
    ═══════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 import { makeNoise, padWeight, smoothstep } from '../noise';
-import { aluminiumSkinTexture, glazingTexture, helipadTexture, seaIceMaterial, seaMaterial, standard } from '../materials';
+import { aluminiumSkinTexture, glazingTexture, helipadTexture, seaIceMaterial, seaMaterial, srgb, standard } from '../materials';
 import { Batcher, commonMaterials, container, latticeMast, makeZone, pipeline, tankFarm } from '../builders';
 
 const PAD_Y = 35;          // station elevation, station_config.json (35 m)
@@ -112,7 +112,7 @@ function build(group) {
   const glassTex = glazingTexture(7, 3);
   glassTex.repeat.set(1 / W, 1 / (HB - 1.2));
   glassTex.offset.set(0.5, -0.1);
-  const glass = standard('#FFFFFF', { map: glassTex, roughness: 0.12, metalness: 0.55 });
+  const glass = standard('#FFFFFF', { map: glassTex, emissiveMap: glassTex, roughness: 0.12, metalness: 0.55 });
   const profile = skinProfile();
 
   const body = new THREE.ExtrudeGeometry(profile, { depth: L, bevelEnabled: false });
@@ -203,7 +203,12 @@ function build(group) {
 
   // ── Zones (plan §2.3): sections of the one building, plus outbuildings ──
   const lo = y0 + LEGS; const mid = y0 + LEGS + 3.6; const top = y0 + LEGS + HB;
-  return [
+  // Occupied all year: windows and the glazed ends are lit after dark.
+  const night = [
+    { mat: win, color: srgb('#FFD39A'), intensity: 1.6 },
+    { mat: glass, color: srgb('#FFCE8F'), intensity: 0.9 },
+  ];
+  const zones = [
     makeZone('generator', { box: { x: 0, y: lo, z: 17.5, w: W + 0.6, h: 3.6, d: 19 }, ring: { x: 0, z: 17.5, y: y0, r: 15 } }),
     makeZone('heatingB', { box: { x: 0, y: lo, z: 0, w: W + 0.6, h: 3.6, d: 16 }, ring: { x: 0, z: 0, y: y0, r: 13 } }),
     makeZone('lab', { box: { x: 0, y: lo, z: -18, w: W + 0.6, h: 3.6, d: 20 }, ring: { x: 0, z: -18, y: y0, r: 15 } }),
@@ -213,4 +218,5 @@ function build(group) {
     makeZone('waterTank', { box: { x: 36, y: 6, z: -196, w: 6.5, h: 4.2, d: 6 }, ring: { x: 36, z: -196, y: 6, r: 7 } }),
     makeZone('commsMast', { box: { x: 34, y: y0, z: 10, w: 5, h: 23, d: 5 }, ring: { x: 34, z: 10, y: y0, r: 5.5 } }),
   ];
+  return { zones, night };
 }

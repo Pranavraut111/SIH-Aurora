@@ -619,6 +619,9 @@ class ReplayClock(BaseModel):
     speedFactor: float | None = Field(None, allow_inf_nan=False, gt=0)
     loop: int | None = None
     utcOffsetSource: str | None = Field(None, max_length=40)
+    # ERA5 10 m wind direction at this instant (meteorological: degrees the wind blows FROM).
+    # REANALYSIS; the 3D overview points its blowing snow along it.
+    windFromDeg: float | None = Field(None, ge=0, le=360, allow_inf_nan=False)
 
 
 class SensorBatch(BaseModel):

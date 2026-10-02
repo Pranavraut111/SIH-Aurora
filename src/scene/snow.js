@@ -66,11 +66,13 @@ export function createDrift({ heightAt, center, count }) {
         vec3 toCam = normalize(cameraPosition - center);
         vec3 side = normalize(cross(axis, toCam));
         float len = 0.8 + 2.4 * uIntensity * (0.5 + fract(aRand * 3.1));
-        vec3 p = center + axis * position.y * len * 0.5 + side * position.x * 0.05;
+        float dist = length(cameraPosition - center);
+        float width = 0.05 + dist * 0.0022;   // keep about a pixel wide at any distance
+        vec3 p = center + axis * position.y * (len + dist * 0.012) * 0.5 + side * position.x * width;
         vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mvPosition;
         float visible = step(fract(aRand * 5.7), uIntensity * 1.1);
-        vAlpha = sin(phase * 3.14159) * visible * (0.25 + 0.35 * uIntensity);
+        vAlpha = sin(phase * 3.14159) * visible * (0.22 + 0.4 * uIntensity);
         #include <fog_vertex>
       }`,
     fragmentShader: /* glsl */`

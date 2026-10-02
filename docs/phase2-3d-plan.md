@@ -395,3 +395,58 @@ Data:
   https://www.pgc.umn.edu/guides/user-services/acknowledgement-policy/
 - BedMachine Antarctica v3, Morlighem 2022, https://doi.org/10.5067/FPSU0V1MWUB6
   (https://nsidc.org/data/nsidc-0756/versions/3)
+
+---
+
+## 15. Demo-first build (2026-10-02) — what shipped, what is deferred
+
+Built on `phase2-3d` in one pass, in the priority order of the brief. Checkpoint screenshots:
+[`docs/phase2/checkpoint/`](phase2/checkpoint/); final: [`docs/phase2/final/`](phase2/final/).
+
+**Shipped**
+
+- **Two distinct station scenes** (`src/scene/stations/`): Bharati's container-block building in a
+  chamfered aluminium skin on columns, 4.90 m panel rhythm, 15° inclined glazed ends, roof plant,
+  kerosene tank farm, sea-water pump house and pipeline, mast, helipad at the Wikipedia heliport
+  offset; rocky Larsemann knolls with September fast ice to the north. Maitri's tan U on telescopic
+  legs with the flag on the entrance face, power module, containerised labs and camp, fuel farm,
+  lake pump house; rocky Schirmacher Oasis with frozen lakes and the ice sheet rising to the south.
+- **Procedural terrain + materials**: seeded noise heightfields (inner 900 m fine grid + 7 km
+  outer grid), levelled pads, a terrain shader that splits rock and snow by slope and noise with
+  sastrugi normals and sparse sun glints; generated canvas textures only (no image files).
+- **Zones** (`station_config.json` → `scene.zones`, validated in Python): the 8 subsystems map to
+  pickable zones with a physical description, source and confidence. Alerts: steady tint + ground
+  ring in the v2 status tokens; selection in the accent; no pulse or blink.
+- **Antarctica view + fly-over** (`continent.js`, `flyover.js`): extruded Natural Earth outline,
+  graticule, both stations pinned at their coordinates; ≈ 4 s fly-over (rise → glide along the arc
+  → descend), cancellable (pointer, wheel, Esc); 200 ms crossfade under reduced motion and on the
+  low tier. Pins are DOM buttons; `onStationChange` → App's `handleStationChange`.
+- **Data-driven atmosphere**: sun position and day/twilight/night from the replay clock
+  (`solarPosition` in `lib/solar.js`); blowing snow from live wind speed (none < 15 km/h, haze toward
+  ≈ 300 m visibility above 55 km/h), smoothed; direction from the **ERA5 10 m wind direction of the
+  replay instant**, added to the telemetry replay clock as `replay.windFromDeg` (REANALYSIS; falls
+  back to an "assumed" prevailing direction). Night: deep-blue sky, stars, a cool moonlight fill
+  from behind the viewer, lit windows on the occupied buildings. Decorative snowfall is labelled as
+  such in "About this view".
+- **Accessibility**: Station / Antarctica toggle, Buildings list with the level as text, pin
+  buttons, `A` / `[` / `]` / `Esc`, a polite live summary and a non-live environment description;
+  axe 0 violations (station, list, about, Antarctica; desktop and phone).
+- **Performance**: render on demand (30 fps cap when only snow moves), paused when hidden or
+  off-screen, high/low tier with automatic downgrade; the other station and the continent are built
+  in idle time.
+
+**Budgets (measured on the production build)**: startup JS **488 kB** raw (< 500; nothing new on
+the startup path); 3D chunk **600 kB** raw / 157 kB gzip (≤ 650); assets: none (all generated).
+
+**Deferred (scope cuts for the demo)**
+
+- three.js upgrade (stays on r128).
+- REMA / SCAR ADD / Sentinel-2 pipelines and the licence register: terrain is procedural, the
+  continent is a uniform extrusion of the Natural Earth outline.
+- CSP unchanged; no Wasm decoders, no external assets.
+- Wind direction is linearly interpolated between ERA5 hours in `weather_data.py`; across north
+  (350° → 10°) that briefly gives a wrong direction. Fix: circular interpolation.
+- Screenshots were rendered with SwiftShader; desktop shots may show the low tier after the
+  automatic downgrade. Day/twilight/night and calm shots pin the scene's clock and wind through a
+  development-only hook (`setDebugEnvironment`, reachable only in dev builds); the blizzard,
+  alert and `live-like-*` shots use real telemetry (fault injection / the current replay time).

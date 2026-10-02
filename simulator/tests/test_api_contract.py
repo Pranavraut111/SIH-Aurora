@@ -225,11 +225,12 @@ def test_replay_clock_is_published_and_kept_as_history(client):
     for i, replay_ms in enumerate((1_756_684_800_000, 1_756_685_040_000)):     # 4 replay-min apart
         batch = {"stationId": "bharati", "timestamp": now + i * 2000, "readings": readings,
                  "replay": {"timeMs": replay_ms, "local": "2025-09-01T05:00:00", "speedFactor": 120,
-                            "loop": 0, "utcOffsetSource": "open-meteo"}}
+                            "loop": 0, "utcOffsetSource": "open-meteo", "windFromDeg": 112.0}}
         assert client.post("/api/sensors/batch", json=batch).status_code == 200
         ub.tick_station("bharati")
     snap = _ok(client, "/api/station/bharati/state")
     assert snap["replay"]["timeMs"] == 1_756_685_040_000
+    assert snap["replay"]["windFromDeg"] == 112.0
     body = _ok(client, "/api/history?stationId=bharati&keys=replay.timeMs,generator.gen_power")
     assert [v for _, v in body["series"]["replay.timeMs"]][-2:] == [1_756_684_800_000, 1_756_685_040_000]
     # every replay point shares its wall-clock timestamp with a reading
@@ -237,6 +238,9 @@ def test_replay_clock_is_published_and_kept_as_history(client):
     assert all(t in power_ts for t, _ in body["series"]["replay.timeMs"])
     bad = {"stationId": "bharati", "timestamp": now, "readings": readings, "replay": {"timeMs": 1, "x": 2}}
     assert client.post("/api/sensors/batch", json=bad).status_code == 422
+    bad_dir = {"stationId": "bharati", "timestamp": now, "readings": readings,
+               "replay": {"timeMs": 1, "windFromDeg": 400}}
+    assert client.post("/api/sensors/batch", json=bad_dir).status_code == 422
 
 
 def test_history_unknown_key_is_empty_and_bad_keys_are_422(client):

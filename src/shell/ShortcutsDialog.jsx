@@ -15,6 +15,9 @@ export default function ShortcutsDialog({ open, onClose, onStartTour }) {
     [['Esc'], 'Close a dialog, drawer or menu'],
     ...Object.values(MODULES).map((m) => [['g', m.key], `Go to ${m.label}`]),
     [['g', NAV_ACTIONS.twinInspector.key], 'Open the Twin inspector'],
+    [['A'], 'Overview 3D: Station / Antarctica view'],
+    [['['], 'Overview 3D: previous station'],
+    [[']'], 'Overview 3D: next station'],
   ];
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth aria-labelledby="shortcuts-title" slotProps={{ paper: { 'data-testid': 'shortcuts-dialog' } }}>

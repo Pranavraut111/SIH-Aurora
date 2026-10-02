@@ -10,6 +10,9 @@ import { solarPosition } from '../lib/solar';
 import { useNow } from '../hooks/useNow';
 import { STATUS_LABEL } from '../ui/statusLabels';
 import { detectTier, levelOf, phaseOf } from './bindings';
+import { transitionFor } from './flyover';
+import { isTypingTarget } from '../shell/useShortcuts';
+import { STATION_IDS, formatCoords } from '../data/stationConfig';
 import { SceneEngine } from './engine';
 import SceneControls from './SceneControls';
 
@@ -39,7 +42,7 @@ function initialTier() {
 }
 
 export default function StationScene3D({
-  activeStation = 'maitri', alertStates = {}, selectedBuilding, onBuildingClick, onBuildingHover,
+  activeStation = 'maitri', alertStates = {}, selectedBuilding, onBuildingClick, onBuildingHover, onStationChange,
   sensors, replay, avoidBottom = 0, onFatal,
 }) {
   const containerRef = useRef(null);
@@ -49,7 +52,12 @@ export default function StationScene3D({
   const reducedMotion = usePrefersReducedMotion();
   const [hovered, setHovered] = useState(null);
   const [ready, setReady] = useState(false);
-  useEffect(() => { cbRef.current = { onBuildingClick, onBuildingHover, onFatal }; });
+  const [view, setView] = useState('station');
+  const [flyingTo, setFlyingTo] = useState(null);
+  const [pinPos, setPinPos] = useState({});
+  const stationRef = useRef(activeStation);
+  useEffect(() => { stationRef.current = activeStation; });
+  useEffect(() => { cbRef.current = { onBuildingClick, onBuildingHover, onFatal, onStationChange }; });
   const wallMs = useNow(60_000);   // for the description when there is no replay clock
 
   // Create the engine once; a failure here is the "3D renderer failed" path.
@@ -79,6 +87,16 @@ export default function StationScene3D({
             el.style.transform = `translate(${Math.round(pt[0])}px, ${Math.round(pt[1])}px) translate(-50%, calc(-100% - 10px))`;
           },
           onFatal: (err) => cbRef.current.onFatal?.(err),
+          onView: (v) => setView(v),
+          onFlight: ({ to, flying }) => setFlyingTo(flying ? to : null),
+          onPins: (pins) => setPinPos((prev) => {
+            const same = Object.keys(pins).every((k) => prev[k] && pins[k] && Math.abs(prev[k][0] - pins[k][0]) < 0.5 && Math.abs(prev[k][1] - pins[k][1]) < 0.5);
+            return same && Object.keys(prev).length === Object.keys(pins).length ? prev : pins;
+          }),
+          onStationPick: (id) => {
+            if (id === stationRef.current) engineRef.current?.setView('station');
+            else cbRef.current.onStationChange?.(id);
+          },
         },
       });
       engine.container.dataset.quality = engine.tierName;
@@ -101,13 +119,14 @@ export default function StationScene3D({
     };
   }, []);
 
-  // Station: first one without a transition, later switches with a crossfade.
+  // Station: the first one without a transition; later switches fly over the continent
+  // (a 200 ms crossfade under reduced motion or on the low quality tier).
   const shownStation = useRef(null);
   useEffect(() => {
     const e = engineRef.current;
     if (!e || !ready) return;
     try {
-      e.setStation(activeStation, { transition: shownStation.current ? 'crossfade' : 'none' });
+      e.setStation(activeStation, { transition: transitionFor({ reducedMotion: e.reducedMotion, tier: e.tierName, first: !shownStation.current }) });
       shownStation.current = activeStation;
     } catch (err) {
       console.error('[StationScene] building the station failed — switching to 2D overview', err);
@@ -120,9 +139,33 @@ export default function StationScene3D({
   useEffect(() => { engineRef.current?.setAvoidBottom(avoidBottom); }, [avoidBottom, ready]);
   useEffect(() => { if (engineRef.current) engineRef.current.reducedMotion = reducedMotion; }, [reducedMotion]);
 
+  // Keyboard: A toggles the Antarctica view, [ and ] switch station, Esc cancels a flight.
+  // Keys another shortcut already used (e.g. "g a") arrive with defaultPrevented.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+      if (document.body.classList.contains('driver-active')) return;
+      const eng = engineRef.current;
+      if (!eng) return;
+      if (e.key === 'Escape' && eng.flight) { eng.cancelFlight(); return; }
+      if (e.key === 'a' || e.key === 'A') {
+        if (document.querySelector('[role="dialog"]')) return;
+        eng.setView(eng.view === 'antarctica' ? 'station' : 'antarctica');
+        return;
+      }
+      if (e.key === '[' || e.key === ']') {
+        const i = STATION_IDS.indexOf(stationRef.current);
+        const next = STATION_IDS[(i + (e.key === ']' ? 1 : -1) + STATION_IDS.length) % STATION_IDS.length];
+        cbRef.current.onStationChange?.(next);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const lab = sensors?.lab || {};
   const windKmh = num(lab.env_wind);
-  const windFromDeg = num(lab.env_wind_dir);
+  const windFromDeg = num(replay?.windFromDeg);   // ERA5 10 m direction of the replay instant (REANALYSIS)
   const replayMs = num(replay?.timeMs);
   useEffect(() => { engineRef.current?.setEnvironment({ windKmh, windFromDeg, replayMs }); }, [windKmh, windFromDeg, replayMs, ready]);
 
@@ -136,12 +179,14 @@ export default function StationScene3D({
   const summary = useMemo(() => {
     const crit = zones.filter((z) => z.level === 'critical');
     const warn = zones.filter((z) => z.level === 'warning');
+    if (flyingTo) return `Flying to ${stationMeta(flyingTo).name}.`;
+    if (view === 'antarctica') return `Antarctica view. ${meta.name} selected; ${STATION_IDS.filter((s) => s !== activeStation).map((s) => stationMeta(s).name).join(', ')} available.`;
     const parts = [`${meta.name} station, schematic layout.`];
     if (crit.length) parts.push(`${crit.length} critical: ${crit.map((z) => z.name).join(', ')}.`);
     if (warn.length) parts.push(`${warn.length} warning: ${warn.map((z) => z.name).join(', ')}.`);
     parts.push(`${zones.length - crit.length - warn.length} normal.`);
     return parts.join(' ');
-  }, [zones, meta.name]);
+  }, [zones, meta.name, flyingTo, view, activeStation]);
 
   // Environment changes every tick, so it is a description, not a live region.
   const hourMs = replayMs != null ? Math.floor(replayMs / 3_600_000) * 3_600_000 : null;
@@ -162,7 +207,7 @@ export default function StationScene3D({
     'Terrain is procedural, shaped to the site’s character, not surveyed elevation data.',
     'Sun and daylight: computed for the station’s coordinates at the replay time (MODEL-DERIVED).',
     windFromDeg != null
-      ? 'Blowing snow follows the reported wind speed and direction.'
+      ? 'Blowing snow follows the reported wind speed and the ERA5 wind direction of the replay instant (REANALYSIS).'
       : 'Blowing snow follows the reported wind speed; its direction is the station’s assumed prevailing wind.',
     'The light falling snow is decorative, not data.',
     'Colour on a building shows its alert level; the Buildings list gives the same in text.',
@@ -171,13 +216,16 @@ export default function StationScene3D({
   const hoverZone = zones.find((z) => z.id === hovered);
 
   return (
-    <div ref={containerRef} className="station-scene-3d" data-testid="station-scene-3d" data-view="station"
+    <div ref={containerRef} className="station-scene-3d" data-testid="station-scene-3d"
       style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       {ready && (
         <SceneControls
-          view="station"
-          antarcticaEnabled={false}
-          onViewChange={() => {}}
+          view={flyingTo ? 'station' : view}
+          antarcticaEnabled
+          onViewChange={(v) => engineRef.current?.setView(v)}
+          pins={STATION_IDS.map((sid) => ({ id: sid, name: stationMeta(sid).name, coords: formatCoords(sid), pos: pinPos[sid], selected: sid === activeStation }))}
+          onPinSelect={(sid) => (sid === activeStation ? engineRef.current?.setView('station') : onStationChange?.(sid))}
+          flying={!!flyingTo}
           zones={zones}
           selectedBuilding={selectedBuilding}
           onSelectBuilding={(id) => onBuildingClick?.(id)}

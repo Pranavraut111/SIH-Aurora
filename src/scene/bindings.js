@@ -50,15 +50,21 @@ export function driftIntensity(windKmh) {
   return Math.min(1, ((windKmh - 15) / 55) ** 1.3);
 }
 
-/** Visibility (fog far distance, metres) from drift intensity: about 2.4 km calm, ≈ 350 m in a blizzard. */
+/** Visibility (fog far distance, metres) from drift intensity: about 2.4 km calm, ≈ 300 m in a blizzard. */
 export function visibilityMetres(intensity) {
-  return 2400 - 2050 * Math.min(1, Math.max(0, intensity)) ** 1.5;
+  return 2400 - 2100 * Math.min(1, Math.max(0, intensity));
 }
 
 /** Exponential smoothing toward `target` with time constant `tau` seconds. */
 export function smoothToward(current, target, dt, tau = 8) {
   if (!Number.isFinite(current)) return target;
   return current + (target - current) * (1 - Math.exp(-dt / tau));
+}
+
+/** 0 in daylight → 1 once the sun is 6° below the horizon (end of civil twilight): lit windows, moonlight. */
+export function nightFactor(elevationDeg) {
+  if (!Number.isFinite(elevationDeg)) return 0;
+  return Math.max(0, Math.min(1, (-elevationDeg - 0.5) / 5.5));
 }
 
 /** Day state from the sun's elevation (degrees): day, twilight (civil + nautical) or night. */
@@ -88,11 +94,12 @@ export function atmosphere(elevationDeg) {
   return {
     sunIntensity: e <= -1 ? 0 : lerp(0.35, 2.4, clamp01((e + 1) / 20)),
     sunColor: mixHex('#FFF4E6', '#FFC995', low),
-    hemiIntensity: lerp(0.3, 0.42, dusk) + 0.3 * day,
+    hemiIntensity: lerp(0.4, 0.45, dusk) + 0.3 * day,
     hemiSky: mixHex('#4A5D80', '#BBD0E8', Math.max(day, dusk * 0.55)),
     hemiGround: mixHex('#0E1116', '#3A4048', dusk),
-    zenith: mixHex(mixHex('#070B13', '#1B2A44', dusk), '#4C79AE', day),
-    horizon: mixHex(mixHex('#121A28', '#6B7F9C', dusk), '#D9E2EA', day),
+    zenith: mixHex(mixHex('#081127', '#1B2A44', dusk), '#4C79AE', day),
+    horizon: mixHex(mixHex('#22324E', '#6B7F9C', dusk), '#D9E2EA', day),
+    moon: lerp(0.62, 0.12, Math.max(day, dusk)),
     glow: mixHex('#000000', '#E8A577', dusk * low * (e < 8 ? 1 : 0.4)),
     exposure: lerp(1.5, 0.9, Math.max(day, dusk * 0.4)),
   };
