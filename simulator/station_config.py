@@ -57,7 +57,8 @@ def _validate(cfg: dict) -> None:
             if set(zones) != set(ids):
                 raise StationConfigError(f"{sid}: scene.zones must cover exactly the building ids")
             for zid, zone in zones.items():
-                if not zone.get("physical") or not zone.get("source") or zone.get("confidence") not in {"high", "medium", "low"}:
+                complete = zone.get("physical") and zone.get("source")
+                if not complete or zone.get("confidence") not in {"high", "medium", "low"}:
                     raise StationConfigError(f"{sid}: scene.zones.{zid} needs physical, source and confidence")
         meta = st.get("metadata", {})
         for key in ("name", "fullName", "latitude", "longitude", "elevation_m", "commissionedYear"):

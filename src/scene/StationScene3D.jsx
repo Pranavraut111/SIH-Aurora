@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildingList, sceneInfo, stationMeta } from '../data/stationConfig';
 import { solarPosition } from '../lib/solar';
+import { useNow } from '../hooks/useNow';
 import { STATUS_LABEL } from '../ui/statusLabels';
 import { detectTier, levelOf, phaseOf } from './bindings';
 import { SceneEngine } from './engine';
@@ -49,12 +50,7 @@ export default function StationScene3D({
   const [hovered, setHovered] = useState(null);
   const [ready, setReady] = useState(false);
   useEffect(() => { cbRef.current = { onBuildingClick, onBuildingHover, onFatal }; });
-  // Wall clock for the description when there is no replay clock (refreshed each minute).
-  const [wallMs, setWallMs] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setWallMs(Date.now()), 60_000);
-    return () => clearInterval(t);
-  }, []);
+  const wallMs = useNow(60_000);   // for the description when there is no replay clock
 
   // Create the engine once; a failure here is the "3D renderer failed" path.
   useEffect(() => {
