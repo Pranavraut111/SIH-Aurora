@@ -29,14 +29,14 @@ const DemoControl = lazy(() => import('./components/DemoControl'));
 const StationScene = lazy(() => import('./components/StationScene'));
 const BuildingDrawer = lazy(() => import('./modules/infrastructure/BuildingDrawer'));
 const EventTimeline = lazy(() => import('./components/EventTimeline'));
-const TwinInspector = lazy(() => import('./components/TwinInspector'));
-const AiPanel = lazy(() => import('./components/AiPanel'));
+const TwinInspectorDialog = lazy(() => import('./modules/twin/TwinInspectorDialog'));
+const AiModule = lazy(() => import('./modules/ai/AiModule'));
 const WeatherModule = lazy(() => import('./modules/weather/WeatherModule'));
-const WhatIfSimulationPanel = lazy(() => import('./components/WhatIfSimulationPanel'));
-const LogisticsPanel = lazy(() => import('./components/LogisticsPanel'));
-const RemoteControlPanel = lazy(() => import('./components/RemoteControlPanel'));
+const WhatIfModule = lazy(() => import('./modules/whatif/WhatIfModule'));
+const LogisticsModule = lazy(() => import('./modules/logistics/LogisticsModule'));
+const RemoteModule = lazy(() => import('./modules/remote/RemoteModule'));
 const AdminPanel = lazy(() => import('./components/AdminPanel'));
-const ReportPanel = lazy(() => import('./components/ReportPanel'));
+const ReportsModule = lazy(() => import('./modules/reports/ReportsModule'));
 const InfrastructureModule = lazy(() => import('./modules/infrastructure/InfrastructureModule'));
 const EnergyModule = lazy(() => import('./modules/energy/EnergyModule'));
 
@@ -184,23 +184,31 @@ export default function App() {
           />
         );
       case 'logistics':
-        return <LogisticsPanel activeStation={activeStation} sensorData={stationData.sensors} />;
+        return <LogisticsModule activeStation={activeStation} />;
       case 'simulation':
-        return <WhatIfSimulationPanel activeStation={activeStation} sensorData={stationData.sensors} />;
+        return (
+          <WhatIfModule activeStation={activeStation} sensorData={stationData.sensors}
+            telemetrySource={telemetryBadge} updatedAt={updatedAt} />
+        );
       case 'reports':
-        return <ReportPanel activeStation={activeStation} sensorData={stationData.sensors} />;
+        return (
+          <ReportsModule activeStation={activeStation} sensorData={stationData.sensors}
+            provenance={stationData.provenance} telemetrySource={telemetryBadge} timestamp={stationData.timestamp} />
+        );
       case 'remote':
         return (
-          <RemoteControlPanel
+          <RemoteModule
             activeStation={activeStation}
-            sensorData={stationData.sensors}
+            activeAlerts={activeAlerts}
+            canAcknowledge={dataSource === 'websocket'}
             onAcknowledgeAlert={acknowledgeAlert}
+            updatedAt={updatedAt}
           />
         );
       case 'admin':
         return <AdminPanel activeStation={activeStation} />;
       case 'ai':
-        return <AiPanel activeStation={activeStation} />;
+        return <AiModule activeStation={activeStation} updatedAt={updatedAt} />;
       default:
         return null;
     }
@@ -220,7 +228,10 @@ export default function App() {
       </ErrorBoundary>
     );
     return migrated ? (
-      <div key={activeModule} className="module-content-scroll" data-testid="module-panel" data-module={activeModule}>
+      // Focusable so the page scrolls from the keyboard even when every control on it is
+      // disabled (signed out): axe scrollable-region-focusable.
+      <div key={activeModule} className="module-content-scroll" data-testid="module-panel" data-module={activeModule}
+        tabIndex={0} role="region" aria-label={MODULES[activeModule]?.title}>
         <div className="module-page">{page}</div>
       </div>
     ) : (
@@ -325,6 +336,16 @@ export default function App() {
         </ErrorBoundary>
       )}
 
+      {/* Twin inspector (design system) — mounted once first opened. */}
+      {showTwinInspector && (
+        <ErrorBoundary name="Twin inspector">
+          <Suspense fallback={null}>
+            <TwinInspectorDialog activeStation={activeStation} isOpen={showTwinInspector}
+              onClose={() => setShowTwinInspector(false)} replay={stationData.replay} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
       {/* ── Overlays (legacy styling until rollout 1B) ── */}
       <LegacySurface sx={{ display: 'contents' }}>
         <Suspense fallback={null}>
@@ -355,15 +376,6 @@ export default function App() {
 
           {showTimeline && (
             <EventTimeline events={eventTimeline} onClose={() => setShowTimeline(false)} />
-          )}
-
-          {/* Digital Twin Inspector Modal — mounted only once it is first opened. */}
-          {showTwinInspector && (
-            <TwinInspector
-              activeStation={activeStation}
-              isOpen={showTwinInspector}
-              onClose={() => setShowTwinInspector(false)}
-            />
           )}
 
           {mounted.demo && <DemoControl activeStation={activeStation} isOpen={showDemo} onClose={closeDemo} />}

@@ -90,3 +90,14 @@
     padding: 12px;
   }
 }
+
+/* ── Print: only the report document (Reports → Print / save as PDF) ── */
+@media print {
+  @page { margin: 14mm; }
+  html, body, #root, .aurora-app { height: auto !important; overflow: visible !important; background: #fff !important; }
+  .aurora-app { display: block !important; }
+  .topbar, .sidebar-nav, .no-print, [data-legacy-surface] { display: none !important; }
+  .app-layout-body, .main-stage, .module-content-scroll { display: block !important; overflow: visible !important; height: auto !important; }
+  .module-page { max-width: none !important; padding: 0 !important; }
+  .report-document { border: 0 !important; box-shadow: none !important; padding: 0 !important; max-width: none !important; }
+}

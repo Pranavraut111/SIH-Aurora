@@ -36,23 +36,23 @@ export const MODULES = {
     title: 'Energy grid', description: 'Diesel generation, fuel burn and the electrical and heating load it supplies.',
   },
   logistics: {
-    label: 'Logistics', section: 'operate', Icon: Inventory2Outlined,
+    label: 'Logistics', section: 'operate', Icon: Inventory2Outlined, migrated: true,
     title: 'Logistics and supplies', description: 'Operator-entered inventory ledger and supply autonomy.',
   },
   remote: {
-    label: 'Remote commands', section: 'operate', Icon: SettingsRemoteOutlined,
+    label: 'Remote commands', section: 'operate', Icon: SettingsRemoteOutlined, migrated: true,
     title: 'Remote commands', description: 'Simulated command dispatch and its audit log. Nothing reaches real equipment.',
   },
   simulation: {
-    label: 'What-if scenarios', section: 'analyse', Icon: TuneOutlined,
-    title: 'What-if scenarios', description: 'Run hypothetical hazards through the physics model.',
+    label: 'What-if scenarios', section: 'analyse', Icon: TuneOutlined, migrated: true,
+    title: 'What-if scenarios', description: 'Rule-based what-if: hypothetical hazards applied to the current snapshot.',
   },
   ai: {
-    label: 'AI diagnostics', section: 'analyse', Icon: InsightsOutlined,
+    label: 'AI diagnostics', section: 'analyse', Icon: InsightsOutlined, migrated: true,
     title: 'AI diagnostics', description: 'Physics-residual anomaly detection, decisions and forecasts.',
   },
   reports: {
-    label: 'Reports', section: 'analyse', Icon: DescriptionOutlined,
+    label: 'Reports', section: 'analyse', Icon: DescriptionOutlined, migrated: true,
     title: 'Station reports', description: 'Status report with print, CSV and JSON export.',
   },
   admin: {

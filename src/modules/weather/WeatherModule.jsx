@@ -27,12 +27,13 @@ import { stationMeta } from '../../data/stationConfig';
 import { formatDateTimeIST, formatNumber, formatShortDateTimeIST, formatValue, isNum } from '../../lib/format';
 import { fitDomain } from '../../lib/chartScale';
 import { centredAverage, formatSpan, onModelClock } from '../../lib/modelClock';
-import { frostbiteRisk, windChill } from '../../lib/windChill';
+import { FROSTBITE_SOURCE, frostbiteRisk, windChill } from '../../lib/windChill';
 import { useChartTheme } from '../../theme/chartTheme';
 import { ChartLegend, ChartTipBox } from '../../ui/ChartParts';
 import KpiCard from '../../ui/KpiCard';
 import PageHeader from '../../ui/PageHeader';
 import ProvenanceChip from '../../ui/Provenance';
+import ScrollX from '../../ui/ScrollX';
 import SectionCard from '../../ui/SectionCard';
 import { EmptyState, ErrorState, LoadingBlock } from '../../ui/States';
 import { describeFailure } from '../../lib/failure';
@@ -260,7 +261,7 @@ function CorrelationTable({ data: res }) {
         Pearson correlation between parameters within the latest contiguous window. Blue is positive, teal is negative;
         the stronger the tint, the stronger the correlation.
       </Typography>
-      <Box sx={{ overflowX: 'auto' }}>
+      <ScrollX label="Correlation matrix, scrollable">
         <Table size="small" aria-label="Correlation matrix" sx={{ minWidth: 520 }}>
           <TableHead>
             <TableRow>
@@ -286,7 +287,7 @@ function CorrelationTable({ data: res }) {
             ))}
           </TableBody>
         </Table>
-      </Box>
+      </ScrollX>
       <WindowNote window={res.window} provenance={res.provenance} />
     </>
   );
@@ -314,7 +315,17 @@ function RiskView({ data: res }) {
             <Typography variant="kpi" component="p" sx={{ m: 0 }}>{formatValue(res.wind_chill_c, '°C', 1)}</Typography>
             {fb && <StatusChip status={fb.status} label={`${fb.level} risk`} />}
           </Stack>
-          {fb && <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>{fb.text} (Environment Canada wind-chill guidance)</Typography>}
+          {fb && (
+            <>
+              <Typography variant="body2" sx={{ mt: 1 }}>{fb.text}</Typography>
+              <Tooltip title={FROSTBITE_SOURCE.table}>
+                <Typography variant="caption" component="p" tabIndex={0} data-testid="frostbite-source"
+                  sx={{ color: 'text.secondary', mt: 0.5, textDecoration: 'underline dotted', textUnderlineOffset: 3, width: 'fit-content' }}>
+                  Source: {FROSTBITE_SOURCE.short}
+                </Typography>
+              </Tooltip>
+            </>
+          )}
         </Grid>
       </Grid>
       <Box>

@@ -531,3 +531,48 @@ neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
   smallest lens shift. Camera position and rendering unchanged.
 - Removed the dead legacy panels: EnvironmentalPanel, ModulePanels, BuildingPanel,
   DependencyGraph, IconMap and the old Sparkline (+ their CSS).
+
+## 13. Rollout 1B — checkpoint 2 (Operate + Analyse) — screenshots in `docs/ui-redesign/1b-2/`
+
+- **Logistics** (`modules/logistics`): shortest-supply hero with every item's autonomy as ranked
+  bars; reorder / item count / last edit; the ledger as a table (cards on phones) with stock vs
+  ledger maximum; an edit dialog with validation and the audit-log name; the audit log.
+- **Remote commands** (`modules/remote`): the command set is the backend catalogue; "last
+  request" comes from the command log; active alerts with acknowledge (sign-in gated); the log.
+- **What-if** (`modules/whatif`): baseline from the snapshot; scenario chips with exact
+  descriptions; intensity slider; result table (baseline / scenario / change), consequences,
+  assumptions, suggested action, rule-based severity.
+- **AI diagnostics** (`modules/ai`): anomaly-score hero, residual / decision / forecast figures;
+  evidence, residual table, decision engine with audit trail, forecasts, explanation. Same
+  sources and polling; each source fails on its own.
+- **Reports** (`modules/reports`): a light "paper" document in both schemes (screen = print),
+  CSV / JSON exports, print stylesheet in `App.css` that hides the shell; "≈ 25 winter crew".
+- **Twin inspector** (`modules/twin`): an accessible dialog (full screen on phones) with the
+  causal chain, assumptions and replay/mode tabs; provenance from the response.
+- **Claims removed or corrected:**
+  - What-if was described as running "through the physics model"; it applies fixed deltas to
+    the snapshot. Its text invented a "Volvo Penta" gen-set, a "120 kWh" battery, "3.8 h"
+    autonomy at "18 kW", "180 → 58 days" fuel, valve "SV-04" / "Day Tank #2", a named resupply
+    ship, "240 days" margin, "~14 %" savings, and an "NCPOR AWS baseline" (the baseline is the
+    snapshot, often ERA5). Now: only computed values, assumed coefficients listed, fuel autonomy
+    and resupply shortfalls computed from the ledger (backend + tests).
+  - What-if UI showed −12.8 °C / 42 km/h / 158 kW / 28.5 L/h when telemetry was missing, a risk
+    score of 80 "CRITICAL" when none came back, and "AI recommended mitigation".
+  - Remote commands showed "Last request: STANDBY / ENABLE / AUTO" before any request (client
+    defaults). Acknowledge was not gated on sign-in.
+  - Logistics said "no authentication" (writes need the operator token when protection is on)
+    and added client rules (< 30 % of max = low, < 45 days = urgent) on top of the backend's
+    reorder level.
+  - AI: a cause's "confidence %" is mean |z| ÷ 10 (a match strength, not a probability); the
+    decision "confidence" is a rule-based label.
+  - Reports: the wind chill was labelled "Siple-Passel / Jaggar" (it is JAG/TI); CSV wrote
+    "null Days"; "SUFFICIENT" meant "above reorder level"; generator values were always
+    "model-derived" (browser demo is simulated); the latest stored observation had no time
+    (backend now returns `observedAt`).
+  - Twin inspector: environment always "reanalysis (ERA5)" and equipment always "model" — now
+    from the response (REAL / built-in default / simulated as applicable); a 15 % waste-heat
+    default when the field was missing; the replay time had no time zone (now IST).
+- **Follow-ups from checkpoint 1:** the frostbite bands cite *Environment and Climate Change
+  Canada, Wind Chill Index* (caption + tooltip with the table name). The pytest network guard
+  now also blocks `requests.request` / `Session.request`, and Playwright uses its own ports
+  (18080 / 18001 / 15173), so a stack left running cannot change test results.

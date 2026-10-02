@@ -5,9 +5,14 @@
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
-const API_PORT = process.env.API_PORT || '8080';
-const SIM_PORT = process.env.SIM_PORT || '8001';
-const VITE_PORT = process.env.VITE_PORT || '5173';
+// Ports of their own (not the dev defaults 8080/8001/5173), so a dev or screenshot stack left
+// running is never silently reused for the test. Set in process.env so the spec sees them too.
+process.env.API_PORT ||= '18080';
+process.env.SIM_PORT ||= '18001';
+process.env.VITE_PORT ||= '15173';
+const API_PORT = process.env.API_PORT;
+const SIM_PORT = process.env.SIM_PORT;
+const VITE_PORT = process.env.VITE_PORT;
 
 // Set E2E_BASE_URL to run the same specs against an already-running stack — notably the
 // Docker one, where nginx serves the UI and proxies /api and /ws on a single origin.
@@ -26,6 +31,11 @@ const serviceEnv = {
   SIM_PORT,
   HOST: '127.0.0.1',
   ALLOWED_ORIGINS: `http://localhost:${VITE_PORT}`,
+  // Wire every service to the test ports (env vars win over the root .env).
+  BACKEND_URL: `http://127.0.0.1:${API_PORT}`,
+  SIMULATOR_URL: `http://127.0.0.1:${SIM_PORT}`,
+  VITE_API_URL: `http://localhost:${API_PORT}`,
+  VITE_WS_URL: `ws://localhost:${API_PORT}/ws/station`,
   LOG_LEVEL: 'WARNING',
   DB_PATH,
   GROQ_API_KEY: '',

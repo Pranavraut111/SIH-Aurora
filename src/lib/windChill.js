@@ -8,6 +8,13 @@ export function windChill(tempC, windKmh) {
   return 13.12 + 0.6215 * tempC - 11.37 * v + 0.3965 * tempC * v;
 }
 
+/** Where the bands below come from, shown with them in the UI. */
+export const FROSTBITE_SOURCE = {
+  short: 'Environment and Climate Change Canada, Wind Chill Index',
+  table: "Environment and Climate Change Canada (ECCC), Wind Chill Index: \"Wind chill hazards and what to do\" table. "
+    + 'Times are for exposed skin of healthy adults; guidance, not a medical assessment.',
+};
+
 /**
  * Environment Canada wind-chill risk bands (exposed skin). `status` is a status
  * colour key for the chip; `text` is the published guidance, never a made-up time.

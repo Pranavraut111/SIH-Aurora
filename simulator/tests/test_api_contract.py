@@ -262,6 +262,45 @@ def test_republishing_the_same_batch_adds_no_duplicate_history_point():
     assert len(store.series("maitri", "generator.gen_power")) == 5  # bounded window
 
 
+# ── What-if: rule-based and says so; fuel/resupply effects come from the ledger ──
+INVENTED = ("Volvo", "Golovnin", "120 kWh", "SV-04", "Day Tank", "3.8 hours", "180 days", "240 days",
+            "NCPOR AWS baseline")
+
+
+@pytest.mark.parametrize("scenario", WHATIF_SCENARIOS)
+def test_whatif_claims_only_what_it_computes(client, scenario):
+    body = client.post("/api/simulation/whatif", json={"stationId": "maitri", "scenarioId": scenario}).json()
+    text = " ".join(body["consequences"]) + body["provenance"] + body["calculatedRisk"]["recommendedAction"]
+    assert not [w for w in INVENTED if w in text], text
+    assert body["engine"] == "rule-based" and "not the physics model" in body["provenance"]
+    assert body["assumptions"], "assumed coefficients must be listed"
+
+
+def test_whatif_fuel_leak_autonomy_uses_the_ledger(client):
+    snap = _ok(client, "/api/station/maitri/state")
+    fuel = next(i for i in _ok(client, "/api/logistics?stationId=maitri")["items"] if i["id"] == "maitri-fuel")
+    rate = snap["sensors"]["generator"]["gen_fuel_rate"]
+    body = client.post("/api/simulation/whatif",
+                       json={"stationId": "maitri", "scenarioId": "fuel_leak", "intensity": 1.0}).json()
+    expected = f"{fuel['current'] / (rate * 24):.0f} → {fuel['current'] / ((rate + 16) * 24):.0f} days"
+    assert any(expected in c for c in body["consequences"]), body["consequences"]
+
+
+def test_whatif_resupply_delay_lists_items_that_run_out(client):
+    items = _ok(client, "/api/logistics?stationId=maitri")["items"]
+    body = client.post("/api/simulation/whatif",
+                       json={"stationId": "maitri", "scenarioId": "resupply_delay", "intensity": 2.0}).json()
+    short = [i["name"] for i in items if i["daysRemaining"] is not None and i["daysRemaining"] < 120]
+    text = " ".join(body["consequences"])
+    assert all(name in text for name in short), (short, text)
+
+
+def test_ncpor_live_reports_when_the_observation_was_taken(client):
+    w = _ok(client, "/api/ncpor/live?stationId=maitri")["weather"]
+    assert "observedAt" in w
+    assert w["observedAt"] is None or w["observedAt"] > 0
+
+
 # ── Unknown stations 404 everywhere, from one dependency ─────────────────────
 @pytest.mark.parametrize("path", STATION_GETS)
 def test_unknown_station_is_404_with_a_message(client, path):

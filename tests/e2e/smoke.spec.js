@@ -30,11 +30,11 @@ const MODULES = [
   ['environmental', /Stored observations and analysis/i],
   ['infrastructure', /Dependency map/i],
   ['energy', /Energy grid/i],
-  ['logistics', /Logistics & Critical Supplies/i],
-  ['remote', /Remote Commands/i],
-  ['simulation', /Digital Twin/i],
-  ['ai', /Anomaly detection/i],
-  ['reports', /Station Operations Report Generator/i],
+  ['logistics', /Audit log/i],
+  ['remote', /Command log/i],
+  ['simulation', /Run a scenario to see/i],
+  ['ai', /Anomaly evidence/i],
+  ['reports', /Station status report/i],
   ['admin', /System Administration & Ingestion Pipeline/i],
 ];
 
@@ -304,3 +304,39 @@ test('the building panel shows live readings from telemetry (audit F2)', async (
   expect(failedRequests, 'failed requests in the building panel').toEqual([]);
 });
 
+
+test('operate and analyse pages: read-only what-if, twin inspector, and an audited ledger edit', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/');
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+
+  // What-if needs no sign-in (it changes nothing) and says it is rule-based.
+  await openModule(page, 'simulation');
+  await page.getByTestId('scenario-fuel_leak').click();
+  await page.getByTestId('whatif-run').click();
+  const result = page.getByTestId('whatif-result');
+  await expect(result).toContainText(/Fuel autonomy \d+ → \d+ days/);
+  await expect(result).toContainText(/not the physics model/);
+
+  // Twin inspector opens as a dialog and closes with Escape.
+  await page.getByTestId('nav-twinInspector').click();
+  await expect(page.getByTestId('twin-inspector')).toBeVisible();
+  await expect(page.getByTestId('twin-inspector')).toContainText(/Thermal model/);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('twin-inspector')).toHaveCount(0);
+
+  // A ledger edit, signed in when the stack protects writes, lands in the audit log.
+  const loggedIn = await operatorLogin(page);
+  await openModule(page, 'logistics');
+  await page.getByTestId('ledger-edit-maitri-med').click();
+  const input = page.getByTestId('ledger-current');
+  const next = String(Number(await input.inputValue()) - 1);
+  await input.fill(next);
+  await page.getByTestId('ledger-save').click();
+  await expect(page.getByTestId('logistics-save-status')).toContainText(/Saved/);
+  await expect(page.getByTestId('logistics-history')).toContainText(`→ ${next}`);
+  expect(loggedIn || !ADMIN_TOKEN).toBe(true);
+
+  expect(consoleErrors, 'console errors on operate/analyse pages').toEqual([]);
+  expect(failedRequests, 'failed requests on operate/analyse pages').toEqual([]);
+});
