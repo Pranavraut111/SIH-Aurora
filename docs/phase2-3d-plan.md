@@ -444,8 +444,9 @@ the startup path); 3D chunk **600 kB** raw / 157 kB gzip (≤ 650); assets: none
 - REMA / SCAR ADD / Sentinel-2 pipelines and the licence register: terrain is procedural, the
   continent is a uniform extrusion of the Natural Earth outline.
 - CSP unchanged; no Wasm decoders, no external assets.
-- Wind direction is linearly interpolated between ERA5 hours in `weather_data.py`; across north
-  (350° → 10°) that briefly gives a wrong direction. Fix: circular interpolation.
+- ~~Wind direction is linearly interpolated between ERA5 hours~~ — fixed: `weather_data.py`
+  interpolates `wind_direction_10m` on the shortest arc (`interp_angle_deg`), so 350° → 10° passes
+  through north, not south (tested both ways).
 - Screenshots were rendered with SwiftShader; desktop shots may show the low tier after the
   automatic downgrade. Day/twilight/night and calm shots pin the scene's clock and wind through a
   development-only hook (`setDebugEnvironment`, reachable only in dev builds); the blizzard,
