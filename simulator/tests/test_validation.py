@@ -191,10 +191,11 @@ def test_legacy_simulator_env_is_not_read(monkeypatch):
 
 
 def test_panels_poll_only_through_usePolling():
-    """F: no component runs its own setInterval poller (the browser-demo simulation clock in
-    data/stationData.js is not a backend poller)."""
+    """F: no component runs its own setInterval poller. Two clocks are exempt because they
+    never touch the network: the browser-demo simulation clock (data/stationData.js) and
+    the 1 s display clock that keeps "n s ago" labels current (hooks/useNow.js)."""
     offenders = [str(p.relative_to(SRC_DIR)) for p in list(SRC_DIR.rglob("*.jsx")) + list(SRC_DIR.rglob("*.js"))
-                 if "setInterval(" in p.read_text() and p.name not in ("stationData.js",)]
+                 if "setInterval(" in p.read_text() and p.name not in ("stationData.js", "useNow.js")]
     assert not offenders, offenders
     hook = (SRC_DIR / "hooks" / "usePolling.js").read_text()
     assert "visibilitychange" in hook and "2 ** failures" in hook

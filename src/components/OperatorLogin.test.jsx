@@ -40,7 +40,7 @@ describe('when writes are protected', () => {
     mockSession();
     render(<OperatorLogin />);
     const pill = await screen.findByTestId('operator-login');
-    expect(pill).toHaveTextContent('READ-ONLY');
+    expect(pill).toHaveTextContent(/read-only/i);
   });
 
   it('accepts the right token, switches to OPERATOR and keeps it in memory only', async () => {
@@ -49,10 +49,10 @@ describe('when writes are protected', () => {
     render(<OperatorLogin />);
 
     fireEvent.click(await screen.findByTestId('operator-login'));
-    fireEvent.change(screen.getByTestId('operator-token-input'), { target: { value: TOKEN } });
+    fireEvent.change(await screen.findByTestId('operator-token-input'), { target: { value: TOKEN } });
     await act(async () => { fireEvent.click(screen.getByTestId('operator-submit')); });
 
-    expect(await screen.findByTestId('operator-logout')).toHaveTextContent('OPERATOR');
+    expect(await screen.findByTestId('operator-logout')).toHaveTextContent(/operator/i);
     expect(getToken()).toBe(TOKEN);
     expect(setItem).not.toHaveBeenCalled();
   });
@@ -62,7 +62,7 @@ describe('when writes are protected', () => {
     render(<OperatorLogin />);
 
     fireEvent.click(await screen.findByTestId('operator-login'));
-    fireEvent.change(screen.getByTestId('operator-token-input'), { target: { value: 'nope' } });
+    fireEvent.change(await screen.findByTestId('operator-token-input'), { target: { value: 'nope' } });
     await act(async () => { fireEvent.click(screen.getByTestId('operator-submit')); });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Token rejected');
@@ -76,7 +76,7 @@ describe('when writes are protected', () => {
     render(<OperatorLogin />);
 
     fireEvent.click(await screen.findByTestId('operator-login'));
-    fireEvent.change(screen.getByTestId('operator-token-input'), { target: { value: TOKEN } });
+    fireEvent.change(await screen.findByTestId('operator-token-input'), { target: { value: TOKEN } });
     await act(async () => { fireEvent.click(screen.getByTestId('operator-submit')); });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach the backend');
@@ -87,7 +87,7 @@ describe('when writes are protected', () => {
     mockSession();
     render(<OperatorLogin />);
     fireEvent.click(await screen.findByTestId('operator-login'));
-    fireEvent.change(screen.getByTestId('operator-token-input'), { target: { value: TOKEN } });
+    fireEvent.change(await screen.findByTestId('operator-token-input'), { target: { value: TOKEN } });
     await act(async () => { fireEvent.click(screen.getByTestId('operator-submit')); });
 
     await act(async () => { fireEvent.click(await screen.findByTestId('operator-logout')); });
@@ -99,6 +99,6 @@ describe('when writes are protected', () => {
     mockSession();
     render(<OperatorLogin />);
     fireEvent.click(await screen.findByTestId('operator-login'));
-    expect(screen.getByTestId('operator-submit')).toBeDisabled();
+    expect(await screen.findByTestId('operator-submit')).toBeDisabled();
   });
 });

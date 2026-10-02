@@ -3,7 +3,11 @@
    so the negative case is the default and the positive case is stubbed. */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import AppThemeProvider from '../theme/AppThemeProvider';
 import StationScene from './StationScene';
+
+// The 2D overview is themed like the app, so it renders inside the real theme provider.
+const renderScene = (ui) => render(<AppThemeProvider>{ui}</AppThemeProvider>);
 
 /** Make canvas.getContext answer for the given context ids and null for the rest. */
 function stubCanvasContexts(supported) {
@@ -25,13 +29,13 @@ afterEach(() => {
 describe('without WebGL', () => {
   it('renders the 2D fallback rather than the 3D scene', () => {
     stubCanvasContexts([]);
-    render(<StationScene alertStates={{}} />);
+    renderScene(<StationScene alertStates={{}} />);
     expect(screen.getByTestId('station-2d-fallback')).toBeInTheDocument();
   });
 
   it('tells the operator why, and that nothing else is degraded', () => {
     stubCanvasContexts([]);
-    render(<StationScene alertStates={{}} />);
+    renderScene(<StationScene alertStates={{}} />);
     const note = screen.getByRole('status');
     expect(note).toHaveTextContent('WebGL is not available in this browser');
     expect(note).toHaveTextContent('All data and panels work normally');
@@ -40,11 +44,12 @@ describe('without WebGL', () => {
   it('keeps the buildings, their status colours and the click behaviour', () => {
     stubCanvasContexts([]);
     const onBuildingClick = vi.fn();
-    render(<StationScene alertStates={{ generator: 'critical' }} onBuildingClick={onBuildingClick} />);
+    renderScene(<StationScene alertStates={{ generator: 'critical' }} onBuildingClick={onBuildingClick} />);
 
     const generator = document.querySelector('[data-building="generator"]');
     expect(generator).toBeTruthy();
-    expect(generator.className).toContain('status-critical');
+    expect(generator).toHaveAttribute('data-status', 'critical');
+    expect(generator).toHaveTextContent('Critical');   // status is never colour alone
     fireEvent.click(generator);
     expect(onBuildingClick).toHaveBeenCalledWith('generator');
   });
@@ -53,14 +58,14 @@ describe('without WebGL', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => {
       throw new Error('context creation blocked');
     });
-    render(<StationScene alertStates={{}} />);
+    renderScene(<StationScene alertStates={{}} />);
     expect(screen.getByTestId('station-2d-fallback')).toBeInTheDocument();
     expect(console.warn).toHaveBeenCalledWith('[StationScene] WebGL probe failed', expect.any(Error));
   });
 
   it('accepts a WebGL1-only browser (experimental-webgl) and still reports the real reason', () => {
     stubCanvasContexts(['experimental-webgl']);
-    render(<StationScene alertStates={{}} />);
+    renderScene(<StationScene alertStates={{}} />);
     // The probe passes, so the 3D path is attempted; in jsdom the renderer then fails,
     // which must also land on the 2D overview — with the renderer's reason, not the probe's.
     expect(screen.getByTestId('station-2d-fallback')).toBeInTheDocument();
@@ -71,7 +76,7 @@ describe('without WebGL', () => {
 describe('with WebGL but a renderer that fails', () => {
   it('still lands on the 2D overview and says the renderer failed, not that WebGL is missing', () => {
     stubCanvasContexts(['webgl2', 'webgl']);
-    render(<StationScene alertStates={{}} />);
+    renderScene(<StationScene alertStates={{}} />);
     const note = screen.getByRole('status');
     expect(note).toHaveTextContent('3D renderer failed');
     expect(note).not.toHaveTextContent('WebGL is not available');

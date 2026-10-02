@@ -147,3 +147,40 @@ def test_decision_engine_uses_forecast_baseline(fe):
     decision = DecisionEngine("maitri").evaluate(
         {"weather": {"env_temp": -40.0, "env_wind": 20.0}, "generator": {}, "meta": {}}, None, fc)
     assert decision["forecast"]["temperature_change"] == pytest.approx(0.0)
+
+
+# ── Replay clock on an absolute (UTC) timeline ───────────────
+def test_replay_time_uses_the_stored_utc_offset(tmp_path, monkeypatch):
+    import weather_data
+    monkeypatch.setattr(weather_data, "CACHE_DIR", tmp_path)
+    path = write_cache(tmp_path / "maitri_2024-01-01_2024-01-08.json",
+                       [f"2024-01-01T0{h}:00" for h in range(5)], [36.0] * 5)
+    data = json.loads(path.read_text())
+    data["utc_offset_seconds"] = 7200                       # Open-Meteo timezone=auto, UTC+2
+    path.write_text(json.dumps(data))
+    lyr = weather_data.WeatherDataLayer("maitri", date="2024-01-01", speed_factor=3600)
+    assert lyr.fetch_and_cache()
+    w = lyr.sample_at(1.0)                                   # 01:00 local
+    assert w["utc_offset_source"] == "open-meteo"
+    assert w["simulated_time_ms"] == int(datetime(2023, 12, 31, 23, 0, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def test_missing_offset_is_inferred_from_the_radiation_peak():
+    import weather_data
+    # Local times; radiation (backward hourly means) centred on 14:00 local → local noon 13:30.
+    times = [f"2026-09-01T{h:02d}:00" for h in range(24)]
+    rad = [max(0.0, 300 - 60 * abs(h - 14)) for h in range(24)]
+    # Solar noon at lon 11.73° E is 11:13 UTC → offset ≈ +2 h.
+    assert weather_data.infer_utc_offset_hours({"time": times, "shortwave_radiation": rad}, 11.73) == 2
+    assert weather_data.infer_utc_offset_hours({"time": times, "shortwave_radiation": [0.0] * 24}, 11.73) is None
+
+
+def test_offset_unknown_means_no_absolute_replay_time(tmp_path, monkeypatch):
+    import weather_data
+    monkeypatch.setattr(weather_data, "CACHE_DIR", tmp_path)
+    write_cache(tmp_path / "maitri_2024-01-01_2024-01-08.json",
+                [f"2024-01-01T0{h}:00" for h in range(5)], [36.0] * 5)     # no radiation, no offset
+    lyr = weather_data.WeatherDataLayer("maitri", date="2024-01-01", speed_factor=3600)
+    assert lyr.fetch_and_cache()
+    w = lyr.sample_at(1.0)
+    assert w["simulated_time_ms"] is None and w["utc_offset_source"] == "unknown"

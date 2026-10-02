@@ -30,21 +30,36 @@ async function probeSession(token) {
   return res;
 }
 
+// Components that mount together (a page full of WriteButtons) share one in-flight probe.
+let sharedProbe = null;
+function probeShared() {
+  if (!sharedProbe) {
+    sharedProbe = probeSession(getToken()).finally(() => { sharedProbe = null; });
+  }
+  return sharedProbe;
+}
+const RETRY_MS = 10000;
+
 export function useAdminToken() {
   const [state, setState] = useState(snapshot);
 
   useEffect(() => subscribe(() => setState(snapshot())), []);
 
-  // One probe on mount so the UI knows whether to disable write controls.
+  // Probe on mount so the UI knows whether to disable write controls. If the backend
+  // is down, keep asking every 10 s: when it comes back, "Sign in" appears without a reload.
   useEffect(() => {
     let cancelled = false;
-    probeSession(getToken()).catch((err) => {
-      if (!cancelled) {
+    let timer = null;
+    const attempt = () => {
+      probeShared().catch((err) => {
+        if (cancelled) return;
         // Unknown protection means controls stay enabled; the backend still enforces.
-        console.warn('[operator] could not read /admin/session; leaving controls enabled', err);
-      }
-    });
-    return () => { cancelled = true; };
+        console.warn('[operator] could not read /admin/session; leaving controls enabled, retrying', err);
+        timer = setTimeout(attempt, RETRY_MS);
+      });
+    };
+    attempt();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
   /** Verify a token with the backend and keep it only if accepted. */

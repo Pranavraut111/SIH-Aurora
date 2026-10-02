@@ -25,7 +25,8 @@ class StationStore:
                 "latest_batch": None,          # validated batch dict
                 "received_monotonic": None,    # time.monotonic() of last batch
                 "received_ms": None,           # wall-clock ms of last batch
-                "history": {},                 # "bld.sensor" -> deque[(ts_ms, value)]
+                "history": {},                 # ingest: "bld.sensor" -> deque[(ts_ms, value)]
+                "series": {},                  # published: "bld.sensor" -> deque[(ts_ms, value)]
                 "fallback_snapshot": None,     # physics-fallback snapshot (+ _meta)
                 "published_snapshot": None,    # what clients see
                 "connected": True,             # simulated link flag
@@ -85,8 +86,38 @@ class StationStore:
             return self._stations[sid]["fallback_snapshot"]
 
     def publish(self, sid: str, snapshot: dict):
+        """Store the snapshot clients will read and append its numeric readings to the
+        published series (once per snapshot timestamp: a republished, unchanged
+        simulator batch adds no duplicate point)."""
+        ts = snapshot.get("timestamp")
         with self._lock:
-            self._stations[sid]["published_snapshot"] = snapshot
+            st = self._stations[sid]
+            st["published_snapshot"] = snapshot
+            if ts is None:
+                return
+            series = st["series"]
+            readings = dict(snapshot.get("sensors") or {})
+            # The replay clock is kept as a series too, so history can be re-timed to it.
+            replay_ms = (snapshot.get("replay") or {}).get("timeMs")
+            if replay_ms is not None:
+                readings["replay"] = {"timeMs": replay_ms}
+            for bld, sensors in readings.items():
+                for sensor, value in sensors.items():
+                    if not isinstance(value, (int, float)) or isinstance(value, bool):
+                        continue
+                    key = f"{bld}.{sensor}"
+                    dq = series.get(key)
+                    if dq is None:
+                        dq = series[key] = deque(maxlen=self._history_max)
+                    if dq and dq[-1][0] >= ts:
+                        continue
+                    dq.append((ts, value))
+
+    def series(self, sid: str, key: str) -> list:
+        """Copy of the published series for 'building.sensor' (oldest first)."""
+        with self._lock:
+            dq = self._stations[sid]["series"].get(key)
+            return list(dq) if dq else []
 
     def get_published(self, sid: str):
         with self._lock:

@@ -1,159 +1,113 @@
 /* ═══════════════════════════════════════════════════════════════
-   Aurora — App-level Layout & Command Center Architecture
+   Aurora — app shell layout. Colours, type and spacing come from the MUI
+   theme (src/theme); this file only lays out the fixed regions:
+
+     ┌──────── top bar (status chips, Sign in) ┐
+     │ sidebar │ main stage (scrolls)          │
+     └─────────┴───────────────────────────────┘
    ═══════════════════════════════════════════════════════════════ */
 
 .aurora-app {
-  display: flex;
-  flex-direction: column;
-  width: 100vw;
-  height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  /* An explicit column: an implicit `auto` one grows to the widest child's min-content
+     (e.g. a scrollable tab bar) and pushes the page past a phone's width. */
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
   overflow: hidden;
-  position: relative;
-  background: var(--bg-base);
-  color: var(--text-primary);
 }
 
-/* ── App Layout Body (Sidebar + Main Stage) ───────────────── */
+/* "Skip to content": off screen until it has keyboard focus. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 2000;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font: 600 14px/20px "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
+  color: var(--aur-palette-primary-contrastText);
+  background: var(--aur-palette-primary-main);
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip-link:focus { transform: none; outline: 2px solid var(--aur-palette-text-primary); outline-offset: 2px; }
+
+.main-stage:focus { outline: none; }
+
 .app-layout-body {
   display: flex;
-  flex: 1;
-  width: 100%;
-  height: calc(100vh - 54px);
-  position: relative;
-  overflow: hidden;
-  margin-top: 54px;
+  min-height: 0;
 }
 
-/* ── Main Viewport Stage (Fills 100% of remaining width) ─── */
 .main-stage {
   flex: 1;
   min-width: 0;
-  height: 100%;
   position: relative;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-/* ── Overview Stage (3D Twin full-bleed centerpiece) ────── */
+/* ── Overview: the 3D twin fills the stage (scene itself unchanged) ── */
 .overview-stage {
   position: relative;
+  flex: 1;
   width: 100%;
-  height: 100%;
   overflow: hidden;
 }
 
 .scene-container {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
   z-index: 1;
   overflow: hidden;
 }
 
-/* ── Module Content Scroll Area (Full views) ─────────────── */
-.module-content-scroll {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 24px;
-  z-index: 20;
-}
-
-.module-content-scroll::-webkit-scrollbar {
-  width: 6px;
-}
-.module-content-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-.module-content-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
-}
-
-/* ── Ambient aurora gradient blobs ────────────────────────── */
-.ambient-bg {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.ambient-blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(100px);
-  opacity: 0.1;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-}
-
-.blob-1 {
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
-  top: -15%;
-  right: -8%;
-  animation: blob-drift-1 8s ease-in-out infinite;
-}
-
-.blob-2 {
-  width: 450px;
-  height: 450px;
-  background: radial-gradient(circle, var(--accent-2) 0%, transparent 70%);
-  bottom: -15%;
-  left: -8%;
-  animation: blob-drift-2 7s ease-in-out infinite;
-}
-
-.blob-3 {
-  width: 300px;
-  height: 300px;
-  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
-  top: 50%;
-  left: 40%;
-  opacity: 0.05;
-  animation: blob-drift-3 6s ease-in-out infinite;
-}
-
-@keyframes blob-drift-1 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(-20px, 15px) scale(1.06); }
-  66% { transform: translate(15px, -10px) scale(0.96); }
-}
-
-@keyframes blob-drift-2 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(18px, -15px) scale(1.04); }
-  66% { transform: translate(-12px, 18px) scale(1.08); }
-}
-
-@keyframes blob-drift-3 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(30px, -20px) scale(1.1); }
-}
-
-/* ── Reduced motion ─────────────────────────────────────── */
-@media (prefers-reduced-motion: reduce) {
-  .ambient-blob {
-    animation: none;
-  }
-}
-
-/* ── Mobile & Small Screen Breakpoints ──────────────────── */
-@media (max-width: 768px) {
-  .app-layout-body {
+/* Below lg the HUD cannot float beside the twin without covering it: the scene
+   becomes a fixed-height block and the HUD (OverviewHUD) flows below it. */
+@media (max-width: 1199.95px) {
+  .overview-stage {
+    overflow-y: auto;
+    display: flex;
     flex-direction: column;
   }
-  .sidebar-nav {
-    width: 100% !important;
-    height: auto;
+  .scene-container {
+    position: relative;
+    inset: auto;
+    flex: none;
+    height: clamp(260px, 46dvh, 420px);
   }
-  .module-content-scroll {
-    padding: 12px;
+}
+
+/* ── Module pages ─────────────────────────────────────────────────── */
+.module-content-scroll {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.module-page {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 24px 32px 64px;
+}
+
+@media (max-width: 899.95px) {
+  .module-page {
+    padding: 16px 16px 48px;
   }
+}
+
+/* ── Print: only the report document (Reports → Print / save as PDF) ── */
+@media print {
+  @page { margin: 14mm; }
+  html, body, #root, .aurora-app { height: auto !important; overflow: visible !important; background: #fff !important; }
+  .aurora-app { display: block !important; }
+  .topbar, .sidebar-nav, .no-print { display: none !important; }
+  .app-layout-body, .main-stage, .module-content-scroll { display: block !important; overflow: visible !important; height: auto !important; }
+  .module-page { max-width: none !important; padding: 0 !important; }
+  .report-document { border: 0 !important; box-shadow: none !important; padding: 0 !important; max-width: none !important; }
 }

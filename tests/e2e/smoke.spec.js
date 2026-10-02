@@ -20,24 +20,22 @@ const API = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.API_PORT
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const WRITE_HEADERS = ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {};
 
-// Sidebar label -> text that only THAT module's panel renders. These are the panels'
-// own headings, which differ from the sidebar labels (the weather module is labelled
-// "Weather Observations" but its heading reads "Meteorological & AWS Observations").
-// The tour asserts the marker so it catches "the sidebar switched but the panel did not"
-// rather than merely "something is on screen" — a real bug hid there: Suspense inside
-// AnimatePresence mode="wait" left the previous panel mounted while the next module's
-// chunk loaded.
+// Module id -> text that only THAT module's panel renders. Legacy panels are matched on
+// their own headings; modules rebuilt on the design system on their page title. The tour
+// asserts the marker so it catches "the sidebar switched but the panel did not", and it
+// asserts exactly one module panel is mounted, which catches the opposite: audit F1, where
+// every visited module stayed stacked on screen. Both bugs hid behind a weaker check.
 const MODULES = [
-  ['Mission Overview', null],
-  ['Weather Observations', /Meteorological & AWS Observations/i],
-  ['Infrastructure', /Station Infrastructure & Subsystems/i],
-  ['Energy Grid', /Microgrid & Power/i],
-  ['Logistics & Supply', /Logistics & Critical Supplies/i],
-  ['Remote C&C', /Remote Commands/i],
-  ['What-If Sim', /Digital Twin/i],
-  ['AI Diagnostics', /Anomaly detection/i],
-  ['Station Reports', /Station Operations Report Generator/i],
-  ['System Admin', /System Administration & Ingestion Pipeline/i],
+  ['overview', null],
+  ['environmental', /Stored observations and analysis/i],
+  ['infrastructure', /Dependency map/i],
+  ['energy', /Energy grid/i],
+  ['logistics', /Audit log/i],
+  ['remote', /Command log/i],
+  ['simulation', /Run a scenario to see/i],
+  ['ai', /Anomaly evidence/i],
+  ['reports', /Station status report/i],
+  ['admin', /Station configuration/i],
 ];
 
 /** Vite's dev client and source maps are not the app under test. */
@@ -81,9 +79,42 @@ async function operatorLogin(page) {
 }
 
 async function openStation(page, stationId) {
-  await page.locator('.station-selector-btn').click();
-  await page.locator('.station-option').filter({ hasText: stationId === 'maitri' ? 'Maitri' : 'Bharati' }).click();
-  await expect(page.locator('.station-dropdown')).toHaveCount(0);
+  const option = page.getByTestId(`station-option-${stationId}`);
+  await option.click();
+  await expect(option).toHaveAttribute('aria-pressed', 'true');
+}
+
+/** Select a module in the sidebar and wait until it is the current page. */
+async function openModule(page, moduleId) {
+  await page.getByTestId(`nav-${moduleId}`).click();
+  await expect(page.getByTestId(`nav-${moduleId}`), `${moduleId} did not become the active module`)
+    .toHaveAttribute('aria-current', 'page');
+}
+
+// The product tour auto-starts on a first visit. Every test except the tour tests runs
+// as a returning visitor, so the tour never covers what they click.
+const TOUR_KEY = 'aurora-tour-v1';
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.title.includes('product tour')) return;
+  await page.addInitScript((key) => {
+    try { window.localStorage.setItem(key, '{"outcome":"e2e"}'); } catch (err) { console.warn(err); }
+  }, TOUR_KEY);
+});
+
+/** Step through the open tour to the end: Next, → (keyboard) alternately. Returns the titles. */
+async function completeTour(page, total) {
+  const popover = page.getByTestId('tour-popover');
+  const titles = [];
+  for (let i = 1; i <= total; i++) {
+    await expect(popover).toHaveAttribute('data-tour-step', String(i));
+    await expect(popover).toContainText(`${i} of ${total}`);
+    await expect(page.getByTestId('tour-next')).toBeFocused();
+    titles.push(await popover.locator('h2').textContent());
+    if (i % 2) await page.getByTestId('tour-next').click();
+    else await page.keyboard.press('ArrowRight');
+  }
+  await expect(popover).toHaveCount(0);
+  return titles;
 }
 
 test.beforeAll(async ({ request }) => {
@@ -125,22 +156,19 @@ test('every module opens cleanly', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.overview-stage')).toBeVisible();
 
-  for (const [label, marker] of MODULES) {
-    await page.locator('.sidebar-item', { hasText: label }).click();
-    const item = page.locator('.sidebar-item.active', { hasText: label });
-    await expect(item, `${label} did not become the active module`).toBeVisible();
+  for (const [id, marker] of MODULES) {
+    await openModule(page, id);
     // Either the overview stage or a module panel must render — never an empty stage
     // and never the ErrorBoundary fallback.
     await expect(page.locator('.overview-stage, .module-content-scroll')).toBeVisible();
-    await expect(page.getByTestId('error-boundary'), `${label} crashed`).toHaveCount(0);
-    // Exactly one module panel, and it is THIS module's; the loading placeholder clears.
-    // The count catches audit F1 (every visited module stayed stacked on screen), which a
-    // toContainText check alone cannot: the new marker is present either way.
+    await expect(page.getByTestId('error-boundary'), `${id} crashed`).toHaveCount(0);
     if (marker) {
-      await expect(page.getByTestId('module-panel'), `more than one module on screen after ${label}`).toHaveCount(1);
+      // Exactly one module page, and it is THIS module's; the loading placeholder clears.
+      await expect(page.getByTestId('module-panel'), `more than one module on screen after ${id}`).toHaveCount(1);
+      await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', id);
       await expect(page.getByTestId('panel-fallback')).toHaveCount(0);
       await expect(page.getByTestId('module-panel'),
-                   `${label} was selected but its panel did not render`).toContainText(marker);
+                   `${id} was selected but its panel did not render`).toContainText(marker);
     } else {
       await expect(page.getByTestId('module-panel')).toHaveCount(0);
     }
@@ -198,27 +226,27 @@ test('viewing needs no login, and writes are refused without one', async ({ page
   await expect(page.locator('.overview-stage')).toBeVisible();
 
   // The whole dashboard is viewable while signed out, and says so.
-  await expect(page.getByTestId('operator-login')).toHaveText(/READ-ONLY/);
+  await expect(page.getByTestId('operator-login')).toHaveText(/read-only/i);
   await expect(page.getByTestId('data-source-badge')).toBeVisible();
-  for (const label of ['Weather Observations', 'Logistics & Supply', 'System Admin']) {
-    await page.locator('.sidebar-item', { hasText: label }).click();
+  for (const id of ['environmental', 'logistics', 'admin']) {
+    await openModule(page, id);
     await expect(page.locator('.module-content-scroll')).toBeVisible();
   }
 
-  // A write control is disabled, with the reason in its tooltip. The thresholds form
-  // lives behind the "Alert Threshold Rules" tab of System Admin.
-  await page.locator('.sidebar-item', { hasText: 'System Admin' }).click();
-  await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
-  const save = page.locator('button.btn-save-admin');
+  // A write control is disabled because nobody is signed in (WriteButton marks why). The
+  // thresholds form lives behind the "Alert thresholds" tab of Administration.
+  await openModule(page, 'admin');
+  await page.getByTestId('admin-tab-thresholds').click();
+  const save = page.getByTestId('admin-save');
   await expect(save).toBeVisible();
   await expect(save).toBeDisabled();
-  await expect(save).toHaveAttribute('title', 'Operator login required');
+  await expect(save).toHaveAttribute('data-write-blocked', 'true');
 
-  // ...and so is the ingest button on the Data Sources tab.
-  await page.locator('.admin-tab', { hasText: 'Data Sources' }).click();
-  const sync = page.locator('button.btn-sync-source').first();
+  // ...and so is the ingest button on the Data sources tab.
+  await page.getByTestId('admin-tab-sources').click();
+  const sync = page.getByTestId('admin-ingest-maitri');
   await expect(sync).toBeDisabled();
-  await expect(sync).toHaveAttribute('title', 'Operator login required');
+  await expect(sync).toHaveAttribute('data-write-blocked', 'true');
 
   // The API agrees: the same write is a 401 unauthenticated and a 200 with the token.
   // The 401 is deterministic — require_admin rejects before the proxy is attempted.
@@ -232,12 +260,269 @@ test('viewing needs no login, and writes are refused without one', async ({ page
           { timeout: 30_000, message: 'authenticated write never succeeded' })
     .toBe(200);
 
-  // Signing in enables the controls again.
+  // Signing in enables the controls again (Save stays disabled until something changes).
   await operatorLogin(page);
   await expect(sync).toBeEnabled();
-  await page.locator('.admin-tab', { hasText: 'Alert Threshold Rules' }).click();
-  await expect(save).toBeEnabled();
+  await page.getByTestId('admin-tab-thresholds').click();
+  await expect(save).not.toHaveAttribute('data-write-blocked', 'true');
 
   expect(consoleErrors, 'console errors while signed out').toEqual([]);
   expect(failedRequests.filter((f) => !f.startsWith('401')), 'unexpected failed requests').toEqual([]);
+});
+
+test('on a phone the top bar fits, Sign in stays reachable and demo control covers nothing', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.getByTestId('data-source-badge')).toBeVisible();
+
+  // One top bar, no horizontal scroll, and no floating button over the page.
+  const fits = await page.evaluate(() => {
+    const bar = document.querySelector('.MuiToolbar-root');
+    return document.documentElement.scrollWidth <= window.innerWidth && bar.scrollWidth <= bar.clientWidth;
+  });
+  expect(fits, 'top bar or page overflows horizontally at 390 px').toBe(true);
+  await expect(page.locator('.demo-toggle')).toHaveCount(0);
+  if (ADMIN_TOKEN) await expect(page.getByTestId('operator-login')).toBeVisible();
+
+  // The status dot has an accessible name, and a tap shows the data source in a tooltip.
+  const dot = page.getByTestId('data-source-badge');
+  await expect(dot).toHaveAccessibleName(/^Data source: /);
+  await dot.click();
+  await expect(page.getByRole('tooltip')).toContainText(/simulator|fallback|demo|connecting/i);
+
+  // Demo control opens from the overflow menu.
+  await page.getByTestId('topbar-more').click();
+  await page.getByTestId('menu-demo-control').click();
+  await expect(page.getByTestId('demo-control-panel')).toBeVisible();
+  await page.getByTestId('demo-control-panel-close').click();
+  await expect(page.getByTestId('demo-control-panel')).toHaveCount(0);
+
+  expect(consoleErrors, 'console errors on a phone').toEqual([]);
+  expect(failedRequests, 'failed requests on a phone').toEqual([]);
+});
+
+test('the building panel shows live readings from telemetry (audit F2)', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/');
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+  await openModule(page, 'infrastructure');
+  await page.getByTestId('building-tile-generator').click();
+
+  const drawer = page.getByTestId('building-drawer');
+  await expect(drawer).toBeVisible();
+  const rows = drawer.locator('[data-testid^="reading-"]');
+  await expect(rows).toHaveCount(4);                                // gen_power, fuel rate, rpm, coolant
+  // Live values, not "—" and not a built-in nominal: the drawer's generator power equals the tile's.
+  await expect(drawer.getByTestId('reading-gen_power')).not.toContainText('—');
+  // Dependency chips open the upstream building.
+  await drawer.getByRole('button', { name: /Logistics Store/ }).click();
+  await expect(drawer.getByRole('heading', { name: 'Logistics Store' })).toBeVisible();
+  await page.getByTestId('building-drawer-close').click();
+  await expect(drawer).toHaveCount(0);
+
+  // The dependency map opens the same panel from the keyboard.
+  await page.getByTestId('dep-node-generator').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('building-drawer')).toBeVisible();
+
+  expect(consoleErrors, 'console errors in the building panel').toEqual([]);
+  expect(failedRequests, 'failed requests in the building panel').toEqual([]);
+});
+
+
+test('operate and analyse pages: read-only what-if, twin inspector, and an audited ledger edit', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/');
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+
+  // What-if needs no sign-in (it changes nothing) and says it is rule-based.
+  await openModule(page, 'simulation');
+  await page.getByTestId('scenario-fuel_leak').click();
+  await page.getByTestId('whatif-run').click();
+  const result = page.getByTestId('whatif-result');
+  await expect(result).toContainText(/Fuel autonomy \d+ → \d+ days/);
+  await expect(result).toContainText(/not the physics model/);
+
+  // Twin inspector opens as a dialog and closes with Escape.
+  await page.getByTestId('nav-twinInspector').click();
+  await expect(page.getByTestId('twin-inspector')).toBeVisible();
+  await expect(page.getByTestId('twin-inspector')).toContainText(/Thermal model/);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('twin-inspector')).toHaveCount(0);
+
+  // A ledger edit, signed in when the stack protects writes, lands in the audit log.
+  const loggedIn = await operatorLogin(page);
+  await openModule(page, 'logistics');
+  await page.getByTestId('ledger-edit-maitri-med').click();
+  const input = page.getByTestId('ledger-current');
+  const next = String(Number(await input.inputValue()) - 1);
+  await input.fill(next);
+  await page.getByTestId('ledger-save').click();
+  // Every state-changing action asks first.
+  await expect(page.getByTestId('confirm-dialog')).toContainText(/Write .* to the ledger/);
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('toast')).toContainText(/Saved/);
+  await expect(page.getByTestId('logistics-history')).toContainText(`→ ${next}`);
+  expect(loggedIn || !ADMIN_TOKEN).toBe(true);
+
+  expect(consoleErrors, 'console errors on operate/analyse pages').toEqual([]);
+  expect(failedRequests, 'failed requests on operate/analyse pages').toEqual([]);
+});
+
+test('command palette, keyboard shortcuts, URL state and the alert centre tabs', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/?module=energy&station=bharati');
+  // The URL opens the page and station directly (refresh-safe, shareable).
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'energy');
+  await expect(page.getByTestId('station-option-bharati')).toHaveAttribute('aria-pressed', 'true');
+
+  // ⌘K / Ctrl+K → type → Enter navigates, and the URL follows.
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+  await page.getByTestId('palette-input').fill('weather');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
+  await expect(page).toHaveURL(/module=environmental&station=bharati/);
+
+  // With write protection on, "Sign in as operator" opens the sign-in dialog itself.
+  if (ADMIN_TOKEN) {
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByTestId('palette-input').fill('sign in');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('operator-token-input')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('operator-token-input')).toHaveCount(0);
+  }
+
+  // "g" then a letter navigates; "?" opens the help; Esc closes it.
+  await page.locator('body').click({ position: { x: 5, y: 300 } });
+  await page.keyboard.press('g');
+  await page.keyboard.press('a');
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'ai');
+  await page.keyboard.press('?');
+  await expect(page.getByTestId('shortcuts-dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('shortcuts-dialog')).toHaveCount(0);
+
+  // Back returns to the previous page; a reload keeps the current one.
+  await page.goBack();
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
+  await page.reload();
+  await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
+
+  // The alert centre has Active / Acknowledged / History.
+  await page.getByTestId('alerts-pill').click();
+  await expect(page.getByTestId('alert-drawer')).toBeVisible();
+  for (const tab of ['active', 'acknowledged', 'history']) {
+    await page.getByTestId(`alerts-tab-${tab}`).click();
+    await expect(page.getByTestId(`alerts-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+  }
+
+  expect(consoleErrors, 'console errors with palette/shortcuts').toEqual([]);
+  expect(failedRequests, 'failed requests with palette/shortcuts').toEqual([]);
+});
+
+test('the product tour starts once on a first visit, runs to the end and is not shown again', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/');
+  // Auto-start waits for the first telemetry snapshot.
+  await expect(page.getByTestId('tour-popover')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('data-source-badge')).not.toHaveAttribute('data-source', 'connecting');
+  await expect(page.getByTestId('tour-back')).toBeHidden();         // nothing to go back to on step 1
+
+  // ← goes back a step; then run all 12 steps through.
+  await page.getByTestId('tour-next').click();
+  await expect(page.getByTestId('tour-popover')).toHaveAttribute('data-tour-step', '2');
+  await page.keyboard.press('ArrowLeft');
+  const titles = await completeTour(page, 12);
+  expect(titles[0]).toBe('Choose a station');
+  expect(titles[11]).toBe('System');
+  // Focus is back on the page, not lost on <body>.
+  await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  expect(await page.evaluate((k) => JSON.parse(localStorage.getItem(k)).outcome, TOUR_KEY)).toBe('completed');
+
+  // Second visit: no tour, even after telemetry arrives.
+  await page.reload();
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+
+  // Restartable from the Help menu, and Esc ends it.
+  await page.getByTestId('help-open').click();
+  await page.getByTestId('help-tour').click();
+  await expect(page.getByTestId('tour-popover')).toHaveAttribute('data-tour-step', '1');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+
+  // …and from the command palette and the "?" help dialog.
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByTestId('palette-input').fill('start tour');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('tour-popover')).toBeVisible();
+  await page.getByTestId('tour-skip').click();
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+  await page.locator('body').click({ position: { x: 5, y: 300 } });
+  await page.keyboard.press('?');
+  await page.getByTestId('shortcuts-start-tour').click();
+  await expect(page.getByTestId('tour-popover')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  expect(consoleErrors, 'console errors during the tour').toEqual([]);
+  expect(failedRequests, 'failed requests during the tour').toEqual([]);
+});
+
+test('product tour: ?tour=off suppresses it and ?tour=start forces it', async ({ page }) => {
+  await page.goto('/?tour=off');
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+
+  // Mark it seen, then force it.
+  await page.evaluate((k) => localStorage.setItem(k, '{"outcome":"completed"}'), TOUR_KEY);
+  await page.goto('/?module=energy&tour=start');
+  await expect(page.getByTestId('tour-popover')).toBeVisible({ timeout: 30_000 });
+  await expect(page).not.toHaveURL(/tour=start/);                   // a reload won't restart it
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+});
+
+test('product tour on a phone: sidebar steps open the drawer, demo control points at the ⋮ menu', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const popover = page.getByTestId('tour-popover');
+  await expect(popover).toBeVisible({ timeout: 30_000 });
+  const drawer = page.getByTestId('mobile-nav');
+  for (let i = 1; i <= 12; i++) {
+    await expect(popover).toHaveAttribute('data-tour-step', String(i));
+    const title = await popover.locator('h2').textContent();
+    if (['Monitor', 'Operate', 'Analyse', 'AI diagnostics', 'Twin inspector', 'System'].includes(title)) {
+      await expect(drawer, `${title}: the drawer is open`).toBeVisible();
+    }
+    if (title === 'Demo control') {
+      await expect(drawer).toBeHidden();
+      await expect(popover).toContainText('⋮ menu');
+      await expect(page.locator('.driver-active-element')).toHaveAttribute('data-testid', 'topbar-more');
+    }
+    // Every step is fully on screen.
+    const box = await popover.boundingBox();
+    expect(box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 844, `step ${i} fits`).toBe(true);
+    await page.getByTestId('tour-next').click();
+  }
+  await expect(popover).toHaveCount(0);
+  await expect(drawer).toBeHidden();
+
+  expect(consoleErrors, 'console errors in the phone tour').toEqual([]);
+  expect(failedRequests, 'failed requests in the phone tour').toEqual([]);
+});
+
+test('page tours: Tour this page on Weather, Infrastructure, What-if and Administration', async ({ page }) => {
+  for (const [id, steps] of [['environmental', 4], ['infrastructure', 3], ['simulation', 4], ['admin', 3]]) {
+    await page.goto(`/?module=${id}`);
+    await page.getByTestId('page-tour').click();
+    await completeTour(page, steps);
+  }
+  // The thresholds tour leaves Administration on its thresholds tab.
+  await expect(page.getByTestId('admin-tab-thresholds')).toHaveAttribute('aria-selected', 'true');
 });

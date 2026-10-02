@@ -32,6 +32,12 @@ export function formatCoords(stationId) {
   return `${lat}, ${lon}`;
 }
 
+/** "≈ 25 winter crew": the figure is approximate (medium/low confidence in station_config). */
+export function crewLabel(stationId) {
+  const n = stationMeta(stationId).personnelWinter;
+  return typeof n === 'number' ? `≈ ${n} winter crew` : null;
+}
+
 export function buildingList(stationId) {
   return CONFIG.stations[stationId]?.buildings || [];
 }

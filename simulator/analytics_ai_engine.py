@@ -444,9 +444,10 @@ def assess_blizzard_and_polar_risks(station_id):
             "risk_level": "critical",
             "risk_score": 80,
             "affected_system": "Primary Diesel Generator & Heating Zone A",
-            "reason": f"Severe Wind Chill ({wind_chill:.1f}°C). Structural heat loss increases by ~42%, "
-                      f"requiring continuous auxiliary heating and boosting generator power demand "
-                      f"by +28 kW.",
+            # No numeric effect is claimed here: the rule engine does not model heat loss. The
+            # physics model's actual heating demand is on the Energy page.
+            "reason": f"Severe cold: {temp:.1f}°C, wind chill {wind_chill:.1f}°C. Building heat loss and "
+                      f"heating demand rise sharply in these conditions, raising generator load.",
             "recommended_action": "Engage secondary heating circuit (Zone B) and bring Backup Generator to hot-standby "
                                   "readiness."
         })

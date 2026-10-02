@@ -20,7 +20,9 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
-    """Fail loudly if any test tries to reach the network."""
+    """Fail loudly if any test tries to reach the network. Every requests entry point is
+    blocked (the simulator proxy uses requests.request), so a local stack left running on
+    the default ports can never answer a test."""
     import requests
 
     def _blocked(*args, **kwargs):
@@ -28,6 +30,8 @@ def no_network(monkeypatch):
 
     monkeypatch.setattr(requests, "get", _blocked)
     monkeypatch.setattr(requests, "post", _blocked)
+    monkeypatch.setattr(requests, "request", _blocked)
+    monkeypatch.setattr(requests.Session, "request", _blocked)
 
 
 @pytest.fixture

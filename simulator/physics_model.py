@@ -178,6 +178,31 @@ STATION_PHYSICS = {
 }
 
 
+def energy_summary(meta: dict | None) -> dict | None:
+    """The energy figures of ONE physics tick, for the telemetry snapshot.
+
+    Shipped with the readings of the same tick (simulator batch → published snapshot →
+    WebSocket), so generation, the demand split and the heating figures on screen always
+    share a timestamp. `totalDemand_kW` includes the model's ±2 % load variation, which
+    the components do not; the UI shows that remainder as its own row. None when the tick
+    did not run the physics model (random-walk simulation mode).
+    """
+    pb = (meta or {}).get("power_breakdown")
+    if not pb:
+        return None
+    return {
+        "totalDemand_kW": pb.get("total_demand_kW"),
+        "baseElectrical_kW": pb.get("base_electrical_kW"),
+        "heatingElectrical_kW": pb.get("heating_electrical_kW"),
+        "ventilation_kW": pb.get("ventilation_kW"),
+        "waterTreatment_kW": pb.get("water_treatment_kW"),
+        "comms_kW": pb.get("comms_kW"),
+        "heatLoss_kW": meta.get("total_heat_loss_kW"),
+        "heatingDemand_kW": meta.get("heating_demand_kW"),
+        "loadPct": meta.get("gen_load_pct"),
+    }
+
+
 class StationPhysicsModel:
     """
     Derives equipment telemetry from environmental conditions using

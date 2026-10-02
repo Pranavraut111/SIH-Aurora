@@ -63,7 +63,7 @@ from analytics_ai_engine import (
 from cascade import analyze_dependency_cascade
 from ncpor_ingestor import ingest_live_station, init_db
 from offline_explain import offline_explanation
-from physics_model import StationPhysicsModel
+from physics_model import StationPhysicsModel, energy_summary
 from station_store import StationStore
 from twin_inspector import build_twin_inspector
 from units import kmh_to_ms, ms_to_kmh
@@ -183,10 +183,11 @@ def get_latest_weather_for_station(station_id: str):
 
     res = {"temp": -15.0, "wind": 12.0, "pressure": 985.0, "humidity": 65.0,
            "source": "built-in default (no observations in DB)", "dataset": None}
-    for param, val, _ts, src, ds in rows:
+    for param, val, ts, src, ds in rows:
         if param == "temperature" and "temp_read" not in res:
             res["temp"] = val
             res["temp_read"] = True
+            res["observedAt"] = ts
             res["source"] = src
             res["dataset"] = ds
         elif param == "wind_speed" and "wind_read" not in res:
@@ -291,7 +292,8 @@ def advance_fallback(sid: str) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts_ms: int,
-                   last_batch_age, connected: bool, event_timeline=None, active_patterns=None) -> dict:
+                   last_batch_age, connected: bool, event_timeline=None, active_patterns=None,
+                   energy=None, replay=None) -> dict:
     """sensors → persistent threshold alerts (ALERTS.evaluate) → cascade → health → snapshot.
     Only the tick calls this (via select_snapshot), so alert state advances once per tick."""
     alerts, active_alerts = ALERTS.evaluate(sid, sensors, ts_ms)
@@ -310,6 +312,10 @@ def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts
         "provenance": provenance,
         "lastBatchAgeSec": None if last_batch_age is None else round(last_batch_age, 1),
         "sensors": sensors,
+        # Physics energy breakdown of the same tick as `sensors` (None in random-walk mode).
+        "energy": energy,
+        # ERA5 replay clock of the same tick (None: physics fallback runs on the wall clock).
+        "replay": replay,
         "alerts": alerts,
         "activeAlerts": active_alerts,
         "dependencyAlerts": dependency_alerts,
@@ -340,7 +346,7 @@ def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
     return build_snapshot(
         sid, fallback["sensors"], source="physics-fallback", provenance=provenance,
         ts_ms=fallback["computedAt"], last_batch_age=last_batch_age,
-        connected=store.is_connected(sid),
+        connected=store.is_connected(sid), energy=energy_summary(fallback["meta"]),
     )
 
 
@@ -370,6 +376,7 @@ def snapshot_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
         ts_ms=batch.get("timestamp") or int(time.time() * 1000),
         last_batch_age=last_batch_age, connected=store.is_connected(sid),
         event_timeline=batch.get("eventTimeline"), active_patterns=batch.get("activePatterns"),
+        energy=batch.get("energy"), replay=batch.get("replay"),
     )
 
 
@@ -398,7 +405,7 @@ def tick_station(sid: str) -> dict:
     fallback = advance_fallback(sid)
     store.set_fallback(sid, fallback)
     snap = select_snapshot(sid)
-    store.publish(sid, snap)
+    store.publish(sid, snap)          # also appends to the rolling history served by /api/history
     return snap
 
 
@@ -558,12 +565,60 @@ def get_station_state(station_id: str):
     return published_snapshot(require_station(station_id))
 
 
+_SERIES_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}\.[A-Za-z][A-Za-z0-9_]{0,39}$")
+
+
+@app.get("/api/history")
+def get_history(sid: str = Depends(station_param),
+                keys: str = Query(..., max_length=400,
+                                  description="Comma-separated 'building.sensor' keys (max 8)"),
+                minutes: int = Query(30, ge=1, le=60)):
+    """Rolling history of published telemetry (the values clients saw, one point per
+    published snapshot), oldest first, as [timestampMs, value] pairs. The window is
+    capped by HISTORY_MAX_POINTS × TICK_INTERVAL_S; unknown keys return an empty list."""
+    wanted = [k.strip() for k in keys.split(",") if k.strip()]
+    if not wanted or len(wanted) > 8 or not all(_SERIES_KEY.match(k) for k in wanted):
+        raise HTTPException(status_code=422, detail="keys: 1-8 comma-separated 'building.sensor' ids")
+    since = int(time.time() * 1000) - minutes * 60_000
+    return {
+        "stationId": sid,
+        "minutes": minutes,
+        "tickIntervalSec": app_config.TICK_INTERVAL_S,
+        "maxWindowMinutes": round(app_config.HISTORY_MAX_POINTS * app_config.TICK_INTERVAL_S / 60, 1),
+        "series": {k: [[t, v] for t, v in store.series(sid, k) if t >= since] for k in wanted},
+    }
+
+
 # ── Simulator ingest ──────────────────────────────────────────
 
 class SensorValue(BaseModel):
     value: float = Field(allow_inf_nan=False)
     unit: str = Field("", max_length=16)
     sourceType: str | None = Field(None, max_length=32)
+
+
+class EnergySummary(BaseModel):
+    """physics_model.energy_summary() of the tick the readings come from."""
+    model_config = ConfigDict(extra="forbid")
+    totalDemand_kW: float | None = Field(None, allow_inf_nan=False)
+    baseElectrical_kW: float | None = Field(None, allow_inf_nan=False)
+    heatingElectrical_kW: float | None = Field(None, allow_inf_nan=False)
+    ventilation_kW: float | None = Field(None, allow_inf_nan=False)
+    waterTreatment_kW: float | None = Field(None, allow_inf_nan=False)
+    comms_kW: float | None = Field(None, allow_inf_nan=False)
+    heatLoss_kW: float | None = Field(None, allow_inf_nan=False)
+    heatingDemand_kW: float | None = Field(None, allow_inf_nan=False)
+    loadPct: float | None = Field(None, allow_inf_nan=False)
+
+
+class ReplayClock(BaseModel):
+    """The ERA5 replay instant a simulator tick describes (reanalysis mode)."""
+    model_config = ConfigDict(extra="forbid")
+    timeMs: int | None = None                       # epoch ms (UTC); None if the offset is unknown
+    local: str | None = Field(None, max_length=32)  # the cache's own (station-local) timestamp
+    speedFactor: float | None = Field(None, allow_inf_nan=False, gt=0)
+    loop: int | None = None
+    utcOffsetSource: str | None = Field(None, max_length=40)
 
 
 class SensorBatch(BaseModel):
@@ -577,6 +632,8 @@ class SensorBatch(BaseModel):
     activeScenario: str | None = Field(None, max_length=64)
     injectedSensors: list[str] | None = None
     weatherSource: str | None = Field(None, max_length=200)
+    energy: EnergySummary | None = None
+    replay: ReplayClock | None = None
 
     @field_validator("readings")
     @classmethod
@@ -721,6 +778,7 @@ def get_ncpor_live(sid: str = Depends(station_param)):
             "source": weather["source"],
             # The actual dataset of the latest DB row (was always labelled "NCPOR Live AWS")
             "dataset": weather.get("dataset"),
+            "observedAt": weather.get("observedAt"),     # epoch ms of the temperature row; None = defaults
             "provenance": _weather_provenance(weather),
             "latitude": station_config.meta_value(sid, "latitude"),
             "longitude": station_config.meta_value(sid, "longitude")
@@ -836,149 +894,161 @@ class WhatIfRequest(BaseModel):
     scenarioId: Literal[WHATIF_SCENARIOS]
     intensity: float = Field(1.0, ge=0.5, le=2.0, allow_inf_nan=False)   # multiplier
 
+def _ledger_items(sid: str) -> dict:
+    """The operator-entered logistics ledger for one station, by item id."""
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM logistics_inventory WHERE station_id = ?", (sid,)).fetchall()
+    return {r["id"]: _inventory_item(r) for r in rows}
+
+
 @app.post("/api/simulation/whatif")
 def run_what_if_simulation(req: WhatIfRequest):
+    """Rule-based what-if: FIXED scenario deltas applied to the published snapshot.
+    This is not the physics model: the coefficients below are assumptions, returned in
+    `assumptions`, and every consequence line states only what is computed here (or read
+    from the logistics ledger). Read-only: nothing in the twin changes."""
     station_id = require_station(req.stationId)
     base = published_snapshot(station_id)   # read-only baseline (no physics advance)
     weather = base["sensors"]["lab"]
     gen = base["sensors"]["generator"]
     heat = base["sensors"]["heating"]
     comms = base["sensors"]["commsMast"]
+    k = req.intensity
 
     sim_weather = dict(weather)
     sim_gen = dict(gen)
     sim_heat = dict(heat)
     sim_comms = dict(comms)
-    impacts = []
-    affected_subsystems = []
+    impacts: list[str] = []
+    assumptions: list[str] = []
+    affected_subsystems: list[str] = []
 
     if req.scenarioId == "extreme_cold":
-        temp_drop = 20.0 * req.intensity
+        temp_drop = 20.0 * k
+        heat_kw_per_c = 1.8
+        l_per_kwh = 0.18
         sim_weather["env_temp"] -= temp_drop
-        power_spike = temp_drop * 1.8
+        power_spike = temp_drop * heat_kw_per_c
         sim_gen["gen_power"] += power_spike
-        sim_gen["gen_fuel_rate"] += power_spike * 0.18
+        sim_gen["gen_fuel_rate"] += power_spike * l_per_kwh
         sim_gen["gen_temp"] += 6.5
-        sim_heat["heat_a_flow"] += 12.0 * req.intensity
+        sim_heat["heat_a_flow"] += 12.0 * k
         sim_heat["heat_a_temp"] = max(55.0, sim_heat["heat_a_temp"] - 6.0)
-
-        impacts.append(f"Outside temperature drops to {sim_weather['env_temp']:.1f}°C "
-                       f"({temp_drop:.1f}°C below current NCPOR observation).")
-        impacts.append(f"Heating circuit load increases by +{power_spike:.1f} kW "
-                       f"(+{power_spike/max(1, gen['gen_power'])*100:.0f}% total demand).")
-        impacts.append(f"Fuel consumption rises by +{power_spike * 0.18 * 24:.0f} Liters/day.")
-        impacts.append("Trace heating on perimeter greywater discharge pipes running at 100% capacity.")
-
-        affected_subsystems = ["Primary Heating Circuit", "Power Generation", "Fuel Logistics", "Water Utility"]
-        risk_score = min(95, int(65 + 15 * req.intensity))
+        assumptions += [f"{temp_drop:.0f} °C drop (20 °C × intensity)",
+                        f"heating load {heat_kw_per_c} kW per °C", f"{l_per_kwh} L of diesel per extra kWh",
+                        "coolant +6.5 °C; zone A flow +12 L/min × intensity"]
+        impacts.append(f"Outside temperature {sim_weather['env_temp']:.1f} °C "
+                       f"({temp_drop:.1f} °C below the current snapshot).")
+        share = power_spike / max(1, gen["gen_power"]) * 100
+        impacts.append(f"Generator load +{power_spike:.1f} kW "
+                       f"(+{share:.0f} % of the current {gen['gen_power']:.0f} kW).")
+        impacts.append(f"Fuel burn +{power_spike * l_per_kwh:.1f} L/h (≈ +{power_spike * l_per_kwh * 24:.0f} L/day).")
+        affected_subsystems = ["Heating", "Power generation", "Fuel"]
+        risk_score = min(95, int(65 + 15 * k))
         risk_level = "critical" if risk_score > 75 else "warning"
-        action = "Activate secondary boiler loop, open zone mixing bypasses, and pre-heat standby generator coolant."
+        action = "Prepare additional heating capacity and check the standby generator before the cold arrives."
 
     elif req.scenarioId == "blizzard":
-        wind_spike = 45.0 * req.intensity
+        wind_spike = 45.0 * k
         sim_weather["env_wind"] += wind_spike
-        sim_weather["env_temp"] -= 8.0 * req.intensity
+        sim_weather["env_temp"] -= 8.0 * k
         sim_comms["comms_signal"] = -92.0
         sim_comms["comms_bandwidth"] = 0.4
-
-        impacts.append(f"Sustained wind accelerates to {sim_weather['env_wind']:.0f} km/h "
-                       f"({kmh_to_ms(sim_weather['env_wind']):.1f} m/s gale force).")
-        impacts.append("Building aerodynamic buffeting doubles thermal convection loss across unshielded facades.")
-        impacts.append("Satellite dish azimuth drives automatically locked in stow position to prevent gimbal shear.")
-        impacts.append("Life-line secured transit corridors mandated between living module and generator block.")
-
-        affected_subsystems = ["Communications Tower", "Outdoor Structural Safety", "HVAC Air Intakes", "Helipad"]
-        risk_score = min(98, int(72 + 16 * req.intensity))
+        assumptions += [f"wind +{wind_spike:.0f} km/h (45 × intensity)",
+                        f"temperature −{8.0 * k:.1f} °C (8 × intensity)",
+                        "satellite link degraded to −92 dBm / 0.4 Mbps (fixed)"]
+        impacts.append(f"Sustained wind {sim_weather['env_wind']:.0f} km/h "
+                       f"({kmh_to_ms(sim_weather['env_wind']):.1f} m/s).")
+        impacts.append(f"Outside temperature {sim_weather['env_temp']:.1f} °C.")
+        impacts.append("Satellite link assumed degraded: signal −92 dBm, bandwidth 0.4 Mbps.")
+        impacts.append("Generator load is not recomputed: this rule-based scenario does not run the thermal model.")
+        affected_subsystems = ["Communications", "Outdoor operations"]
+        risk_score = min(98, int(72 + 16 * k))
         risk_level = "critical"
-        action = ("Enforce Station Condition Red lockdown, stow steerable antenna dishes, and switch primary "
-                  "communications to Iridium SBD backup.")
+        action = "Restrict outdoor movement, secure external equipment and plan for reduced satellite bandwidth."
 
     elif req.scenarioId == "gen_failure":
         sim_gen["gen_power"] = 0.0
         sim_gen["gen_rpm"] = 0.0
         sim_gen["gen_fuel_rate"] = 0.0
         sim_gen["gen_temp"] = 32.0
-
-        impacts.append("Primary Volvo Penta Diesel Genset #1 tripped offline (0 kW output, 0 RPM).")
-        impacts.append("Automatic Static Transfer Switch (STS) transferred critical bus to 120 kWh Station Battery "
-                        "Bank.")
-        impacts.append("Battery autonomy calculated at 3.8 hours under essential load profile (18 kW).")
-        impacts.append("HVAC circulation pumps running on emergency inverter sub-panel.")
-
-        affected_subsystems = ["Electrical Power Grid", "Heating Distribution", "Scientific Labs", "Life Support"]
+        assumptions += ["generator power, rpm and fuel set to 0; coolant to 32 °C"]
+        impacts.append(f"Generator output 0 kW (from {gen['gen_power']:.0f} kW): every electrical load loses supply.")
+        impacts.append("The twin models one generator and no battery or UPS, so no backup autonomy is computed.")
+        affected_subsystems = ["Power generation", "Heating", "Water treatment", "Communications"]
         risk_score = 95
         risk_level = "critical"
-        action = ("Execute immediate non-essential load shedding (isolate scientific instruments, garage heaters) and "
-                  "dispatch auto-start sequence for Genset #2.")
+        action = "Shed non-essential loads and start the backup gen-set (the second gen-set is not modelled)."
 
     elif req.scenarioId == "battery_failure":
         sim_gen["gen_power"] = gen["gen_power"] * 1.15
         sim_gen["gen_fuel_rate"] = gen["gen_fuel_rate"] * 1.18
-
-        impacts.append("Station Battery Bank (UPS) disconnected following internal cell thermal runaway fault.")
-        impacts.append("Grid peak-shaving lost; primary generator operating without electrical buffer against "
-                        "inductive transient spikes.")
-        impacts.append("Emergency transition time in the event of generator trip reduced from 4 hours to 0 seconds.")
-
-        affected_subsystems = ["UPS Power Buffer", "DC Distribution Bus", "Instrumentation Protection"]
+        assumptions += ["illustrative penalty: generator load +15 %, fuel burn +18 %",
+                        "the twin does not model a battery bank or UPS"]
+        impacts.append(f"Assumed generator load {sim_gen['gen_power']:.1f} kW (+15 %) and fuel "
+                       f"{sim_gen['gen_fuel_rate']:.1f} L/h (+18 %).")
+        impacts.append("No battery or UPS is modelled: the loss of buffering itself is not simulated.")
+        affected_subsystems = ["Power generation", "Fuel"]
         risk_score = 82
         risk_level = "critical"
-        action = ("Synchronize auxiliary Genset #2 in hot standby mode to eliminate single-point-of-failure risk on the"
-                  " primary grid.")
+        action = "Keep the backup gen-set on hot standby until the storage fault is cleared."
 
     elif req.scenarioId == "fuel_leak":
-        extra_burn = 16.0 * req.intensity
+        extra_burn = 16.0 * k
         sim_gen["gen_fuel_rate"] += extra_burn
-
-        impacts.append(f"Abnormal fuel flow detected in feeder header (+{extra_burn:.1f} L/hr unmetered loss).")
-        impacts.append("Estimated fuel supply longevity reduced from 180 days to 58 days if unaddressed.")
-        impacts.append("Combustible vapor sensors in fuel trench reporting elevated hydrocarbon ppm.")
-
-        affected_subsystems = ["Fuel Storage Manifold", "Generator Supply Line", "Environmental Containment"]
-        risk_score = min(92, int(70 + 15 * req.intensity))
+        assumptions += [f"unmetered loss {extra_burn:.1f} L/h (16 × intensity)"]
+        impacts.append(f"Fuel loss +{extra_burn:.1f} L/h on top of the generator's {gen['gen_fuel_rate']:.1f} L/h.")
+        fuel = _ledger_items(station_id).get(f"{station_id}-fuel")
+        if fuel and fuel["unit"] == "L" and gen["gen_fuel_rate"] > 0:
+            before = fuel["current"] / (gen["gen_fuel_rate"] * 24)
+            after = fuel["current"] / ((gen["gen_fuel_rate"] + extra_burn) * 24)
+            impacts.append(f"Fuel autonomy {before:.0f} → {after:.0f} days at the current burn "
+                           f"({fuel['current']:,.0f} L in the operator-entered ledger).")
+        else:
+            impacts.append("Fuel autonomy not computed: no fuel stock in litres in the ledger.")
+        affected_subsystems = ["Fuel", "Power generation"]
+        risk_score = min(92, int(70 + 15 * k))
         risk_level = "critical"
-        action = ("Actuate solenoid isolation valve SV-04 to isolate Main Fuel Line Trench and switch generator feed to"
-                  " Day Tank #2.")
+        action = "Locate and isolate the leaking section of the fuel line; switch the generator to an intact supply."
 
     elif req.scenarioId == "comms_outage":
         sim_comms["comms_signal"] = -120.0
         sim_comms["comms_bandwidth"] = 0.0
         sim_comms["comms_uptime"] = 0.0
-
-        impacts.append("Primary Geostationary VSAT uplink lost (Geomagnetic solar storm / RF transponder loss).")
-        impacts.append("Mission Control high-bandwidth telemetry stream disconnected; station operating in autonomous "
-                        "edge mode.")
-        impacts.append("Autonomous PLC edge controllers executing fail-safe thermal and power governing routines "
-                        "locally.")
-
-        affected_subsystems = ["Satellite Comms", "Remote Telemetry Uplink", "Science Data Relay"]
+        assumptions += ["satellite link down: signal −120 dBm, bandwidth 0, uptime 0 (fixed)"]
+        impacts.append("Satellite link down: no telemetry reaches mission control.")
+        impacts.append("Station systems are unaffected in the model; "
+                       "see Link cut (simulated) for the twin's behaviour.")
+        affected_subsystems = ["Communications"]
         risk_score = 70
         risk_level = "warning"
-        action = ("Engage Iridium Short Burst Data (SBD) emergency low-bandwidth transceiver and verify local "
-                  "autonomous edge controllers.")
+        action = "Switch to any backup link available and confirm local monitoring until the link returns."
 
     elif req.scenarioId == "resupply_delay":
-        days_delay = int(60 * req.intensity)
-        impacts.append(f"MV Vasiliy Golovnin expedition arrival delayed by {days_delay} days "
-                       f"due to dense fast-ice pack in Prydz Bay.")
-        impacts.append("Station wintering reserve margin compressed from 240 days to nominal winter length.")
-        impacts.append("Mandatory conservation protocol: thermal setpoint reduced by -1.5°C to save ~14% monthly "
-                        "diesel consumption.")
-
-        affected_subsystems = ["Fuel Autonomy", "Food Rations", "Spare Parts Reserve"]
-        risk_score = 65
-        risk_level = "warning"
-        action = ("Enact Level-2 Fuel & Rations Conservation: lower indoor corridor temperature to 19°C and optimize "
-                  "generator load scheduling.")
+        days_delay = int(60 * k)
+        assumptions += [f"resupply delayed {days_delay} days (60 × intensity)",
+                        "consumption stays at the ledger's daily use"]
+        items = _ledger_items(station_id).values()
+        short = [i for i in items if i["daysRemaining"] is not None and i["daysRemaining"] < days_delay]
+        impacts.append(f"Resupply delayed by {days_delay} days.")
+        if short:
+            impacts.append("Would run out before a delayed resupply (operator-entered ledger): "
+                           + "; ".join(f"{i['name']} ({i['daysRemaining']:.0f} days)" for i in short) + ".")
+        else:
+            impacts.append(f"Every ledger item covers the {days_delay}-day delay at its current daily use.")
+        affected_subsystems = ["Logistics"] + [i["name"] for i in short]
+        risk_score = 65 if not short else min(95, 65 + 10 * len(short))
+        risk_level = "warning" if risk_score < 76 else "critical"
+        action = ("Reduce consumption of the items listed above and re-plan the resupply."
+                  if short else "Keep current consumption; review the ledger weekly.")
 
     else:
         impacts.append("Baseline nominal operating envelope.")
-        affected_subsystems = ["All Systems Nominal"]
+        affected_subsystems = ["All systems"]
         risk_score = 15
         risk_level = "healthy"
         action = "Routine station monitoring."
 
-    # Compute deltas
     deltas = {
         "temperature_delta": round(sim_weather["env_temp"] - weather["env_temp"], 1),
         "wind_delta": round(sim_weather["env_wind"] - weather["env_wind"], 1),
@@ -991,6 +1061,8 @@ def run_what_if_simulation(req: WhatIfRequest):
         "scenarioId": req.scenarioId,
         "intensity": req.intensity,
         "dataSource": base["dataSource"],
+        "baselineTimestamp": base["timestamp"],
+        "engine": "rule-based",
         "baseline": base["sensors"],
         "simulated": {
             "lab": sim_weather,
@@ -1001,13 +1073,15 @@ def run_what_if_simulation(req: WhatIfRequest):
         "deltas": deltas,
         "affectedSubsystems": affected_subsystems,
         "consequences": impacts,
+        "assumptions": assumptions,
         "calculatedRisk": {
             "score": risk_score,
             "level": risk_level,
             "recommendedAction": action
         },
-        "provenance": ("Calculated by Antarctic Digital Twin Causal Simulation Engine on "
-                       f"{station_id.upper()} NCPOR AWS baseline")
+        "provenance": (f"Rule-based what-if: fixed scenario deltas applied to the {base['dataSource']} snapshot of "
+                       f"{station_id} (environment: {base['provenance'].get('environment', 'unknown')}). "
+                       "Coefficients are assumptions, not the physics model. Severity score is rule-based (0-100).")
     }
 
 # ═══════════════════════════════════════════════════════════════

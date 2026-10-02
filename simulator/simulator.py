@@ -29,7 +29,7 @@ import config as app_config  # aliased: 'config' is a loop variable in this modu
 import station_config
 from config import ALLOWED_ORIGINS, HOST
 from decision_scheduler import DecisionScheduler
-from physics_model import StationPhysicsModel
+from physics_model import StationPhysicsModel, energy_summary
 from twin_inspector import build_twin_inspector
 
 # Import new Phase 1/2 modules
@@ -197,7 +197,9 @@ STATION_PROFILES = {
 SCENARIOS = {
     "generator_failure": {
         "name": "Generator Failure",
-        "description": "Generator power drops, RPM falls. Cascades to heating, water, comms.",
+        "description": ("Overrides generator power, speed and coolant toward fault values. Downstream "
+                        "buildings are flagged as cascade risks by the alert rules; their readings are "
+                        "not changed."),
         "duration": 30,
         "injections": {
             "generator.gen_power": 25.0,
@@ -207,7 +209,8 @@ SCENARIOS = {
     },
     "heating_failure": {
         "name": "Heating System Failure",
-        "description": "Heating Zone A output drops. Living quarters temperature falls.",
+        "description": ("Overrides Heating Zone A supply temperature and flow, and the living-quarters "
+                        "temperature, toward fault values."),
         "duration": 25,
         "injections": {
             "heating.heat_a_temp": 32.0,
@@ -217,7 +220,9 @@ SCENARIOS = {
     },
     "blizzard": {
         "name": "Blizzard Event",
-        "description": "Extreme wind and cold. Comms degrade, heating demand spikes.",
+        "description": ("Overrides outside wind and temperature and the comms signal toward storm values. "
+                        "The physics model does not see injected weather, so heating demand is not "
+                        "recomputed."),
         "duration": 40,
         "injections": {
             "lab.env_wind": 145.0,
@@ -227,7 +232,7 @@ SCENARIOS = {
     },
     "water_crisis": {
         "name": "Water System Alert",
-        "description": "Water tank level critical. pH imbalanced.",
+        "description": "Overrides the water-tank level and pH toward fault values.",
         "duration": 20,
         "injections": {
             "waterTank.water_level": 8.0,
@@ -236,7 +241,7 @@ SCENARIOS = {
     },
     "co2_spike": {
         "name": "CO2 Spike",
-        "description": "Ventilation failure — CO2 rising in living quarters.",
+        "description": "Overrides living-quarters CO2 and humidity toward a ventilation-failure level.",
         "duration": 20,
         "injections": {
             "livingQuarters.lq_co2": 1600.0,
@@ -437,6 +442,8 @@ class StationSimulator:
     def tick(self) -> dict:
         """Execute one simulation tick. Returns readings for the backend."""
         self.tick_count += 1
+        self._last_energy = None   # set only by a tick that ran the physics model
+        self._last_replay = None   # replay clock of this tick (reanalysis mode only)
 
         if self.mode == "reanalysis" and self.weather_available:
             return self._tick_reanalysis()
@@ -493,6 +500,14 @@ class StationSimulator:
 
         # 5. Store metadata for logging
         self._last_meta = meta
+        self._last_energy = energy_summary(meta)
+        self._last_replay = {
+            "timeMs": weather.get("simulated_time_ms"),
+            "local": weather.get("simulated_time"),
+            "speedFactor": self.weather_layer.speed_factor,
+            "loop": weather.get("replay_loop"),
+            "utcOffsetSource": weather.get("utc_offset_source"),
+        }
         self._last_weather = weather
 
         # 6. Phase 3: Anomaly detection (scored every tick)
@@ -756,6 +771,8 @@ def list_scenarios():
             "name": s["name"], "description": s["description"],
             "duration": s["duration"],
             "affectedSensors": list(s["injections"].keys()),
+            # Target of each override; a value moves 30 % of the way there per tick.
+            "targets": dict(s["injections"]),
         }
     station_id = flask_request.args.get("station", "maitri")
     sim = _get_station(station_id)
@@ -1347,6 +1364,10 @@ def main():
                         "activeScenario": sim.active_scenario,
                         "injectedSensors": sorted(sim.active_injections.keys()),
                         "weatherSource": source_info.get("dataset") or source_info.get("label"),
+                        # Energy breakdown of THIS tick (same timestamp as the readings).
+                        "energy": getattr(sim, "_last_energy", None),
+                        # ERA5 replay clock of THIS tick: the instant the readings describe.
+                        "replay": getattr(sim, "_last_replay", None),
                     })
 
             for payload in payloads:

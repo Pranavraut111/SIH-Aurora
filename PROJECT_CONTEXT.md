@@ -492,7 +492,7 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 | Equipment anomaly detection (IsolationForest) | Infra | ❌ | `anomaly_engine.py`, `/api/anomaly` :8001 | Continuous false positives (VERIFIED); **not shown in UI** |
 | Decision engine / risk rules | All | ⚠️ | `decision_engine.py` | Works, but driven by the broken anomaly input; **not shown in UI** |
 | Groq LLM explanation | All | ⚠️ | `simulator.py:1003-1069` | Works on :8001 with key; **UI calls :8080 instead**, which returns a fixed template that ignores the question (VERIFIED) |
-| Voice assistant ("JARVIS") | All | 🧪 | `OverviewHUD.jsx:42-160`, `AiPanel.jsx:104-154` | Speech in/out works in browser; backend ignores `freeText`, so every answer is the same briefing |
+| Voice assistant | All | 🧪 | `OverviewHUD.jsx:42-160`, `AiPanel.jsx:104-154` | Speech in/out works in browser; backend ignores `freeText`, so every answer is the same briefing |
 | AI Diagnostics table | Infra | 🧪 | `AiPanel.jsx`, `unified_backend.py:361-386` | `predicted = actual × 0.98`; labelled "LSTM residual engine", "Neural Models"; mock fallbacks |
 | Threshold alerts (Java) | All | ✅ | `StationService.java:48-62,138-150` | Thresholds tuned for random-walk nominals, so false warnings in physics mode (VERIFIED) |
 | Threshold alerts (unified) | All | ⚠️ | `unified_backend.py:203-255` | Only gen_temp + wind; ignores admin thresholds |
@@ -653,26 +653,60 @@ Legend: ✅ Working · ⚠️ Partial · 🧪 Mock/Stub · ❌ Broken · ⬜ Not
 
 ## 11. Frontend / Digital Twin UI
 
-**Shell:** `App.jsx` holds all state in `useState`. No router (react-router-dom installed but unused), no global store, no error boundaries. Navigation is `activeModule` state driven by `SidebarNav`.
+> **Updated 2026-10-02 after the UI redesign (PR #1, phases 1A–1C).** The table this section
+> used to hold described the pre-redesign panels. Every file it listed is gone, and the
+> problems it recorded (misleading badges, hardcoded Energy figures, local-only toggles,
+> mock briefings, the station-blind Demo Control) are fixed. See `CHANGELOG.md` and
+> `docs/ui-redesign.md`.
 
-| Module / component | File | Data source | Notes |
-|---|---|---|---|
-| Mission Overview (3D + HUD) | `StationScene.jsx`, `OverviewHUD.jsx` | WS state; `POST :8080/api/aurora-explain` for voice | Procedural three.js (boxes, cylinder tank, mast, snow particles, aurora, mountains); OrbitControls; raycast selection; `renderer.dispose()` on unmount but geometries/materials not disposed (INFERRED minor leak). HUD falls back to −22.4 °C / 34 km/h / 162 kW when empty. |
-| NCPOR Weather | `EnvironmentalPanel.jsx` | `/api/ncpor/*`, `/api/anomaly`, `/api/forecast`, `/api/correlation`, `/api/risk` | Recharts; badge says "Official NCPOR / NPDC Live Telemetry" (misleading); "seasonal" tab uses client data |
-| Infrastructure | `ModulePanels.jsx: InfrastructurePanel`, `DependencyGraph.jsx` | WS state + `/api/ai/analysis` | Building cards + SVG dependency graph from `stationData.js` |
-| Energy Grid | `ModulePanels.jsx: EnergyPanel` | WS generator values | Mostly hardcoded (§10.3) |
-| Logistics & Supply | `LogisticsPanel.jsx` | `/api/logistics`, `/api/logistics/update` | Edit modal; free-text operator name |
-| Remote C&C | `RemoteControlPanel.jsx` | `/api/remote/*`, `/api/alerts` (poll 3 s) | Subsystem toggles are local state only |
-| What-If Sim | `WhatIfSimulationPanel.jsx` | `POST /api/simulation/whatif` | 7 scenarios, intensity slider |
-| AI Diagnostics | `AiPanel.jsx` | `/api/predictions` (poll 3 s), `/api/aurora-explain` | "LSTM" and "Neural Models" labels; mock briefings on failure |
-| Station Reports | `ReportPanel.jsx` | 5 parallel fetches | Print/PDF via `window.print`, JSON and CSV export; hardcoded fallbacks |
-| System Admin | `AdminPanel.jsx` | `/api/admin/config`, `/api/ncpor/ingest` | Threshold save is a no-op |
-| Top bar / sidebar / drawers | `TopBar.jsx`, `SidebarNav.jsx`, `ConnectionPanel.jsx`, `AlertFeed.jsx`, `BuildingPanel.jsx` (+`Sparkline`, `IconMap`), `EventTimeline.jsx` | WS state | Connection drawer text claims "queued in local SQLite storage" (untrue; it's a counter) |
-| Twin Inspector modal | `TwinInspector.jsx` | `:8080` then `:8001` `/api/twin-inspector`; `:8001/mode` | Schema mismatch with unified backend |
-| Demo Control (floating) | `DemoControl.jsx` | `:8001/scenarios`, `/inject`, `/reset` | Ignores `activeStation` prop |
-| **Dead** | `IncidentPanel.jsx/.css`, `hooks/useSpotlight.js`, `services/groqService.js`, exports `getRiskSummary`, `injectAnomaly`, `getInventory`, `INVENTORY`, `getEventTimeline`, `saveStationConfig`, `subscribeStationConfig`, `trackAlertAction`, `trackDemoScenario`, `useDatabase` return values; Java `AiVerdictDTO` | — | grep (VERIFIED) |
+**Stack:**
+- React 19 + Vite, MUI 9 with CSS variables (dark and light schemes, tokens in
+  `src/theme/tokens.js`), Recharts 3, three.js for the 3D twin, and driver.js 1.8 for the tour.
+- No router: the page and station live in the URL (`?module=&station=`, `shell/urlState.js`).
+- No global store.
 
-**State management:** local React state + refs. `useStationData` owns the WS lifecycle, a 60-point per-sensor history, the fake offline mode, and the browser-sim fallback. Every panel polls independently (3-4 s intervals), so ~6-8 concurrent pollers exist on some screens.
+**Shell** (`src/App.jsx`, `src/shell/`):
+- One top bar (`TopBar.jsx`): station switcher, data source / link / alerts / events chips,
+  search (⌘K), Help menu, Demo control, theme, Sign in.
+- The sidebar (`SideNav.jsx`, drawer below md) has Monitor / Operate / Analyse / System
+  sections from the single registry `navigation.js`, plus the station mini-card.
+- The command palette, shortcuts (`useShortcuts.js`) and Help menu sit alongside them.
+- Every page has its own ErrorBoundary and loads lazily.
+- Startup JS: 485 kB raw / 155 kB gzip, against a 500 kB budget.
+
+| Page | Folder | Data source |
+|---|---|---|
+| Overview (3D twin + HUD) | `components/StationScene.jsx`, `OverviewHUD.jsx` | WS snapshot; `/api/history` for sparklines; 2D fallback without WebGL |
+| Weather | `modules/weather` | WS snapshot (live figures); `/api/ncpor/*`, `/api/anomaly`, `/api/forecast`, `/api/correlation`, `/api/risk` (stored data) |
+| Infrastructure + building panel | `modules/infrastructure` | WS snapshot, alert engine, `station_config.json` dependency graph |
+| Energy grid | `modules/energy` | `snapshot.energy` (physics model), history, ledger |
+| Logistics | `modules/logistics` | `/api/logistics` (operator ledger + audit log) |
+| Remote commands | `modules/remote` | `/api/remote/*` (simulated dispatch), alerts |
+| What-if | `modules/whatif` | `POST /api/simulation/whatif` (rule-based, read-only) |
+| AI diagnostics | `modules/ai` | `/api/ai/*` → simulator; `/api/aurora-explain` |
+| Reports | `modules/reports` | several reads; print, CSV and JSON export |
+| Twin inspector | `modules/twin` | `/api/twin-inspector`, `/api/sim/mode` |
+| Administration | `modules/admin` | `/api/admin/config`, threshold overrides, `/api/ncpor/ingest` |
+| Overlays | `overlays/` | Alert centre (`/api/alerts`, `/alerts/history`), link, event log, Demo control (`/api/sim/*`) |
+
+**Cross-cutting:**
+- **Provenance.** A chip on every page and card (`ui/Provenance.jsx`).
+- **Feedback.** `ui/FeedbackProvider`: every state-changing action asks first (`useConfirm`)
+  and reports its result in a toast.
+- **Write protection.** `useAdminToken`; signed out, `WriteButton` disables writes and the
+  threshold table is read-only.
+- **States.** Loading, empty and error states on every page, checked with the simulator
+  stopped and with the backend stopped.
+- **Guided tour** (`src/tour/`): 12 steps, auto-starts once (`aurora-tour-v1` in
+  localStorage), and can be restarted from Help, `?` or the palette. There are page tours
+  for Weather, Infrastructure, What-if and Administration → thresholds. `?tour=off|start`.
+- **Accessibility.** axe reports 0 violations on every page and every tour step at 1440 and
+  390 px in both schemes. There is a focus ring on every control and a "Skip to content" link.
+
+**Remaining debt:**
+- `StationScene.jsx` (the 3D scene, deliberately untouched) carries the remaining oxlint
+  warnings and disposes the renderer but not geometries.
+- Pages poll independently, every 3–5 s.
 
 ---
 

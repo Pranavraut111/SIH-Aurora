@@ -149,8 +149,9 @@ if AURORA_DATE is None:
 APP_VERSION = "3.1.0"
 # A simulator batch newer than this (seconds) makes the simulator the telemetry source.
 SIM_BATCH_FRESH_S = _get_float("SIM_BATCH_FRESH_S", 10.0)
-# Rolling in-memory history per sensor (points).
-HISTORY_MAX_POINTS = _get_int("HISTORY_MAX_POINTS", 300)
+# Rolling in-memory history per sensor (points). 900 × 2 s ticks = 30 min, the window the
+# UI charts and the 15-min rolling fuel-burn average need (served by GET /api/history).
+HISTORY_MAX_POINTS = _get_int("HISTORY_MAX_POINTS", 900)
 # Background tick interval (seconds). The tick is the ONLY code that advances physics state.
 TICK_INTERVAL_S = _get_float("TICK_INTERVAL_S", 2.0)
 # Simulated remote commands move queued → acknowledged (simulated) after this many seconds.

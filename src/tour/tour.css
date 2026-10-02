@@ -1,0 +1,110 @@
+/* Aurora — product tour popover, themed with the app's CSS variables (--aur-*),
+   so it follows the colour scheme like everything else. A static stylesheet:
+   allowed by the CSP (style-src 'self'); driver.js positions with style attributes. */
+
+.driver-popover.aurora-tour {
+  font-family: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--aur-palette-text-primary);
+  background-color: var(--aur-palette-aurora-surfaceOverlay);
+  border: 1px solid var(--aur-palette-divider);
+  border-radius: 12px;
+  box-shadow: var(--aur-palette-aurora-shadowFloat);
+  padding: 20px;
+  min-width: 260px;
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+.driver-popover.aurora-tour .driver-popover-title {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  padding-right: 8px;
+}
+
+.driver-popover.aurora-tour .driver-popover-description {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--aur-palette-text-secondary);
+  margin-top: 6px;
+}
+
+.driver-popover.aurora-tour .driver-popover-footer {
+  margin-top: 16px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.driver-popover.aurora-tour .driver-popover-progress-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--aur-palette-text-secondary);
+  font-feature-settings: "tnum" 1;
+}
+
+.driver-popover.aurora-tour .driver-popover-navigation-btns {
+  gap: 8px;
+  align-items: center;
+}
+
+.driver-popover.aurora-tour .driver-popover-navigation-btns button + button { margin-left: 0; }
+
+.driver-popover.aurora-tour .driver-popover-footer-btn,
+.driver-popover.aurora-tour .aurora-tour-skip {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 32px;
+  white-space: nowrap;
+  text-shadow: none;
+}
+
+.driver-popover.aurora-tour .driver-popover-next-btn {
+  color: var(--aur-palette-primary-contrastText);
+  background-color: var(--aur-palette-primary-main);
+}
+.driver-popover.aurora-tour .driver-popover-next-btn:hover { background-color: var(--aur-palette-primary-dark); }
+
+.driver-popover.aurora-tour .driver-popover-prev-btn {
+  color: var(--aur-palette-text-primary);
+  background-color: transparent;
+  border: 1px solid var(--aur-palette-aurora-borderControl);
+}
+
+.driver-popover.aurora-tour .aurora-tour-skip {
+  color: var(--aur-palette-text-secondary);
+  background: transparent;
+  margin-right: auto;
+}
+
+.driver-popover.aurora-tour .driver-popover-prev-btn:hover,
+.driver-popover.aurora-tour .aurora-tour-skip:hover {
+  background-color: var(--aur-palette-action-hover);
+  color: var(--aur-palette-text-primary);
+}
+
+.driver-popover.aurora-tour button:focus-visible {
+  outline: 2px solid var(--aur-palette-primary-main);
+  outline-offset: 2px;
+}
+
+/* The arrow takes the popover colour on whichever side it sits. */
+.driver-popover.aurora-tour .driver-popover-arrow { border-color: var(--aur-palette-aurora-surfaceOverlay); }
+.driver-popover.aurora-tour .driver-popover-arrow-side-left { border-top-color: transparent; border-bottom-color: transparent; border-right-color: transparent; }
+.driver-popover.aurora-tour .driver-popover-arrow-side-right { border-top-color: transparent; border-bottom-color: transparent; border-left-color: transparent; }
+.driver-popover.aurora-tour .driver-popover-arrow-side-top { border-bottom-color: transparent; border-left-color: transparent; border-right-color: transparent; }
+.driver-popover.aurora-tour .driver-popover-arrow-side-bottom { border-top-color: transparent; border-left-color: transparent; border-right-color: transparent; }
+
+/* The highlight ring around the target. */
+.driver-active-element { outline: 2px solid var(--aur-palette-primary-main); outline-offset: 4px; border-radius: 8px; }
+
+/* driver.js runs with animate: false (see runTour.js); a short fade per step instead. */
+@keyframes aurora-tour-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  .driver-popover.aurora-tour { animation: aurora-tour-in 160ms cubic-bezier(0.2, 0, 0, 1); }
+}

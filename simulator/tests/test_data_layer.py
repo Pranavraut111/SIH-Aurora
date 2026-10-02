@@ -147,13 +147,14 @@ def test_migration_004_relabels_legacy_executed_rows(tmp_path):
     assert "nothing was executed" in row[2] and "applied to station" in row[2]   # original text kept
 
 
-def test_remote_panel_buttons_are_in_the_catalogue():
-    """Every command the Remote C&C panel can send must be accepted by the backend catalogue."""
+def test_remote_page_labels_match_the_catalogue():
+    """The Remote commands page renders its buttons from the backend catalogue, so it can only
+    send catalogue commands. Its plain-language label table must cover exactly that catalogue:
+    every command has a label, and no label names a command the backend would reject."""
     import station_config as sc
-    src = (SIM_DIR.parent / "src" / "components" / "RemoteControlPanel.jsx").read_text()
-    calls = re.findall(r"handleDispatch\('([^']+)',\s*([^)]*)\)", src)
-    assert calls
-    catalog = sc.remote_command_catalog()
-    for subsystem, expr in calls:
-        for command in re.findall(r"'([A-Z_]+)'", expr):
-            assert command in catalog[subsystem], (subsystem, command)
+    src = (SIM_DIR.parent / "src" / "modules" / "remote" / "RemoteModule.jsx").read_text()
+    table = re.search(r"const COMMAND_LABEL = \{(.*?)\};", src, re.S)
+    assert table
+    labelled = set(re.findall(r"^\s*([A-Z_]+):", table.group(1), re.M))
+    catalog = {c for k, cmds in sc.remote_command_catalog().items() if not k.startswith("_") for c in cmds}
+    assert labelled == catalog, (labelled ^ catalog)
