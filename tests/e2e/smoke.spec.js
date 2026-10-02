@@ -243,3 +243,29 @@ test('viewing needs no login, and writes are refused without one', async ({ page
   expect(consoleErrors, 'console errors while signed out').toEqual([]);
   expect(failedRequests.filter((f) => !f.startsWith('401')), 'unexpected failed requests').toEqual([]);
 });
+
+test('on a phone the top bar fits, Sign in stays reachable and demo control covers nothing', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.getByTestId('data-source-badge')).toBeVisible();
+
+  // One top bar, no horizontal scroll, and no floating button over the page.
+  const fits = await page.evaluate(() => {
+    const bar = document.querySelector('.MuiToolbar-root');
+    return document.documentElement.scrollWidth <= window.innerWidth && bar.scrollWidth <= bar.clientWidth;
+  });
+  expect(fits, 'top bar or page overflows horizontally at 390 px').toBe(true);
+  await expect(page.locator('.demo-toggle')).toHaveCount(0);
+  if (ADMIN_TOKEN) await expect(page.getByTestId('operator-login')).toBeVisible();
+
+  // Demo control opens from the overflow menu.
+  await page.getByTestId('topbar-more').click();
+  await page.getByTestId('menu-demo-control').click();
+  await expect(page.getByTestId('demo-control-panel')).toBeVisible();
+  await page.getByTestId('demo-control-close').click();
+  await expect(page.getByTestId('demo-control-panel')).toHaveCount(0);
+
+  expect(consoleErrors, 'console errors on a phone').toEqual([]);
+  expect(failedRequests, 'failed requests on a phone').toEqual([]);
+});

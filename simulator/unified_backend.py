@@ -63,7 +63,7 @@ from analytics_ai_engine import (
 from cascade import analyze_dependency_cascade
 from ncpor_ingestor import ingest_live_station, init_db
 from offline_explain import offline_explanation
-from physics_model import StationPhysicsModel
+from physics_model import StationPhysicsModel, energy_summary
 from station_store import StationStore
 from twin_inspector import build_twin_inspector
 from units import kmh_to_ms, ms_to_kmh
@@ -291,7 +291,8 @@ def advance_fallback(sid: str) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts_ms: int,
-                   last_batch_age, connected: bool, event_timeline=None, active_patterns=None) -> dict:
+                   last_batch_age, connected: bool, event_timeline=None, active_patterns=None,
+                   energy=None) -> dict:
     """sensors → persistent threshold alerts (ALERTS.evaluate) → cascade → health → snapshot.
     Only the tick calls this (via select_snapshot), so alert state advances once per tick."""
     alerts, active_alerts = ALERTS.evaluate(sid, sensors, ts_ms)
@@ -310,6 +311,8 @@ def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts
         "provenance": provenance,
         "lastBatchAgeSec": None if last_batch_age is None else round(last_batch_age, 1),
         "sensors": sensors,
+        # Physics energy breakdown of the same tick as `sensors` (None in random-walk mode).
+        "energy": energy,
         "alerts": alerts,
         "activeAlerts": active_alerts,
         "dependencyAlerts": dependency_alerts,
@@ -340,7 +343,7 @@ def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
     return build_snapshot(
         sid, fallback["sensors"], source="physics-fallback", provenance=provenance,
         ts_ms=fallback["computedAt"], last_batch_age=last_batch_age,
-        connected=store.is_connected(sid),
+        connected=store.is_connected(sid), energy=energy_summary(fallback["meta"]),
     )
 
 
@@ -370,6 +373,7 @@ def snapshot_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
         ts_ms=batch.get("timestamp") or int(time.time() * 1000),
         last_batch_age=last_batch_age, connected=store.is_connected(sid),
         event_timeline=batch.get("eventTimeline"), active_patterns=batch.get("activePatterns"),
+        energy=batch.get("energy"),
     )
 
 
@@ -398,7 +402,7 @@ def tick_station(sid: str) -> dict:
     fallback = advance_fallback(sid)
     store.set_fallback(sid, fallback)
     snap = select_snapshot(sid)
-    store.publish(sid, snap)
+    store.publish(sid, snap)          # also appends to the rolling history served by /api/history
     return snap
 
 
@@ -558,12 +562,50 @@ def get_station_state(station_id: str):
     return published_snapshot(require_station(station_id))
 
 
+_SERIES_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}\.[A-Za-z][A-Za-z0-9_]{0,39}$")
+
+
+@app.get("/api/history")
+def get_history(sid: str = Depends(station_param),
+                keys: str = Query(..., max_length=400,
+                                  description="Comma-separated 'building.sensor' keys (max 8)"),
+                minutes: int = Query(30, ge=1, le=60)):
+    """Rolling history of published telemetry (the values clients saw, one point per
+    published snapshot), oldest first, as [timestampMs, value] pairs. The window is
+    capped by HISTORY_MAX_POINTS × TICK_INTERVAL_S; unknown keys return an empty list."""
+    wanted = [k.strip() for k in keys.split(",") if k.strip()]
+    if not wanted or len(wanted) > 8 or not all(_SERIES_KEY.match(k) for k in wanted):
+        raise HTTPException(status_code=422, detail="keys: 1-8 comma-separated 'building.sensor' ids")
+    since = int(time.time() * 1000) - minutes * 60_000
+    return {
+        "stationId": sid,
+        "minutes": minutes,
+        "tickIntervalSec": app_config.TICK_INTERVAL_S,
+        "maxWindowMinutes": round(app_config.HISTORY_MAX_POINTS * app_config.TICK_INTERVAL_S / 60, 1),
+        "series": {k: [[t, v] for t, v in store.series(sid, k) if t >= since] for k in wanted},
+    }
+
+
 # ── Simulator ingest ──────────────────────────────────────────
 
 class SensorValue(BaseModel):
     value: float = Field(allow_inf_nan=False)
     unit: str = Field("", max_length=16)
     sourceType: str | None = Field(None, max_length=32)
+
+
+class EnergySummary(BaseModel):
+    """physics_model.energy_summary() of the tick the readings come from."""
+    model_config = ConfigDict(extra="forbid")
+    totalDemand_kW: float | None = Field(None, allow_inf_nan=False)
+    baseElectrical_kW: float | None = Field(None, allow_inf_nan=False)
+    heatingElectrical_kW: float | None = Field(None, allow_inf_nan=False)
+    ventilation_kW: float | None = Field(None, allow_inf_nan=False)
+    waterTreatment_kW: float | None = Field(None, allow_inf_nan=False)
+    comms_kW: float | None = Field(None, allow_inf_nan=False)
+    heatLoss_kW: float | None = Field(None, allow_inf_nan=False)
+    heatingDemand_kW: float | None = Field(None, allow_inf_nan=False)
+    loadPct: float | None = Field(None, allow_inf_nan=False)
 
 
 class SensorBatch(BaseModel):
@@ -577,6 +619,7 @@ class SensorBatch(BaseModel):
     activeScenario: str | None = Field(None, max_length=64)
     injectedSensors: list[str] | None = None
     weatherSource: str | None = Field(None, max_length=200)
+    energy: EnergySummary | None = None
 
     @field_validator("readings")
     @classmethod

@@ -2,52 +2,15 @@
    DemoControl — Styles
    ═══════════════════════════════════════════════════════════════ */
 
-/* ── Toggle button ──────────────────────────────────────── */
-.demo-toggle {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 200;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  border: 1px solid var(--glass-border);
-  background: var(--bg-surface-raised);
-  backdrop-filter: blur(16px);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-  transition: all var(--duration-normal) var(--ease-smooth);
-}
-
-.demo-toggle:hover {
-  border-color: var(--accent);
-  box-shadow: 0 4px 24px var(--accent-glow);
-}
-
-.demo-toggle-icon { display: flex; align-items: center; color: var(--text-secondary); }
-
-.demo-toggle-active-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--status-critical);
-  box-shadow: 0 0 8px var(--status-critical);
-  animation: pulse-badge 1.5s ease-in-out infinite;
-}
-
+/* Opened from the top bar (desktop) or its overflow menu (phones): there is no
+   floating toggle any more, so nothing covers page content. */
 /* ── Panel ──────────────────────────────────────────────── */
 .demo-panel {
   position: fixed;
-  bottom: 80px;
-  right: 20px;
+  top: 64px;
+  right: 16px;
   width: 360px;
-  max-height: 70vh;
+  max-height: calc(100dvh - 80px);
   z-index: 190;
   padding: var(--space-md);
   overflow-y: auto;
@@ -67,6 +30,21 @@
   font-weight: 700;
   flex: 1;
 }
+
+.demo-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.demo-close:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
 
 .demo-tick {
   font-size: 10px;
@@ -240,8 +218,7 @@
 
 @media (max-width: 768px) {
   .demo-panel {
-    width: calc(100% - 40px);
-    bottom: 80px;
-    right: 20px;
+    width: calc(100% - 24px);
+    right: 12px;
   }
 }

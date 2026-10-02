@@ -2,15 +2,14 @@
    Aurora — app shell layout. Colours, type and spacing come from the MUI
    theme (src/theme); this file only lays out the fixed regions:
 
-     ┌──────────────── app bar ────────────────┐
-     ├──────────────── status strip ───────────┤
+     ┌──────── top bar (status chips, Sign in) ┐
      │ sidebar │ main stage (scrolls)          │
      └─────────┴───────────────────────────────┘
    ═══════════════════════════════════════════════════════════════ */
 
 .aurora-app {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
   overflow: hidden;
@@ -45,6 +44,22 @@
   overflow: hidden;
 }
 
+/* Below lg the HUD cannot float beside the twin without covering it: the scene
+   becomes a fixed-height block and the HUD (OverviewHUD) flows below it. */
+@media (max-width: 1199.95px) {
+  .overview-stage {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .scene-container {
+    position: relative;
+    inset: auto;
+    flex: none;
+    height: clamp(260px, 46dvh, 420px);
+  }
+}
+
 /* ── Module pages ─────────────────────────────────────────────────── */
 .module-content-scroll {
   position: relative;
@@ -54,9 +69,9 @@
 }
 
 .module-page {
-  max-width: 1280px;
+  max-width: 1320px;
   margin: 0 auto;
-  padding: 24px 32px 48px;
+  padding: 24px 32px 64px;
 }
 
 /* Legacy panels keep their own spacing until they are rebuilt (rollout 1B). */
@@ -66,7 +81,7 @@
 
 @media (max-width: 899.95px) {
   .module-page {
-    padding: 16px 16px 40px;
+    padding: 16px 16px 48px;
   }
   .module-content-scroll.legacy {
     padding: 12px;

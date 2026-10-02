@@ -2,13 +2,14 @@
    Aurora — Developer / Test Mode Panel
    Anomaly injection scenarios for SIH judges.
    Normal operation runs organically — these are for reproducing
-   specific scenarios during judging.
+   specific scenarios during judging. Opened from the top bar (its
+   overflow menu on phones); mounted only once it is first opened.
    ═══════════════════════════════════════════════════════════════ */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LuZap, LuFlame, LuSnowflake, LuDroplets, LuWind,
-  LuX, LuPlay, LuRotateCcw, LuTriangleAlert, LuSettings,
+  LuX, LuPlay, LuRotateCcw, LuTriangleAlert,
 } from 'react-icons/lu';
 import './DemoControl.css';
 import { apiGet, apiPost } from '../services/api';
@@ -32,9 +33,8 @@ const SCENARIO_COLORS = {
   co2_spike: '#c084fc',
 };
 
-export default function DemoControl({ activeStation = 'maitri' }) {
+export default function DemoControl({ activeStation = 'maitri', isOpen = false, onClose }) {
   const { canWrite, writeBlockedTitle } = useAdminToken();
-  const [isOpen, setIsOpen] = useState(false);
   const [scenarios, setScenarios] = useState({});
   const [activeScenario, setActiveScenario] = useState(null);
   const [injecting, setInjecting] = useState(null);
@@ -57,7 +57,14 @@ export default function DemoControl({ activeStation = 'maitri' }) {
       if (isActive()) setError(describe(e));
       throw e;                         // let usePolling back off (logged there)
     }
-  }, 3000, { key: activeStation });
+  }, 3000, { key: activeStation, enabled: isOpen });
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   const triggerScenario = useCallback(async (scenarioId) => {
     setInjecting(scenarioId);
@@ -86,25 +93,14 @@ export default function DemoControl({ activeStation = 'maitri' }) {
 
   return (
     <>
-      {/* Floating toggle — labeled icon button in vertical toolbar */}
-      <motion.button
-        className="demo-toggle"
-        onClick={() => setIsOpen(!isOpen)}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        title="Demo Control Panel"
-      >
-        {isOpen ? <LuX size={18} strokeWidth={1.5} /> : <LuSettings size={18} strokeWidth={1.5} />}
-        {activeScenario && !isOpen && (
-          <span className="demo-toggle-active-dot" />
-        )}
-      </motion.button>
-
       {/* Panel */}
       <AnimatePresence>
         {isOpen && (
           <motion.div
             className="demo-panel glass-panel"
+            role="dialog"
+            aria-label="Demo control"
+            data-testid="demo-control-panel"
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
@@ -114,6 +110,9 @@ export default function DemoControl({ activeStation = 'maitri' }) {
               <LuPlay size={16} strokeWidth={1.5} className="demo-header-icon" />
               <h3 className="demo-title font-display">Demo Control</h3>
               <span className="demo-tick font-mono tabular-nums">Tick #{tickCount}</span>
+              <button type="button" className="demo-close" onClick={onClose} aria-label="Close demo control" data-testid="demo-control-close">
+                <LuX size={16} strokeWidth={1.5} />
+              </button>
             </div>
             <p className="demo-subtitle text-caption">
               Inject a synthetic fault into <strong>{activeStation === 'maitri' ? 'Maitri' : 'Bharati'}</strong> to exercise anomaly detection and the decision engine.

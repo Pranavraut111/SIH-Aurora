@@ -13,6 +13,7 @@ export default function MobileNavDrawer({ open, onClose, ...rest }) {
     >
       <NavContent {...rest} collapsed={false}
         onSelect={(id) => { rest.onSelect(id); onClose(); }}
+        onStationChange={(id) => { rest.onStationChange(id); onClose(); }}
         onAction={(id) => { rest.onAction(id); onClose(); }} />
     </Drawer>
   );

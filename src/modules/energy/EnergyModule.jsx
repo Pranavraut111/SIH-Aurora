@@ -2,9 +2,14 @@
    Aurora — Energy grid module (design-system prototype, docs/ui-redesign.md).
 
    Same data as the legacy EnergyPanel, nothing invented:
-   - generator power / fuel rate / rpm / coolant: live telemetry (WebSocket);
-   - rated power, load factor, demand split, heat figures: GET /twin-inspector
-     (physics model for the active station);
+   - generation, fuel rate, rpm, coolant AND the demand split and heat figures:
+     ONE telemetry snapshot (WebSocket). The physics energy breakdown travels in
+     the snapshot with the readings of the same tick, so generation and total
+     demand always agree, and the snapshot time is shown;
+   - the last 30 min of those readings: the backend's rolling history
+     (GET /api/history), extended live; the 15-min average fuel burn and the
+     deltas come from it;
+   - rated power and heating parameters: GET /twin-inspector (model parameters);
    - fuel stock: GET /logistics (operator-entered ledger).
    Missing values render as "—", never as a default.
    ═══════════════════════════════════════════════════════════════ */
@@ -12,12 +17,14 @@ import { useState } from 'react';
 import {
   Alert, Box, Button, Grid, Skeleton, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography,
 } from '@mui/material';
-import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import { apiGet } from '../../services/api';
 import { usePolling } from '../../hooks/usePolling';
+import { rollingMean, useSeries, valueAgo } from '../../hooks/useSeries';
 import { sensorCatalog, stationMeta } from '../../data/stationConfig';
 import { formatNumber, formatTimeIST, formatValue, isNum } from '../../lib/format';
 import { useChartTheme } from '../../theme/chartTheme';
+import { fitDomain } from '../../lib/chartScale';
 import KpiCard from '../../ui/KpiCard';
 import PageHeader from '../../ui/PageHeader';
 import ProvenanceChip from '../../ui/Provenance';
@@ -25,8 +32,13 @@ import SectionCard from '../../ui/SectionCard';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
 const num = (v) => (isNum(v) ? v : null);
+const MIN = 60_000;
+const WINDOW_MIN = 30;
+const AVG_MIN = 15;
+const SERIES_KEYS = ['generator.gen_power', 'generator.gen_fuel_rate', 'generator.gen_temp', 'generator.gen_rpm'];
 // Present for screen readers (keeps the heading outline intact), invisible on screen.
 const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0, p: 0, m: -1 / 4 };
+const hhmm = (t) => formatTimeIST(t).slice(0, 5);
 
 /** Highest active alert level for one sensor, from the backend alert engine. */
 function sensorStatus(activeAlerts, sensor) {
@@ -39,87 +51,144 @@ function thresholdText(catalog, sensor) {
   if (!c) return null;
   const lo = c.low?.warning;
   const hi = c.high?.warning;
-  if (lo != null && hi != null) return `Default normal band ${formatNumber(lo)}–${formatValue(hi, c.unit)}`;
-  if (hi != null) return `Default warning above ${formatValue(hi, c.unit)}`;
-  if (lo != null) return `Default warning below ${formatValue(lo, c.unit)}`;
+  if (lo != null && hi != null) return `Normal band ${formatNumber(lo)}–${formatValue(hi, c.unit)}`;
+  if (hi != null) return `Warning above ${formatValue(hi, c.unit)}`;
+  if (lo != null) return `Warning below ${formatValue(lo, c.unit)}`;
   return null;
 }
 
-function OutputChart({ history, catalog }) {
+function OutputChart({ points, loaded, ratedKW, lowWarnKW }) {
   const chart = useChartTheme();
-  const data = (history || []).map((p) => ({ time: p.time, kw: num(p.value) }));
-  const lowWarn = catalog.gen_power?.low?.warning;
+  const data = (points || []).map(([time, kw]) => ({ time, kw }));
+  if (!loaded) return <Skeleton variant="rounded" height={300} />;
   if (data.length < 2) {
     return (
-      <Box sx={{ height: 280, display: 'grid', placeItems: 'center' }}>
+      <Box sx={{ height: 300, display: 'grid', placeItems: 'center' }}>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>Collecting samples. The chart fills in as telemetry arrives.</Typography>
       </Box>
     );
   }
+  const values = data.map((d) => d.kw);
+  const dataMax = Math.max(...values);
+  // Rated capacity is drawn when it is near enough to keep the line readable; otherwise the
+  // axis stays fitted to the data and the caption says the reference is off scale.
+  const showRated = isNum(ratedKW) && ratedKW <= dataMax * 1.3;
+  const domain = fitDomain(values, { include: showRated ? [ratedKW] : [] });
+  const inRange = (y) => isNum(y) && y >= domain[0] && y <= domain[1];
+  const offScale = [
+    isNum(ratedKW) && !inRange(ratedKW) && `rated capacity ${formatValue(ratedKW, 'kW')}`,
+    isNum(lowWarnKW) && !inRange(lowWarnKW) && `low-power warning ${formatValue(lowWarnKW, 'kW')}`,
+  ].filter(Boolean);
+  const spanMin = Math.round((data.at(-1).time - data[0].time) / MIN);
+
   return (
-    <Box sx={{ height: 280 }} role="img" aria-label={`Generator output over the last ${data.length} samples, latest ${formatValue(data.at(-1).kw, 'kW')}`}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid stroke={chart.grid} vertical={false} />
-          <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} scale="time"
-            tickFormatter={(t) => formatTimeIST(t).slice(0, 8)} tick={chart.tick} stroke={chart.axis} tickLine={false} minTickGap={56} />
-          <YAxis tick={chart.tick} stroke={chart.axis} tickLine={false} axisLine={false} width={40}
-            domain={[0, (max) => Math.ceil((max * 1.15) / 10) * 10]} tickFormatter={(v) => formatNumber(v)} />
-          {lowWarn != null && (
-            <ReferenceLine y={lowWarn} stroke={chart.referenceLine.warning} strokeDasharray="4 4"
-              label={{ value: `Low-power warning ${lowWarn} kW`, position: 'insideBottomRight', fill: chart.tick.fill, fontSize: 12 }} />
-          )}
-          <ChartTooltip {...chart.tooltip} labelFormatter={(t) => formatTimeIST(t)} formatter={(v) => [formatValue(v, 'kW', 1), 'Output']} />
-          <Line type="monotone" dataKey="kw" stroke={chart.series[0]} strokeWidth={2} dot={false} isAnimationActive={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </Box>
+    <>
+      <Box sx={{ height: 300 }} role="img"
+        aria-label={`Generator output over the last ${spanMin} minutes: between ${formatValue(Math.min(...values), 'kW', 1)} and ${formatValue(dataMax, 'kW', 1)}, latest ${formatValue(values.at(-1), 'kW', 1)}`}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid stroke={chart.grid} vertical={false} />
+            <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} scale="time"
+              tickFormatter={hhmm} tick={chart.tick} stroke={chart.axis} tickLine={false} minTickGap={48} />
+            <YAxis tick={chart.tick} stroke={chart.axis} tickLine={false} axisLine={false} width={44}
+              domain={domain} ticks={domain.ticks} tickFormatter={(v) => formatNumber(v)} />
+            {inRange(ratedKW) && (
+              <ReferenceLine y={ratedKW} stroke={chart.referenceLine.neutral} strokeDasharray="4 4"
+                label={{ value: `Rated ${formatValue(ratedKW, 'kW')}`, position: 'insideTopRight', fill: chart.labelFill, fontSize: 12 }} />
+            )}
+            {inRange(lowWarnKW) && (
+              <ReferenceLine y={lowWarnKW} stroke={chart.referenceLine.warning} strokeDasharray="4 4"
+                label={{ value: `Low-power warning ${formatValue(lowWarnKW, 'kW')}`, position: 'insideBottomRight', fill: chart.labelFill, fontSize: 12 }} />
+            )}
+            <ChartTooltip {...chart.tooltip}
+              wrapperStyle={{ outline: 'none' }}
+              labelFormatter={(t) => formatTimeIST(t)}
+              formatter={(v) => [formatValue(v, 'kW', 1), 'Output']} />
+            <Area type="monotone" dataKey="kw" stroke={chart.accent} strokeWidth={2} fill={chart.accent}
+              fillOpacity={chart.areaOpacity} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: chart.accent }} isAnimationActive={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </Box>
+      {offScale.length > 0 && (
+        <Typography variant="body2" sx={{ color: 'text.secondary', mt: 2 }} data-testid="chart-off-scale">
+          Axis fitted to the data; {offScale.join(' and ')} {offScale.length > 1 ? 'are' : 'is'} outside the visible range.
+        </Typography>
+      )}
+    </>
   );
 }
 
-function DemandBreakdown({ rows, total }) {
+function Swatch({ color }) {
+  return <Box aria-hidden="true" sx={{ width: 10, height: 10, borderRadius: '3px', flex: 'none', backgroundColor: color }} />;
+}
+
+function DemandBreakdown({ rows, variation, total, matchesGeneration }) {
   const chart = useChartTheme();
+  const colour = (i) => chart.series[i % chart.series.length];
+  const showVariation = isNum(variation) && Math.abs(variation) >= 0.05;
+  const segments = [
+    ...rows.map((r, i) => ({ ...r, color: colour(i) })),
+    ...(showVariation && variation > 0 ? [{ label: 'Load variation', kw: variation, color: chart.rest }] : []),
+  ];
   return (
-    <Stack sx={{ gap: 4 }}>
+    <Stack sx={{ gap: 5 }}>
       <Box
         role="img"
         aria-label={`Electrical demand split, total ${formatValue(total, 'kW', 1)}`}
-        sx={{ display: 'flex', height: 12, borderRadius: '3px', overflow: 'hidden', gap: '2px' }}
+        sx={{ display: 'flex', height: 14, borderRadius: '4px', overflow: 'hidden', gap: '2px' }}
       >
-        {rows.map((r, i) => (
-          <Box key={r.label} sx={{ flex: `${Math.max(r.kw ?? 0, 0)} 0 0`, backgroundColor: chart.series[i % chart.series.length] }} />
+        {segments.map((r) => (
+          <Box key={r.label} sx={{ flex: `${Math.max(r.kw ?? 0, 0)} 0 0`, backgroundColor: r.color }} />
         ))}
       </Box>
       <Table size="small" aria-label="Electrical demand by consumer">
         <TableHead>
           <TableRow>
-            <TableCell>Consumer</TableCell>
+            <TableCell sx={{ pl: 0 }}>Consumer</TableCell>
             <TableCell align="right">kW</TableCell>
-            <TableCell align="right">Share</TableCell>
+            <TableCell align="right" sx={{ pr: 0 }}>Share</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
           {rows.map((r, i) => (
             <TableRow key={r.label}>
-              <TableCell>
-                <Stack direction="row" sx={{ alignItems: 'center', gap: 2 }}>
-                  <Box aria-hidden="true" sx={{ width: 8, height: 8, borderRadius: '2px', flex: 'none', backgroundColor: chart.series[i % chart.series.length] }} />
-                  {r.label}
-                </Stack>
+              <TableCell sx={{ pl: 0 }}>
+                <Stack direction="row" sx={{ alignItems: 'center', gap: 2 }}><Swatch color={colour(i)} />{r.label}</Stack>
               </TableCell>
-              <TableCell align="right" sx={{ typography: 'mono' }}>{formatNumber(r.kw, 1)}</TableCell>
-              <TableCell align="right" sx={{ typography: 'mono', color: 'text.secondary' }}>
+              <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1' }}>{formatNumber(r.kw, 1)}</TableCell>
+              <TableCell align="right" sx={{ pr: 0, fontFeatureSettings: '"tnum" 1', color: 'text.secondary' }}>
                 {r.kw != null && total ? `${formatNumber((r.kw / total) * 100)}%` : '—'}
               </TableCell>
             </TableRow>
           ))}
+          {showVariation && (
+            <TableRow>
+              <TableCell sx={{ pl: 0 }}>
+                <Stack direction="row" sx={{ alignItems: 'center', gap: 2, color: 'text.secondary' }}>
+                  <Swatch color={chart.rest} />Load variation (unallocated)
+                </Stack>
+              </TableCell>
+              <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1', color: 'text.secondary' }}>
+                {variation > 0 ? '+' : '−'}{formatNumber(Math.abs(variation), 1)}
+              </TableCell>
+              <TableCell align="right" sx={{ pr: 0, fontFeatureSettings: '"tnum" 1', color: 'text.secondary' }}>
+                {total ? `${formatNumber((Math.abs(variation) / total) * 100)}%` : '—'}
+              </TableCell>
+            </TableRow>
+          )}
           <TableRow>
-            <TableCell sx={{ fontWeight: 600, borderBottom: 0 }}>Total demand</TableCell>
-            <TableCell align="right" sx={{ typography: 'mono', fontWeight: 600, borderBottom: 0 }}>{formatNumber(total, 1)}</TableCell>
-            <TableCell sx={{ borderBottom: 0 }} />
+            <TableCell sx={{ pl: 0, fontWeight: 600, borderBottom: 0 }}>{matchesGeneration ? 'Total demand = generation' : 'Total modelled demand'}</TableCell>
+            <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1', fontWeight: 600, borderBottom: 0 }}>{formatNumber(total, 1)}</TableCell>
+            <TableCell sx={{ borderBottom: 0, pr: 0 }} />
           </TableRow>
         </TableBody>
       </Table>
+      {showVariation && (
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+          The model has no storage, so the generator supplies exactly the total demand. Load
+          variation is the model&rsquo;s ±2 % noise on that total, which the consumers do not carry.
+        </Typography>
+      )}
     </Stack>
   );
 }
@@ -131,12 +200,23 @@ function FactRow({ label, value, note }) {
         {label}
         {note && <Typography variant="caption" component="span" sx={{ color: 'text.secondary', ml: 1 }}>({note})</Typography>}
       </TableCell>
-      <TableCell align="right" sx={{ typography: 'mono', pr: 0, color: value === 'Not modelled' ? 'text.secondary' : 'text.primary' }}>{value}</TableCell>
+      <TableCell align="right" sx={{ fontFeatureSettings: '"tnum" 1', pr: 0, color: value === 'Not modelled' ? 'text.secondary' : 'text.primary' }}>{value}</TableCell>
     </TableRow>
   );
 }
 
-export default function EnergyModule({ sensorData = {}, history = {}, activeAlerts = [], activeStation = 'maitri', telemetrySource, updatedAt }) {
+function autonomyContext({ fuelError, stockL, avg }) {
+  if (fuelError) return 'Fuel ledger unavailable';
+  if (stockL == null) return 'No fuel stock in the ledger';
+  const mins = Math.max(1, Math.round(avg.spanMs / MIN));
+  const basis = mins >= AVG_MIN ? `at ${AVG_MIN}-min average burn` : `at ${mins}-min average burn (history filling)`;
+  return `${formatValue(stockL, 'L')} in stock (ledger) ${basis}`;
+}
+
+export default function EnergyModule({
+  sensorData = {}, energy = null, provenance = null, activeAlerts = [], activeStation = 'maitri',
+  telemetrySource, timestamp, updatedAt,
+}) {
   const meta = MODULES.energy;
   const catalog = sensorCatalog(activeStation);
   const gen = sensorData.generator || {};
@@ -145,9 +225,16 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
   const rpm = num(gen.gen_rpm);
   const coolantC = num(gen.gen_temp);
 
+  const { series, loaded } = useSeries({
+    station: activeStation, keys: SERIES_KEYS, minutes: WINDOW_MIN, sensors: sensorData, timestamp, source: telemetrySource,
+  });
+  const powerPts = series['generator.gen_power'];
+  const fuelPts = series['generator.gen_fuel_rate'];
+
   const [twin, setTwin] = useState({ station: null, data: null, error: null });
   const [fuel, setFuel] = useState({ station: null, item: null, error: null });
   const [attempt, setAttempt] = useState(0);
+  // Model parameters and the fuel ledger change rarely; the live figures come from the snapshot.
   usePolling(async (isActive) => {
     let failed = null;
     try {
@@ -168,7 +255,7 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
       failed = failed || err;
     }
     if (failed) throw failed;           // let usePolling back off
-  }, 5000, { key: `${activeStation}:${attempt}` });
+  }, 30000, { key: `${activeStation}:${attempt}` });
 
   const twinData = twin.station === activeStation ? twin.data : null;
   const twinError = twin.station === activeStation ? twin.error : null;
@@ -176,25 +263,34 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
   const fuelItem = fuel.station === activeStation ? fuel.item : null;
   const fuelError = fuel.station === activeStation ? fuel.error : null;
 
-  const gm = twinData?.generatorModel || {};
-  const ratedKW = num(gm.maxPower_kW);
-  const loadPct = num(gm.loadFactor_pct) ?? (powerKW != null && ratedKW ? (powerKW / ratedKW) * 100 : null);
-  const pb = twinData?.powerBreakdown || {};
-  const totalDemand = num(pb.total_demand_kW);
+  const ratedKW = num(twinData?.generatorModel?.maxPower_kW);
+  const loadPct = num(energy?.loadPct) ?? (powerKW != null && ratedKW ? (powerKW / ratedKW) * 100 : null);
+  const totalDemand = num(energy?.totalDemand_kW);
   const demandRows = [
-    { label: 'Buildings (base load)', kw: num(pb.base_electrical_kW) },
-    { label: 'Electrical heating', kw: num(pb.heating_electrical_kW) },
-    { label: 'Ventilation', kw: num(pb.ventilation_kW) },
-    { label: 'Water treatment', kw: num(pb.water_treatment_kW) },
-    { label: 'Communications', kw: num(pb.comms_kW) },
+    { label: 'Buildings (base load)', kw: num(energy?.baseElectrical_kW) },
+    { label: 'Electrical heating', kw: num(energy?.heatingElectrical_kW) },
+    { label: 'Ventilation', kw: num(energy?.ventilation_kW) },
+    { label: 'Water treatment', kw: num(energy?.waterTreatment_kW) },
+    { label: 'Communications', kw: num(energy?.comms_kW) },
   ];
+  const parts = demandRows.every((r) => r.kw != null) ? demandRows.reduce((s, r) => s + r.kw, 0) : null;
+  const variation = totalDemand != null && parts != null ? totalDemand - parts : null;
+  const genGap = powerKW != null && totalDemand != null ? powerKW - totalDemand : null;
+  const genOverridden = (provenance?.injectedSensors || []).includes('generator.gen_power');
 
-  const burnPerDay = fuelRateLph != null ? fuelRateLph * 24 : null;
+  // Fuel autonomy at the rolling 15-min average burn, so it does not jump with every reading.
+  const avg = rollingMean(fuelPts, AVG_MIN * MIN);
+  const avgBurn = avg.mean ?? fuelRateLph;
   const stockL = fuelItem && fuelItem.unit === 'L' ? num(fuelItem.current) : null;
-  const autonomyDays = stockL != null && burnPerDay ? stockL / burnPerDay : null;
-  const simulatedTime = twinData?.dataSource?.simulatedTime;
+  const autonomyDays = stockL != null && avgBurn ? stockL / (avgBurn * 24) : null;
+
+  const heatingDemand = num(energy?.heatingDemand_kW);
+  const wasteShare = num(twinData?.wasteHeatRecovery);
+  const simulatedTime = twinData?.dataSource?.simulatedTime ?? twinData?.environment?.simulatedTime;
   const telemetryKind = telemetrySource === 'browser-demo' ? 'SIMULATED' : 'MODEL-DERIVED';
   const station = stationMeta(activeStation).name;
+  const snapshotLabel = isNum(timestamp) ? formatTimeIST(timestamp) : '—';
+  const noBreakdown = !energy;
 
   return (
     <Box data-testid="energy-module">
@@ -203,6 +299,7 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
         title={meta.title}
         description={`${meta.description} ${station} station.`}
         updatedAt={updatedAt}
+        updatedLabel="Snapshot"
         provenance={<>
           <ProvenanceChip kind={telemetryKind} subject="Generator"
             detail={telemetrySource === 'simulator' ? 'Source: live simulator.' : telemetrySource === 'physics-fallback' ? 'Source: backend physics fallback.' : undefined} />
@@ -217,7 +314,7 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
           sx={{ mb: 5 }}
           action={<Button size="small" onClick={() => setAttempt((n) => n + 1)}>Retry now</Button>}
         >
-          {twinError ? 'Physics-model figures are unavailable' : 'The fuel ledger is unavailable'} because the backend did not respond.
+          {twinError ? 'Model parameters (rated power, heating) are unavailable' : 'The fuel ledger is unavailable'} because the backend did not respond.
           Live generator telemetry is unaffected. Retrying automatically.
         </Alert>
       )}
@@ -225,24 +322,37 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
       <Box
         component="section"
         aria-label="Key figures"
-        sx={{ display: 'grid', gap: 4, mb: 4, gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' } }}
+        data-testid="energy-kpis"
+        sx={{
+          display: 'grid',
+          gap: 4,
+          mb: 4,
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'minmax(0, 1.6fr) repeat(2, minmax(0, 1fr))' },
+          gridTemplateAreas: {
+            xs: '"hero hero" "a b" "c d"',
+            lg: '"hero a b" "hero c d"',
+          },
+        }}
       >
         <Typography variant="h2" sx={visuallyHidden}>Key figures</Typography>
-        <KpiCard label="Generation" value={powerKW} unit="kW" testId="kpi-generation"
+        <KpiCard hero label="Generation" value={powerKW} unit="kW" decimals={1} testId="kpi-generation" sx={{ gridArea: 'hero' }}
           status={sensorStatus(activeAlerts, 'gen_power')}
-          progress={loadPct}
-          loading={false}
-          context={twinLoading ? 'Loading rated power…' : `${formatNumber(loadPct)}% of ${formatValue(ratedKW, 'kW')} rated`} />
-        <KpiCard label="Fuel burn" value={fuelRateLph} unit="L/h" decimals={1} testId="kpi-fuel-burn"
+          series={powerPts}
+          delta={powerKW != null && valueAgo(powerPts, AVG_MIN * MIN) != null ? powerKW - valueAgo(powerPts, AVG_MIN * MIN) : null}
+          context={twinLoading ? 'Loading rated power…' : `${formatNumber(loadPct)}% of ${formatValue(ratedKW, 'kW')} rated · last ${WINDOW_MIN} min`} />
+        <KpiCard label="Fuel burn" value={fuelRateLph} unit="L/h" decimals={1} testId="kpi-fuel-burn" sx={{ gridArea: 'a' }}
           status={sensorStatus(activeAlerts, 'gen_fuel_rate')}
-          context={`≈ ${formatValue(burnPerDay, 'L')} per day`} />
-        <KpiCard label="Fuel autonomy" value={autonomyDays} unit="days" testId="kpi-autonomy"
-          context={fuelError ? 'Fuel ledger unavailable' : `${formatValue(stockL, 'L')} in stock (ledger)`} />
-        <KpiCard label="Coolant temperature" value={coolantC} unit="°C" decimals={1} testId="kpi-coolant"
+          series={fuelPts}
+          context={avg.mean != null ? `${AVG_MIN}-min average ${formatValue(avg.mean, 'L/h', 1)}` : '—'} />
+        <KpiCard label="Fuel autonomy" value={autonomyDays} unit="days" testId="kpi-autonomy" sx={{ gridArea: 'b' }}
+          context={autonomyContext({ fuelError, stockL, avg })} />
+        <KpiCard label="Coolant temperature" value={coolantC} unit="°C" decimals={1} testId="kpi-coolant" sx={{ gridArea: 'c' }}
           status={sensorStatus(activeAlerts, 'gen_temp')}
+          series={series['generator.gen_temp']}
           context={thresholdText(catalog, 'gen_temp')} />
-        <KpiCard label="Engine speed" value={rpm} unit="rpm" testId="kpi-rpm"
+        <KpiCard label="Engine speed" value={rpm} unit="rpm" testId="kpi-rpm" sx={{ gridArea: 'd' }}
           status={sensorStatus(activeAlerts, 'gen_rpm')}
+          series={series['generator.gen_rpm']}
           context={thresholdText(catalog, 'gen_rpm')} />
       </Box>
 
@@ -250,34 +360,45 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
         <Grid size={{ xs: 12, lg: 7 }}>
           <SectionCard
             title="Generator output"
-            subtitle={`kW · last ${history.generator?.gen_power?.length ?? 0} samples, one every 2 s · times in IST`}
+            subtitle={`kW · last ${WINDOW_MIN} min, one sample per 2 s tick · times in IST`}
             provenance={<ProvenanceChip kind={telemetryKind} />}
             testId="energy-output-chart"
           >
-            <OutputChart history={history.generator?.gen_power} catalog={catalog} />
+            <OutputChart points={powerPts} loaded={loaded} ratedKW={ratedKW} lowWarnKW={catalog.gen_power?.low?.warning} />
           </SectionCard>
         </Grid>
         <Grid size={{ xs: 12, lg: 5 }}>
-          <SectionCard title="Electrical demand" subtitle="Where the generated power goes" provenance={<ProvenanceChip kind="MODEL-DERIVED" />}>
-            {twinError ? (
-              <Typography variant="body2" sx={{ color: 'text.secondary' }}>Unavailable while the backend is unreachable.</Typography>
-            ) : twinLoading ? (
-              <Stack sx={{ gap: 2 }}>{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} variant="text" />)}</Stack>
+          <SectionCard title="Electrical demand" subtitle={`Snapshot ${snapshotLabel} · same tick as generation`} provenance={<ProvenanceChip kind="MODEL-DERIVED" />}
+            testId="energy-demand">
+            {noBreakdown ? (
+              <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                No demand split for this source: {telemetrySource === 'browser-demo' ? 'the browser demo' : 'random-walk simulation'} does not run the physics model.
+              </Typography>
             ) : (
-              <DemandBreakdown rows={demandRows} total={totalDemand} />
+              <>
+                {isNum(genGap) && Math.abs(genGap) >= 0.1 && (
+                  <Alert severity="info" sx={{ mb: 4 }}>
+                    Generation ({formatValue(powerKW, 'kW', 1)}) differs from modelled demand by {formatValue(Math.abs(genGap), 'kW', 1)}
+                    {genOverridden ? ': an injected scenario is overriding generator telemetry.' : '.'}
+                  </Alert>
+                )}
+                <DemandBreakdown rows={demandRows} variation={variation} total={totalDemand} matchesGeneration={!isNum(genGap) || Math.abs(genGap) < 0.1} />
+              </>
             )}
           </SectionCard>
         </Grid>
         <Grid size={{ xs: 12, lg: 7 }}>
-          <SectionCard title="Heating and waste-heat recovery" subtitle="Thermal load the generator supports" provenance={<ProvenanceChip kind="MODEL-DERIVED" />}>
-            {twinLoading ? (
-              <Stack sx={{ gap: 2 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="text" />)}</Stack>
+          <SectionCard title="Heating and waste-heat recovery" subtitle={`Snapshot ${snapshotLabel} · thermal load the generator supports`} provenance={<ProvenanceChip kind="MODEL-DERIVED" />}>
+            {noBreakdown ? (
+              <Typography variant="body2" sx={{ color: 'text.secondary' }}>Not available without the physics model.</Typography>
             ) : (
               <Table size="small" aria-label="Heating figures">
                 <TableBody>
-                  <FactRow label="Building heat loss" value={formatValue(num(twinData?.totalHeatLoss_kW), 'kW', 1)} />
-                  <FactRow label="Heating demand" value={formatValue(num(twinData?.heatingDemand_kW), 'kW', 1)} />
-                  <FactRow label="Waste-heat recovery share" note="assumed" value={twinData?.wasteHeatRecovery != null ? formatValue(twinData.wasteHeatRecovery * 100, '%') : '—'} />
+                  <FactRow label="Building heat loss" value={formatValue(num(energy.heatLoss_kW), 'kW', 1)} />
+                  <FactRow label="Heating demand" value={formatValue(heatingDemand, 'kW', 1)} />
+                  <FactRow label="Met by waste heat" note={wasteShare != null ? `${formatNumber(wasteShare * 100)}% assumed` : 'assumed'}
+                    value={heatingDemand != null && wasteShare != null ? formatValue(heatingDemand * wasteShare, 'kW', 1) : '—'} />
+                  <FactRow label="Met by electric heaters" note="in the demand split" value={formatValue(num(energy.heatingElectrical_kW), 'kW', 1)} />
                   <FactRow label="Distribution efficiency" note="estimated" value={twinData?.heatingEfficiency != null ? formatValue(twinData.heatingEfficiency * 100, '%') : '—'} />
                   <FactRow label="Glycol loop flow" value="Not modelled" />
                 </TableBody>
@@ -291,8 +412,8 @@ export default function EnergyModule({ sensorData = {}, history = {}, activeAler
               <li>One generator is modelled. The second gen-set is not.</li>
               <li>Oil pressure, vibration and bus frequency are not modelled.</li>
               <li>Fuel burn follows a Willans-line model with estimated parameters.</li>
-              <li>Fuel stock is the operator-entered ledger, not a tank sensor.</li>
-              {simulatedTime && <li>Replay time in the physics model: <Box component="span" sx={{ typography: 'mono', color: 'text.primary' }}>{simulatedTime.replace('T', ' ')}</Box> (ERA5 replay clock).</li>}
+              <li>Fuel stock is the operator-entered ledger, not a tank sensor. Autonomy uses the {AVG_MIN}-min average burn.</li>
+              {simulatedTime && <li>Replay time in the physics model: <Box component="span" sx={{ typography: 'mono', color: 'text.primary' }}>{String(simulatedTime).replace('T', ' ')}</Box> (ERA5 replay clock).</li>}
             </Stack>
           </SectionCard>
         </Grid>

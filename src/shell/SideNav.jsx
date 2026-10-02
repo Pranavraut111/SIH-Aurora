@@ -1,17 +1,22 @@
 /* ═══════════════════════════════════════════════════════════════
    Aurora — sidebar: modules grouped into Monitor / Operate / Analyse /
-   System. Collapsible to icons on desktop (labels move into tooltips); a
-   temporary drawer below the md breakpoint.
+   System; the active item is a soft accent-tinted pill with an accent icon.
+   The foot holds the station mini-card (map locator, solar time + IST, polar
+   day/night). Collapsible to icons on desktop (labels move into hints, the
+   mini-card hides); a temporary drawer below the md breakpoint.
    ═══════════════════════════════════════════════════════════════ */
 import { lazy, Suspense } from 'react';
-import { Box, Divider, IconButton, List, ListItem, ListItemButton, ListItemIcon, ListItemText, ListSubheader, Tooltip } from '@mui/material';
+import { Box, Divider, IconButton, List, ListItem, ListItemButton, ListItemIcon, ListItemText, ListSubheader } from '@mui/material';
 import KeyboardDoubleArrowLeft from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRight from '@mui/icons-material/KeyboardDoubleArrowRight';
 import { layout } from '../theme/tokens';
+import Hint from '../ui/Hint';
 import { MODULES, NAV_ACTIONS, NAV_SECTIONS } from './navigation';
 
 // The phone drawer (Modal + Slide) loads only on small screens.
 const MobileNavDrawer = lazy(() => import('./MobileNavDrawer'));
+// Not needed for first paint; loads right after it.
+const StationMiniCard = lazy(() => import('./StationMiniCard'));
 
 function NavItem({ id, label, Icon, selected, collapsed, onClick }) {
   const button = (
@@ -22,7 +27,7 @@ function NavItem({ id, label, Icon, selected, collapsed, onClick }) {
       aria-label={collapsed ? label : undefined}
       className={`sidebar-item${selected ? ' active' : ''}`}
       data-testid={`nav-${id}`}
-      sx={{ mx: 2, px: collapsed ? 0 : 3, justifyContent: collapsed ? 'center' : 'flex-start' }}
+      sx={{ mx: 3, px: collapsed ? 0 : 3, justifyContent: collapsed ? 'center' : 'flex-start' }}
     >
       <ListItemIcon sx={{ minWidth: collapsed ? 0 : 32, justifyContent: 'center' }}>
         <Icon fontSize="small" />
@@ -32,12 +37,12 @@ function NavItem({ id, label, Icon, selected, collapsed, onClick }) {
   );
   return (
     <ListItem disablePadding sx={{ display: 'block' }}>
-      {collapsed ? <Tooltip title={label} placement="right">{button}</Tooltip> : button}
+      {collapsed ? <Hint title={label} placement="right" sx={{ display: 'flex' }}>{button}</Hint> : button}
     </ListItem>
   );
 }
 
-export function NavContent({ activeModule, onSelect, onAction, collapsed, onToggleCollapse, showCollapse }) {
+export function NavContent({ activeModule, onSelect, onAction, collapsed, onToggleCollapse, showCollapse, activeStation, onStationChange }) {
   return (
     <Box component="nav" aria-label="Modules" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pb: 2 }}>
@@ -49,7 +54,7 @@ export function NavContent({ activeModule, onSelect, onAction, collapsed, onTogg
             aria-label={section.label}
             subheader={collapsed
               ? (i > 0 ? <Divider component="li" aria-hidden="true" sx={{ mx: 3, my: 2 }} /> : <Box component="li" aria-hidden="true" sx={{ height: 12 }} />)
-              : <ListSubheader sx={{ px: 5 }}>{section.label}</ListSubheader>}
+              : <ListSubheader sx={{ px: 6 }}>{section.label}</ListSubheader>}
             sx={{ py: 0, display: 'flex', flexDirection: 'column', gap: 0.5 }}
           >
             {section.items.map((item) => {
@@ -70,13 +75,18 @@ export function NavContent({ activeModule, onSelect, onAction, collapsed, onTogg
           </List>
         ))}
       </Box>
+      {!collapsed && activeStation && (
+        <Suspense fallback={null}>
+          <StationMiniCard activeStation={activeStation} onStationChange={onStationChange} />
+        </Suspense>
+      )}
       {showCollapse && (
-        <Box sx={(theme) => ({ borderTop: `1px solid ${theme.vars.palette.divider}`, p: 2, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-end' })}>
-          <Tooltip title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right">
+        <Box sx={{ px: 3, pb: 3, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-end' }}>
+          <Hint title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right">
             <IconButton size="small" onClick={onToggleCollapse} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
               {collapsed ? <KeyboardDoubleArrowRight fontSize="small" /> : <KeyboardDoubleArrowLeft fontSize="small" />}
             </IconButton>
-          </Tooltip>
+          </Hint>
         </Box>
       )}
     </Box>
@@ -99,7 +109,7 @@ export default function SideNav({ isDesktop, mobileOpen, onMobileClose, collapse
       sx={(theme) => ({
         width,
         flex: 'none',
-        borderRight: `1px solid ${theme.vars.palette.divider}`,
+        borderRight: `1px solid ${theme.vars.palette.aurora.borderSubtle}`,
         backgroundColor: theme.vars.palette.background.paper,
         transition: theme.transitions.create('width', { duration: theme.transitions.duration.short }),
         overflow: 'hidden',

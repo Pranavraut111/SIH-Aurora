@@ -2,28 +2,12 @@
    Aurora — status primitives. The only components that use status colours.
    Status is never colour alone: a dot is always paired with a text label.
    ═══════════════════════════════════════════════════════════════ */
-import { Box, Chip } from '@mui/material';
+import { Chip } from '@mui/material';
+import StatusDot from './StatusDot';
+import { STATUS_LABEL } from './statusLabels';
 
-export const STATUS_LABEL = {
-  normal: 'Normal', warning: 'Warning', critical: 'Critical', offline: 'Offline', simulated: 'Simulated',
-};
+export { StatusDot, STATUS_LABEL };
 
-export function StatusDot({ status = 'offline', size = 8, sx }) {
-  return (
-    <Box
-      component="span"
-      aria-hidden="true"
-      sx={[(theme) => ({
-        display: 'inline-block',
-        flex: 'none',
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        backgroundColor: theme.vars.palette.status[status] ?? theme.vars.palette.status.offline,
-      }), ...(Array.isArray(sx) ? sx : [sx])]}
-    />
-  );
-}
 
 export function StatusChip({ status = 'normal', label, ...rest }) {
   return (

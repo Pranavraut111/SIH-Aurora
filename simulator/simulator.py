@@ -29,7 +29,7 @@ import config as app_config  # aliased: 'config' is a loop variable in this modu
 import station_config
 from config import ALLOWED_ORIGINS, HOST
 from decision_scheduler import DecisionScheduler
-from physics_model import StationPhysicsModel
+from physics_model import StationPhysicsModel, energy_summary
 from twin_inspector import build_twin_inspector
 
 # Import new Phase 1/2 modules
@@ -437,6 +437,7 @@ class StationSimulator:
     def tick(self) -> dict:
         """Execute one simulation tick. Returns readings for the backend."""
         self.tick_count += 1
+        self._last_energy = None   # set only by a tick that ran the physics model
 
         if self.mode == "reanalysis" and self.weather_available:
             return self._tick_reanalysis()
@@ -493,6 +494,7 @@ class StationSimulator:
 
         # 5. Store metadata for logging
         self._last_meta = meta
+        self._last_energy = energy_summary(meta)
         self._last_weather = weather
 
         # 6. Phase 3: Anomaly detection (scored every tick)
@@ -1347,6 +1349,8 @@ def main():
                         "activeScenario": sim.active_scenario,
                         "injectedSensors": sorted(sim.active_injections.keys()),
                         "weatherSource": source_info.get("dataset") or source_info.get("label"),
+                        # Energy breakdown of THIS tick (same timestamp as the readings).
+                        "energy": getattr(sim, "_last_energy", None),
                     })
 
             for payload in payloads:

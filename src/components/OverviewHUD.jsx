@@ -1,37 +1,88 @@
 /* ═══════════════════════════════════════════════════════════════
-   Aurora — Overview HUD (Command Center Heads-Up Display)
-   Expansive, high-contrast polar mission control overlay.
-   Large Station Information Card + Prominent Twin Inspector (Bottom-Left).
-   Substantially Sized 2x2 Telemetry Cards (Bottom-Right).
+   Aurora — Overview HUD over the 3D twin (design system, dark in both modes).
+
+   - Station card: name, coordinates, region and station facts from
+     station_config.json; the Twin Inspector and the voice assistant.
+   - KPI bento: outside temperature as the hero (30-min sparkline, delta vs
+     15 min ago, wind chill), then wind, generation and subsystem status.
+     Values are live telemetry; history is the backend's rolling window.
+
+   From lg up the HUD floats over the scene; below lg it sits in normal flow
+   under a fixed-height scene (App.css), so it never covers the twin on phones.
    ═══════════════════════════════════════════════════════════════ */
-import { motion } from 'framer-motion';
 import { useState } from 'react';
-import { STATIONS } from '../data/stationData';
-import {
-  LuMapPin,
-  LuCloudOff,
-  LuThermometerSnowflake,
-  LuWind,
-  LuZap,
-  LuShieldCheck,
-  LuShieldAlert,
-  LuSparkles,
-  LuUsers,
-  LuMountain,
-  LuCalendar,
-  LuMic,
-} from 'react-icons/lu';
-import './OverviewHUD.css';
+import { Box, Button, Card, Stack, Typography } from '@mui/material';
+import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
+import CloudOffOutlined from '@mui/icons-material/CloudOffOutlined';
+import MicNoneOutlined from '@mui/icons-material/MicNoneOutlined';
+import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
+import ViewInArOutlined from '@mui/icons-material/ViewInArOutlined';
 import { apiPost } from '../services/api';
+import { formatCoords, stationMeta } from '../data/stationConfig';
+import { useSeries, valueAgo } from '../hooks/useSeries';
+import { formatNumber, formatValue, isNum } from '../lib/format';
+import { windChill } from '../lib/windChill';
+import FadeValue from '../ui/FadeValue';
+import KpiCard from '../ui/KpiCard';
+import Sparkline from '../ui/Sparkline';
+import StatusDot from '../ui/StatusDot';
+import { STATUS_LABEL } from '../ui/statusLabels';
+import { PROVENANCE } from '../ui/Provenance';
+
+const SERIES_KEYS = ['lab.env_temp', 'lab.env_wind', 'generator.gen_power'];
+const MIN = 60_000;
+
+function levelOf(activeAlerts, sensor) {
+  const levels = activeAlerts.filter((a) => a.sensor === sensor).map((a) => a.level);
+  return levels.includes('critical') ? 'critical' : levels.includes('warning') ? 'warning' : undefined;
+}
+
+/** Compact HUD figure: label, value, mini sparkline (a row on phones). */
+function HudFigure({ label, value, unit, decimals = 0, points, footer, status, testId }) {
+  const text = formatNumber(value, decimals);
+  return (
+    <Card component="section" aria-label={label} data-testid={testId} sx={(theme) => ({
+      p: 4, minWidth: 0, boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
+      display: 'grid', gap: 2, alignItems: 'center',
+      gridTemplateColumns: { xs: 'minmax(0, 1fr) minmax(0, 0.9fr)', lg: '1fr' },
+    })}>
+      <Box sx={{ minWidth: 0 }}>
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+          <Typography variant="label" component="h3" sx={{ color: 'text.secondary' }}>{label}</Typography>
+          {status && <StatusDot status={status} size={7} />}
+          {status && <Box component="span" sx={(theme) => ({ fontSize: 12, fontWeight: 600, color: theme.vars.palette.status[status] })}>{STATUS_LABEL[status]}</Box>}
+        </Stack>
+        <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1, mt: 1 }}>
+          <Typography variant="kpi" component="p" sx={{ m: 0, fontSize: 26, lineHeight: '32px' }}><FadeValue>{text}</FadeValue></Typography>
+          {unit && isNum(value) && <Typography component="span" sx={{ color: 'text.secondary', fontSize: 13, fontWeight: 500 }}>{unit}</Typography>}
+        </Stack>
+      </Box>
+      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={28} />}</Box>
+    </Card>
+  );
+}
+
+function SubsystemDots({ alerts }) {
+  const entries = Object.entries(alerts).filter(([k]) => k !== 'overall');
+  return (
+    <Stack direction="row" aria-hidden="true" sx={{ gap: 1, flexWrap: 'wrap', alignItems: 'center', minHeight: 28 }}>
+      {entries.map(([k, level]) => <StatusDot key={k} status={level === 'critical' || level === 'warning' ? level : 'normal'} size={9} />)}
+    </Stack>
+  );
+}
 
 export default function OverviewHUD({
   sensorData,
   alerts = {},
+  activeAlerts = [],
   activeStation,
   isConnected = true,
+  timestamp,
+  telemetrySource,
+  provenance,
   onOpenTwinInspector,
 }) {
-  const station = STATIONS[activeStation] || STATIONS.maitri;
+  const station = stationMeta(activeStation);
   const envData = sensorData?.lab || {};
   const genData = sensorData?.generator || {};
 
@@ -40,10 +91,16 @@ export default function OverviewHUD({
   const temp = num(envData.env_temp);
   const wind = num(envData.env_wind);
   const power = num(genData.gen_power);
-  
+  const { series } = useSeries({ station: activeStation, keys: SERIES_KEYS, minutes: 30, sensors: sensorData, timestamp, source: telemetrySource });
+  const tempPts = series['lab.env_temp'];
+  const temp15 = valueAgo(tempPts, 15 * MIN);
+  const chill = windChill(temp, wind);
+  const envKind = provenance?.environment;
+  const envLabel = envKind ? (PROVENANCE[envKind]?.label ?? envKind) : null;
+
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  
+
   // We need a ref to hold the recognition instance so we can stop/start it
   const [recognition, setRecognition] = useState(null);
 
@@ -55,13 +112,13 @@ export default function OverviewHUD({
       const cleanText = text.replace(/[*#_]/g, '').replace(/\[.*\]/g, '');
       const utterance = new SpeechSynthesisUtterance(cleanText);
       const voices = window.speechSynthesis.getVoices();
-      const preferredVoice = voices.find(v => v.name.includes('Daniel') || v.name.includes('UK English Male') || v.name.includes('Google UK English Male')) 
+      const preferredVoice = voices.find(v => v.name.includes('Daniel') || v.name.includes('UK English Male') || v.name.includes('Google UK English Male'))
         || voices.find(v => v.lang === 'en-GB' || v.lang === 'en-US');
       if (preferredVoice) utterance.voice = preferredVoice;
-      
+
       utterance.rate = 1.1; // slightly brisk, still clear
       utterance.pitch = 0.9;
-      
+
       utterance.onend = () => {
         setIsSpeaking(false);
         resolve();
@@ -80,7 +137,7 @@ export default function OverviewHUD({
       await speak("Yes, Commander. I am online and monitoring all station telemetry. How can I assist?");
       return;
     }
-    
+
     // Send only the user's question; the backend grounds the answer in the
     // current decision JSON (Groq LLM, or an offline summary without one).
     try {
@@ -115,26 +172,26 @@ export default function OverviewHUD({
       const rec = new SpeechRecognition();
       rec.continuous = true;
       rec.interimResults = false;
-      
+
       rec.onresult = async (event) => {
         // Only process the latest final result
         const last = event.results.length - 1;
         if (event.results[last].isFinal) {
           const transcript = event.results[last][0].transcript.trim();
           console.log("[Voice] heard:", transcript);
-          
+
           // Conversational mode: while the voice assistant is on, every utterance is processed.
           // Pause recognition while speaking so it doesn't hear itself
           rec.stop();
           await processQuery(transcript);
-          
+
           // Restart listening after speaking if the voice assistant is still on
           // Note: state might be stale here, but rec.onend will handle restart
         }
       };
-      
+
       rec.onerror = (e) => console.warn('[Voice] microphone error:', e.error);
-      
+
       rec.onend = () => {
         // If mode is still true, restart listening (continuous mode often stops on silence)
         // We use a small timeout to avoid thrashing
@@ -144,7 +201,7 @@ export default function OverviewHUD({
           }
         }, 300);
       };
-      
+
       setRecognition(rec);
       rec.start();
       setIsVoiceMode(true);
@@ -152,170 +209,126 @@ export default function OverviewHUD({
     }
   };
 
-  // Count alerts
-  const alertValues = Object.values(alerts);
-  const criticalCount = alertValues.filter((a) => a === 'critical').length;
-  const warningCount = alertValues.filter((a) => a === 'warning').length;
-  const normalCount = alertValues.filter((a) => a === 'normal').length;
-  const totalSystems = Math.max(Object.keys(alerts).length, 6);
-
-  const stats = [
-    {
-      label: 'OUTSIDE TEMP',
-      value: temp == null ? '—' : temp.toFixed(1),
-      unit: '°C',
-      statusText: temp == null ? 'No telemetry' : temp < -35 ? 'Severe Cold' : 'Polar Baseline',
-      color: temp == null ? '#94a3b8' : temp < -40 ? '#f87171' : temp < -30 ? '#fbbf24' : '#38bdf8',
-      IconComp: LuThermometerSnowflake,
-      iconColor: '#38bdf8',
-      bgGlow: 'rgba(56, 189, 248, 0.15)',
-    },
-    {
-      label: 'WIND SPEED',
-      value: wind == null ? '—' : wind.toFixed(0),
-      unit: 'km/h',
-      statusText: wind == null ? 'No telemetry' : wind > 80 ? 'Blizzard Warning' : wind > 40 ? 'Strong Wind' : 'Calm to Moderate',
-      color: wind == null ? '#94a3b8' : wind > 80 ? '#fbbf24' : '#f8fafc',
-      IconComp: LuWind,
-      iconColor: '#38bdf8',
-      bgGlow: 'rgba(56, 189, 248, 0.12)',
-    },
-    {
-      label: 'POWER GENERATION',
-      value: power == null ? '—' : power.toFixed(0),
-      unit: 'kW',
-      statusText: power == null ? 'No telemetry' : 'Generator output (model-derived)',
-      color: power == null ? '#94a3b8' : '#fbbf24',
-      IconComp: LuZap,
-      iconColor: '#fbbf24',
-      bgGlow: 'rgba(251, 191, 36, 0.15)',
-    },
-    {
-      label: 'SUBSYSTEM STATUS',
-      value: `${normalCount}/${totalSystems}`,
-      unit: criticalCount > 0 ? 'CRIT' : warningCount > 0 ? 'WARN' : 'OK',
-      statusText: criticalCount > 0 ? 'Fault Detected' : warningCount > 0 ? 'Advisory Active' : 'All Systems Nominal',
-      color: criticalCount > 0 ? '#f87171' : warningCount > 0 ? '#fbbf24' : '#34d399',
-      IconComp: criticalCount > 0 ? LuShieldAlert : LuShieldCheck,
-      iconColor: criticalCount > 0 ? '#f87171' : '#34d399',
-      bgGlow: criticalCount > 0 ? 'rgba(248, 113, 113, 0.2)' : 'rgba(52, 211, 153, 0.15)',
-    },
-  ];
+  // Subsystem status from the backend's per-building alert levels.
+  const levels = Object.entries(alerts).filter(([k]) => k !== 'overall').map(([, v]) => v);
+  const criticalCount = levels.filter((a) => a === 'critical').length;
+  const warningCount = levels.filter((a) => a === 'warning').length;
+  const normalCount = levels.length - criticalCount - warningCount;
+  const subsystemStatus = criticalCount ? 'critical' : warningCount ? 'warning' : undefined;
+  const facts = [
+    station.commissionedYear && `Est. ${station.commissionedYear}`,
+    isNum(station.personnelWinter) && `${station.personnelWinter} winter crew`,
+    isNum(station.elevation_m) && `${station.elevation_m} m elevation`,
+  ].filter(Boolean);
 
   return (
-    <div className="overview-hud-container">
-      {/* Offline banner — top center */}
+    <Box
+      className="overview-hud"
+      sx={{
+        position: { xs: 'relative', lg: 'absolute' },
+        inset: { lg: 0 },
+        zIndex: 40,
+        pointerEvents: { lg: 'none' },
+        p: { xs: 4, sm: 6, lg: 6 },
+        display: 'flex',
+        flexDirection: { xs: 'column', lg: 'row' },
+        alignItems: { lg: 'flex-end' },
+        justifyContent: 'space-between',
+        gap: { xs: 4, lg: 6 },
+        '& > *': { pointerEvents: 'auto' },
+      }}
+    >
+      {/* Offline banner */}
       {!isConnected && (
-        <motion.div
-          className="hud-offline-banner glass-panel"
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-        >
-          <LuCloudOff size={20} className="offline-icon" />
-          <div className="offline-text">
-            <strong>SATELLITE LINK LOST &mdash; LOCAL AUTONOMOUS MODE ACTIVE</strong>
-            <span>Station running on local edge telemetry &bull; Readings queued for resync</span>
-          </div>
-        </motion.div>
+        <Card role="status" sx={(theme) => ({
+          position: { lg: 'absolute' }, top: { lg: 24 }, left: { lg: '50%' }, transform: { lg: 'translateX(-50%)' },
+          px: 4, py: 3, display: 'flex', gap: 3, alignItems: 'center', boxShadow: theme.vars.palette.aurora.shadowFloat,
+        })}>
+          <CloudOffOutlined sx={{ color: 'status.offline' }} />
+          <Box>
+            <Typography sx={{ fontWeight: 600, fontSize: 14 }}>Link cut (simulated): local autonomous mode</Typography>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>Showing the last received values; readings are queued for resync.</Typography>
+          </Box>
+        </Card>
       )}
 
-      {/* ── Bottom-Left: Prominent Station Information Card ── */}
-      <motion.div
-        className="hud-station-card glass-panel"
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15, duration: 0.3 }}
-      >
-        {/* Twin Inspector Button positioned prominently above/within the card */}
-        <div className="hud-inspector-bar">
+      {/* ── Station card ─────────────────────────────────── */}
+      <Card component="section" aria-label={`${station.fullName}`} data-testid="hud-station-card" sx={(theme) => ({
+        p: { xs: 5, sm: 6 }, width: { lg: 420 }, flex: 'none', boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
+        order: { xs: 2, lg: 0 },
+      })}>
+        <Typography variant="overline" component="p" sx={{ color: 'text.secondary' }}>Station</Typography>
+        <Typography component="h1" sx={{ fontSize: { xs: 24, sm: 28 }, lineHeight: 1.15, fontWeight: 600, letterSpacing: '-0.02em', mt: 1 }}>
+          {station.fullName}
+        </Typography>
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, mt: 2, flexWrap: 'wrap', color: 'text.secondary' }}>
+          <PlaceOutlined sx={{ fontSize: 16 }} />
+          <Box component="span" sx={{ typography: 'mono', color: 'text.primary' }}>{formatCoords(activeStation)}</Box>
+        </Stack>
+        <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>{station.region}</Typography>
+        {facts.length > 0 && (
+          <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1.5 }}>{facts.join(' · ')}</Typography>
+        )}
+        <Stack direction="row" sx={{ gap: 2, mt: 5, flexWrap: 'wrap' }}>
           {onOpenTwinInspector && (
-            <button
-              className="btn-hud-twin-inspector"
-              onClick={onOpenTwinInspector}
-              title="Inspect 3D Subsystems and Mesh Telemetry"
-            >
-              <LuSparkles size={14} className="hud-sparkle" />
-              <span>Digital Twin Inspector</span>
-              <span className="hud-btn-arrow">&rarr;</span>
-            </button>
+            <Button variant="contained" onClick={onOpenTwinInspector} startIcon={<ViewInArOutlined />} endIcon={<ArrowForwardOutlined />}
+              title="Inspect the causal chain behind every modelled value">
+              Twin Inspector
+            </Button>
           )}
-          <button
+          <Button
+            variant="outlined"
             className={`btn-hud-voice ${isVoiceMode ? 'listening' : ''}`}
             onClick={toggleVoiceMode}
+            aria-pressed={isVoiceMode}
             title="Turn the voice assistant on or off (continuous listening)"
+            startIcon={<MicNoneOutlined className={isVoiceMode ? 'pulse-icon' : ''} />}
+            sx={isVoiceMode ? { borderColor: 'primary.main', color: 'primary.main' } : undefined}
           >
-            <LuMic size={15} className={isVoiceMode ? 'pulse-icon' : ''} />
-            <span>{isVoiceMode ? (isSpeaking ? 'Speaking…' : 'Listening…') : 'Voice assistant'}</span>
-          </button>
-        </div>
+            {isVoiceMode ? (isSpeaking ? 'Speaking…' : 'Listening…') : 'Voice assistant'}
+          </Button>
+        </Stack>
+      </Card>
 
-        <div className="hud-card-header">
-          <h1 className="hud-card-title font-display">{station.fullName}</h1>
-          <div className="hud-card-location">
-            <LuMapPin size={14} className="hud-pin-icon" />
-            <span className="hud-coords-text font-mono">
-              {station.coords}
-            </span>
-            <span className="hud-sep">|</span>
-            <span className="hud-region-text">{station.region}</span>
-          </div>
-        </div>
-
-        <div className="hud-card-metadata font-mono">
-          <div className="hud-meta-pill">
-            <LuCalendar size={12} className="meta-icon" />
-            <span>Est. {station.established}</span>
-          </div>
-          <div className="hud-meta-pill">
-            <LuUsers size={12} className="meta-icon" />
-            <span>{station.personnel ?? '—'} winter crew</span>
-          </div>
-          <div className="hud-meta-pill">
-            <LuMountain size={12} className="meta-icon" />
-            <span>Elev: {station.elevation}</span>
-          </div>
-          <div className="hud-meta-pill">
-            <LuThermometerSnowflake size={12} className="meta-icon" />
-            <span>Mean Winter: {station.winterTemp}</span>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* ── Bottom-Right: Substantially Sized 2x2 Telemetry Cards ── */}
-      <motion.div
-        className="hud-telemetry-container"
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.25, duration: 0.3 }}
+      {/* ── KPI bento: hero + three compact figures ──────── */}
+      <Box
+        component="section"
+        aria-labelledby="hud-figures-heading"
+        data-testid="hud-kpis"
+        sx={{
+          display: 'grid',
+          gap: { xs: 3, lg: 3 },
+          order: { xs: 1, lg: 0 },
+          width: { lg: 520 },
+          flex: 'none',
+          gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(3, minmax(0, 1fr))', lg: 'minmax(0, 1.15fr) minmax(0, 1fr)' },
+          gridTemplateAreas: {
+            xs: '"hero" "wind" "power" "subs"',
+            sm: '"hero hero hero" "wind power subs"',
+            lg: '"hero wind" "hero power" "hero subs"',
+          },
+        }}
       >
-        <div className="hud-telemetry-grid">
-          {stats.map((stat) => (
-            <div key={stat.label} className="hud-telemetry-card glass-panel">
-              <div
-                className="telemetry-icon-box"
-                style={{ background: stat.bgGlow, color: stat.iconColor }}
-              >
-                <stat.IconComp size={22} strokeWidth={1.8} />
-              </div>
-
-              <div className="telemetry-info-wrap">
-                <span className="telemetry-label">{stat.label}</span>
-                <div className="telemetry-value-row">
-                  <span
-                    className="telemetry-number font-mono tabular-nums"
-                    style={{ color: stat.color }}
-                  >
-                    {stat.value}
-                  </span>
-                  <span className="telemetry-unit font-mono">{stat.unit}</span>
-                </div>
-                <span className="telemetry-status-sub text-caption">{stat.statusText}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </motion.div>
-    </div>
+        <Typography variant="h2" id="hud-figures-heading" sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>Station figures</Typography>
+        <KpiCard hero label="Outside temperature" value={temp} unit="°C" decimals={1} testId="hud-temp"
+          status={levelOf(activeAlerts, 'env_temp')}
+          series={tempPts}
+          delta={temp != null && temp15 != null ? temp - temp15 : null}
+          context={[chill != null && `Wind chill ${formatValue(chill, '°C', 1)}`, envLabel].filter(Boolean).join(' · ') || null}
+          sx={(theme) => ({ gridArea: 'hero', boxShadow: { lg: theme.vars.palette.aurora.shadowFloat } })} />
+        <Box sx={{ gridArea: 'wind', minWidth: 0 }}>
+          <HudFigure label="Wind" value={wind} unit="km/h" points={series['lab.env_wind']} status={levelOf(activeAlerts, 'env_wind')} testId="hud-wind" />
+        </Box>
+        <Box sx={{ gridArea: 'power', minWidth: 0 }}>
+          <HudFigure label="Generation" value={power} unit="kW" points={series['generator.gen_power']} status={levelOf(activeAlerts, 'gen_power')} testId="hud-power" />
+        </Box>
+        <Box sx={{ gridArea: 'subs', minWidth: 0 }}>
+          <HudFigure label="Subsystems normal" value={levels.length ? normalCount : null}
+            unit={levels.length ? `of ${levels.length}` : undefined}
+            status={subsystemStatus} testId="hud-subsystems"
+            footer={<SubsystemDots alerts={alerts} />} />
+        </Box>
+      </Box>
+    </Box>
   );
 }

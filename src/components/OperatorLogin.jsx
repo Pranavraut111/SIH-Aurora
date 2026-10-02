@@ -2,30 +2,35 @@
    Aurora — operator login (write access).
    The token is held in memory only, so a refresh logs you out; see
    src/services/adminToken.js for why. Viewing never needs a login.
-   Signed out: a visible "Read-only" control that opens a dialog saying what
-   signing in unlocks. Signed in: "Operator"; one click signs out.
+   Signed out: a filled "Sign in" button, always visible in the top bar at every
+   width (with a quiet "Read-only" label beside it on wide screens), opening a
+   dialog that says what signing in unlocks. Signed in: "Operator"; one click
+   signs out. With write protection off (local dev) there is nothing to sign in to.
    ═══════════════════════════════════════════════════════════════ */
 import { lazy, Suspense, useState } from 'react';
-import { Box, ButtonBase, Tooltip } from '@mui/material';
+import { Box, ButtonBase } from '@mui/material';
 import LockOpenOutlined from '@mui/icons-material/LockOpenOutlined';
 import LockOutlined from '@mui/icons-material/LockOutlined';
 import { useAdminToken } from '../hooks/useAdminToken';
+import Hint from '../ui/Hint';
 
 // The dialog (Modal, TextField, Alert) is only needed once someone signs in,
 // so it stays out of the initial bundle.
 const OperatorLoginDialog = lazy(() => import('./OperatorLoginDialog'));
 
-const pillSx = {
-  height: 28,
-  px: 2,
+const buttonSx = (theme) => ({
+  height: 32,
+  px: { xs: 2.5, sm: 3 },
   gap: 1.5,
-  borderRadius: '4px',
+  borderRadius: '8px',
   fontSize: 13,
   fontWeight: 600,
   whiteSpace: 'nowrap',
-  border: 1,
+  flex: 'none',
+  transition: theme.transitions.create(['background-color', 'color', 'border-color'], { duration: theme.transitions.duration.shortest }),
   '& .MuiSvgIcon-root': { fontSize: 16 },
-};
+});
+const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
 
 export default function OperatorLogin() {
   const { loggedIn, writeProtected, login, logout } = useAdminToken();
@@ -58,35 +63,48 @@ export default function OperatorLogin() {
 
   if (loggedIn) {
     return (
-      <Tooltip title="Signed in as operator: controls that change state are enabled. Click to sign out.">
+      <Hint title="Signed in as operator: controls that change state are enabled. Click to sign out.">
         <ButtonBase
           onClick={logout}
           data-testid="operator-logout"
           aria-label="Operator: signed in. Sign out"
-          sx={{ ...pillSx, color: 'primary.main', borderColor: 'primary.main' }}
+          sx={(theme) => ({
+            ...buttonSx(theme),
+            color: 'primary.main',
+            bgcolor: 'aurora.accentTint',
+            '&:hover': { color: 'text.primary' },
+          })}
         >
           <LockOpenOutlined />
           <span>Operator</span>
         </ButtonBase>
-      </Tooltip>
+      </Hint>
     );
   }
 
   return (
     <>
-      <Tooltip title="You can view everything. Sign in with the operator token to change thresholds, inventory, alerts or the simulator.">
+      <Box component="span" aria-hidden="true" sx={{ alignSelf: 'center', mr: 2, fontSize: 13, color: 'text.secondary', whiteSpace: 'nowrap', display: { xs: 'none', lg: 'inline' } }}>
+        Read-only
+      </Box>
+      <Hint title="You can view everything. Sign in with the operator token to change thresholds, inventory, alerts or the simulator.">
         <ButtonBase
           onClick={() => setOpen(true)}
           data-testid="operator-login"
           aria-haspopup="dialog"
           aria-label="Read-only. Sign in as operator"
-          sx={{ ...pillSx, color: 'text.secondary', borderColor: 'divider', '&:hover': { color: 'text.primary', borderColor: 'text.secondary' } }}
+          sx={(theme) => ({
+            ...buttonSx(theme),
+            color: 'primary.contrastText',
+            bgcolor: 'primary.main',
+            '&:hover': { bgcolor: 'primary.dark' },
+          })}
         >
+          <Box component="span" sx={visuallyHidden}>Read-only. </Box>
           <LockOutlined />
-          <span>Read-only</span>
-          <Box component="span" sx={{ color: 'primary.main', display: { xs: 'none', sm: 'inline' } }}>Sign in</Box>
+          <span>Sign in</span>
         </ButtonBase>
-      </Tooltip>
+      </Hint>
 
       {open && (
         <Suspense fallback={null}>

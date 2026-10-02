@@ -29,6 +29,7 @@ STATION_GETS = (
     "/api/twin-inspector?station={sid}",
     "/api/admin/config?stationId={sid}",
     "/api/connection/status?stationId={sid}",
+    "/api/history?stationId={sid}&keys=generator.gen_power",
 )
 
 
@@ -152,6 +153,86 @@ def test_reads_return_the_last_published_snapshot_not_the_newest_batch(client):
     # A tick selects the fresh batch and republishes it, and only then do reads change.
     ub.tick_station("bharati")
     assert _ok(client, "/api/station/bharati/state")["dataSource"] == "simulator"
+
+
+# ── Energy figures share the telemetry snapshot (one tick, one timestamp) ────
+ENERGY_KEYS = {"totalDemand_kW", "baseElectrical_kW", "heatingElectrical_kW", "ventilation_kW",
+               "waterTreatment_kW", "comms_kW", "heatLoss_kW", "heatingDemand_kW", "loadPct"}
+
+
+def test_fallback_snapshot_carries_the_energy_breakdown_of_the_same_tick(client):
+    snap = _ok(client, "/api/station/maitri/state")
+    energy = snap["energy"]
+    assert set(energy) == ENERGY_KEYS
+    # Generation IS the modelled total demand of this tick (the model has no storage).
+    assert snap["sensors"]["generator"]["gen_power"] == pytest.approx(energy["totalDemand_kW"], abs=0.05)
+    parts = sum(energy[k] for k in ("baseElectrical_kW", "heatingElectrical_kW", "ventilation_kW",
+                                     "waterTreatment_kW", "comms_kW"))
+    # The remainder is the model's load variation (2 % sigma), never a different tick.
+    assert abs(energy["totalDemand_kW"] - parts) <= 0.1 * energy["totalDemand_kW"]
+
+
+def test_simulator_batch_energy_is_published_with_its_readings(client):
+    import unified_backend as ub
+
+    current = _ok(client, "/api/station/bharati/state")
+    energy = {k: 1.0 for k in ENERGY_KEYS}
+    batch = {
+        "stationId": "bharati",
+        "timestamp": int(time.time() * 1000),
+        "readings": {b: {k: {"value": v, "unit": ""} for k, v in sensors.items()}
+                     for b, sensors in current["sensors"].items()},
+        "energy": energy,
+    }
+    assert client.post("/api/sensors/batch", json=batch).status_code == 200
+    ub.tick_station("bharati")
+    snap = _ok(client, "/api/station/bharati/state")
+    assert snap["dataSource"] == "simulator"
+    assert snap["timestamp"] == batch["timestamp"]
+    assert snap["energy"] == energy
+
+    batch["energy"] = {"totalDemand_kW": 1.0, "surprise": 2}
+    assert client.post("/api/sensors/batch", json=batch).status_code == 422
+
+
+# ── Rolling history (charts, 15-min averages) ────────────────────────────────
+def test_history_returns_published_points_oldest_first(client):
+    import unified_backend as ub
+
+    for _ in range(3):
+        ub.tick_station("maitri")
+    body = _ok(client, "/api/history?stationId=maitri&keys=generator.gen_power,lab.env_temp&minutes=30")
+    assert body["stationId"] == "maitri"
+    assert body["tickIntervalSec"] > 0 and body["maxWindowMinutes"] > 0
+    power = body["series"]["generator.gen_power"]
+    assert len(power) >= 3
+    times = [t for t, _ in power]
+    assert times == sorted(times) and len(set(times)) == len(times)
+    assert power[-1][1] == _ok(client, "/api/station/maitri/state")["sensors"]["generator"]["gen_power"]
+    assert len(body["series"]["lab.env_temp"]) >= 3
+
+
+def test_history_unknown_key_is_empty_and_bad_keys_are_422(client):
+    body = _ok(client, "/api/history?stationId=maitri&keys=generator.nope")
+    assert body["series"] == {"generator.nope": []}
+    for bad in ("", "nodot", "a.b;drop", ",".join(f"b.s{i}" for i in range(9))):
+        assert client.get(f"/api/history?stationId=maitri&keys={bad}").status_code == 422, bad
+    assert client.get("/api/history?stationId=maitri&keys=a.b&minutes=0").status_code == 422
+    assert client.get("/api/history?stationId=atlantis&keys=a.b").status_code == 404
+
+
+def test_republishing_the_same_batch_adds_no_duplicate_history_point():
+    from station_store import StationStore
+
+    store = StationStore(["maitri"], history_max_points=5)
+    snap = {"timestamp": 1000, "sensors": {"generator": {"gen_power": 70.0, "flag": True}}}
+    store.publish("maitri", snap)
+    store.publish("maitri", snap)
+    assert store.series("maitri", "generator.gen_power") == [(1000, 70.0)]
+    assert store.series("maitri", "generator.flag") == []          # non-numeric values skipped
+    for ts in range(2000, 9000, 1000):
+        store.publish("maitri", {"timestamp": ts, "sensors": {"generator": {"gen_power": 1.0}}})
+    assert len(store.series("maitri", "generator.gen_power")) == 5  # bounded window
 
 
 # ── Unknown stations 404 everywhere, from one dependency ─────────────────────

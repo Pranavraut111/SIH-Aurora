@@ -417,3 +417,42 @@ from effects. No glow, no gradients, no new colours.
 - **Small cold details, all functional:** coordinates and UTC offset in the station block,
   wind chill shown next to temperature where both exist, and the replay date as a quiet
   caption ("ERA5 replay · 3 Sep 2026") so a reader always knows which day the twin shows.
+
+## 11. v2 refinement (2026-10-02) — shell, Energy grid, Overview HUD
+
+Review feedback: credible but reads as an admin template. Refined without effects (no glow,
+neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
+
+- **Depth from tone:** page `#0D1014` → cards `#171B21` → raised `#1F242C` (dark); `#F1F3F6` →
+  white cards with a hairline → `#F5F6F8` (light). Card radius 12, controls 8, chips 6. One
+  shadow (`palette.aurora.shadowFloat`) for floating layers only: menus, dialogs, hints, and the
+  HUD cards over the 3D scene.
+- **Type:** page titles 30 px; figures in Plex Sans with `"tnum"` (hero 52 px, others 30 px);
+  labels 13 px secondary. Mono only for timestamps, ids and coordinates.
+- **Bento KPIs:** one hero per page (Energy: generation; Overview: outside temperature) with a
+  30-min sparkline and the delta vs 15 min ago; compact cards with mini sparklines. Hero + 2×2 at
+  every width (checked 360–1920 px): no orphans.
+- **One top bar:** the status strip is gone. Status chips (source, link, alerts, events), demo
+  control, theme, and a filled **Sign in** button visible at every width. On phones, link,
+  events, demo control and theme move into a ⋮ menu (loaded on first open).
+- **Demo control** opens from the top bar / ⋮ menu; the floating button is removed, so it can no
+  longer cover content. An active scenario shows as a dot on its button.
+- **Sidebar:** the active item is an accent-tinted pill with an accent icon. The foot holds the
+  station mini-card: south-polar locator (Natural Earth 1:110m, pre-projected, `shell/antarctica.js`),
+  local *mean solar* time (station_config has no time zone, so none is invented) next to IST,
+  and the polar day/night line computed from the sun's position (`lib/solar.js`, tested at both
+  solstices).
+- **Header identity:** faint generated topographic contours (inline SVG, 4.5 %), page header only.
+- **Categorical ramp:** blue → teal, alternating lightness; `seriesRest` grey for "unallocated".
+  Never a status colour.
+- **Motion:** 150 ms crossfade on changing figures (`ui/FadeValue`), short hover transitions;
+  both removed under `prefers-reduced-motion`.
+- **Data:** `GET /api/history` serves the published telemetry of the last ≤ 30 min
+  (`HISTORY_MAX_POINTS` 900 × 2 s); `useSeries` loads it once and appends live snapshots. Fuel
+  autonomy uses the 15-min average burn. The physics energy breakdown now travels **inside the
+  telemetry snapshot** (`snapshot.energy`, from `physics_model.energy_summary`), so generation,
+  demand split and heating share one tick and one timestamp; the model's ±2 % load noise is shown
+  as its own "load variation" row instead of a silent mismatch.
+- **Bundle:** startup JS 465 kB raw / 148 kB gzip (was 512 / 163). The shell uses a small `Hint`
+  instead of MUI Tooltip (no Popper at startup), `StatusDot` no longer pulls in Chip, and the
+  browser-demo generator loads only when the backend is unreachable.

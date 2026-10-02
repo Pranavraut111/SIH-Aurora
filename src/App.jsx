@@ -1,8 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════
    Aurora — Antarctic station digital twin.
-   App shell (docs/ui-redesign.md §4): app bar with the station switcher,
-   global status strip, sectioned sidebar, and the main stage — the 3D
-   overview or one module page.
+   App shell (docs/ui-redesign.md §4): ONE top bar (station switcher, status
+   chips, Sign in), sectioned sidebar with the station mini-card, and the main
+   stage — the 3D overview or one module page.
    ═══════════════════════════════════════════════════════════════ */
 import { useState, useCallback, lazy, Suspense } from 'react';
 import { useMediaQuery } from '@mui/material';
@@ -10,7 +10,6 @@ import { useTheme } from '@mui/material/styles';
 import ErrorBoundary from './components/ErrorBoundary';
 import PanelFallback from './components/PanelFallback';
 import TopBar from './shell/TopBar';
-import StatusStrip from './shell/StatusStrip';
 import SideNav from './shell/SideNav';
 import { MODULES } from './shell/navigation';
 import LegacySurface from './ui/LegacySurface';
@@ -59,9 +58,12 @@ export default function App() {
   const [showAlertsDrawer, setShowAlertsDrawer] = useState(false);
   // Drawers are mounted on first open (their chunks load then) and stay mounted so
   // their own close animation still runs.
-  const [mounted, setMounted] = useState({ alerts: false, link: false });
+  const [showDemo, setShowDemo] = useState(false);
+  const [mounted, setMounted] = useState({ alerts: false, link: false, demo: false });
   const openAlerts = useCallback(() => { setMounted((m) => ({ ...m, alerts: true })); setShowAlertsDrawer(true); }, []);
   const openLink = useCallback(() => { setMounted((m) => ({ ...m, link: true })); setShowConnectionDrawer(true); }, []);
+  const toggleDemo = useCallback(() => { setMounted((m) => ({ ...m, demo: true })); setShowDemo((v) => !v); }, []);
+  const closeDemo = useCallback(() => setShowDemo(false), []);
 
   // ── Live data (station-aware) ─────────────────────────────
   const { stationData, dataSource, toggleConnection, acknowledgeAlert } = useStationData(activeStation);
@@ -86,6 +88,7 @@ export default function App() {
   const dependencyAlerts = stationData.dependencyAlerts || [];
   const eventTimeline = stationData.eventTimeline || [];
   const updatedAt = telemetryBadge === 'connecting' ? null : stationData.timestamp;
+  const demoActive = Boolean(stationData.provenance?.activeScenario);
 
   // ── Handlers ──────────────────────────────────────────────
   const handleBuildingClick = useCallback((buildingId) => {
@@ -152,10 +155,12 @@ export default function App() {
         return (
           <EnergyModule
             sensorData={stationData.sensors}
-            history={stationData.history}
+            energy={stationData.energy}
+            provenance={stationData.provenance}
             activeAlerts={activeAlerts}
             activeStation={activeStation}
             telemetrySource={telemetryBadge}
+            timestamp={stationData.timestamp}
             updatedAt={updatedAt}
           />
         );
@@ -213,9 +218,6 @@ export default function App() {
         onStationChange={handleStationChange}
         isDesktop={isDesktop}
         onOpenNav={() => setMobileNavOpen(true)}
-      />
-
-      <StatusStrip
         telemetryBadge={telemetryBadge}
         isConnected={isConnected}
         alertCount={activeAlerts.length}
@@ -224,6 +226,8 @@ export default function App() {
         onOpenLink={openLink}
         onOpenAlerts={openAlerts}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
+        onOpenDemo={toggleDemo}
+        demoActive={demoActive}
       />
 
       <div className="app-layout-body">
@@ -236,6 +240,8 @@ export default function App() {
           onAction={handleNavAction}
           collapsed={isSidebarCollapsed}
           onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
+          activeStation={activeStation}
+          onStationChange={handleStationChange}
         />
 
         <main className="main-stage" id="main">
@@ -260,8 +266,12 @@ export default function App() {
                   <OverviewHUD
                     sensorData={stationData.sensors}
                     alerts={stationData.alerts}
+                    activeAlerts={activeAlerts}
                     activeStation={activeStation}
                     isConnected={isConnected}
+                    timestamp={stationData.timestamp}
+                    telemetrySource={telemetryBadge}
+                    provenance={stationData.provenance}
                     onOpenTwinInspector={() => setShowTwinInspector(true)}
                   />
                 </Suspense>
@@ -321,7 +331,7 @@ export default function App() {
             />
           )}
 
-          <DemoControl activeStation={activeStation} />
+          {mounted.demo && <DemoControl activeStation={activeStation} isOpen={showDemo} onClose={closeDemo} />}
         </Suspense>
       </LegacySurface>
     </div>

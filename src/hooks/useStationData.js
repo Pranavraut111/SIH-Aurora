@@ -4,16 +4,14 @@
    local caching, and offline queue aggregation.
    ═══════════════════════════════════════════════════════════════ */
 import { useEffect, useRef, useState, useCallback } from 'react';
-import {
-  startSimulation,
-  stopSimulation,
-  subscribe as subscribeSim,
-  getSnapshot,
-  getActiveAlerts,
-} from '../data/stationData';
 import { WS_URL } from '../config';
 import { apiPost, describeApiError } from '../services/api';
 import { getOperatorName } from '../services/operator';
+
+// The browser-demo generator is only needed when the backend is unreachable, so it is
+// loaded then (keeps it out of the startup bundle).
+let demoModule = null;
+const loadBrowserDemo = () => import('../data/stationData').then((m) => { demoModule = m; return m; });
 
 // WS reconnect: exponential backoff 1 s → 30 s, reset when a socket opens (B21).
 const RECONNECT_BASE_MS = 1000;
@@ -34,6 +32,7 @@ export function useStationData(activeStation = 'maitri') {
     activeAlerts: [],
     eventTimeline: [],
     timestamp: Date.now(),
+    energy: null,             // physics energy breakdown of the same tick as `sensors`
     connected: true,
     bandwidth: null,          // not measured — never fabricated
     signalQuality: null,      // not measured
@@ -128,6 +127,7 @@ export function useStationData(activeStation = 'maitri') {
             activeAlerts: state.activeAlerts || [],
             eventTimeline: state.eventTimeline || [],
             timestamp: state.timestamp || Date.now(),
+            energy: state.energy ?? null,
             connected: true,
             bandwidth: state.bandwidth ?? null,
             signalQuality: state.signalQuality ?? null,
@@ -187,7 +187,7 @@ export function useStationData(activeStation = 'maitri') {
       simUnsubRef.current();
       simUnsubRef.current = null;
     }
-    stopSimulation();
+    demoModule?.stopSimulation();
   }
 
   // ── Fall back to local simulation ─────────────────────────
@@ -195,42 +195,52 @@ export function useStationData(activeStation = 'maitri') {
   const fallbackToSimulation = useCallback(() => {
     setDataSource('simulation');
     if (simUnsubRef.current) return; // already subscribed — never stack subscriptions (B20)
-    startSimulation(2000);
+    // Placeholder subscription while the generator loads, so a second fallback is a no-op.
+    simUnsubRef.current = () => {};
+    loadBrowserDemo().then(({ startSimulation, subscribe: subscribeSim, getSnapshot, getActiveAlerts }) => {
+      // A socket opened (or the hook unmounted) while the module loaded: stay off.
+      if (dataSourceRef.current !== 'simulation' || !simUnsubRef.current) return;
+      startSimulation(2000);
 
-    simUnsubRef.current = subscribeSim(() => {
-      if (isManuallyDisconnectedRef.current) {
-        offlineQueueRef.current += 1;
-        setStationData(prev => ({
-          ...prev,
-          connected: false,
-          signalQuality: 0,
-          isCached: true,
-          offlineQueueSize: offlineQueueRef.current,
-        }));
-        return;
-      }
+      simUnsubRef.current = subscribeSim(() => {
+        if (isManuallyDisconnectedRef.current) {
+          offlineQueueRef.current += 1;
+          setStationData(prev => ({
+            ...prev,
+            connected: false,
+            signalQuality: 0,
+            isCached: true,
+            offlineQueueSize: offlineQueueRef.current,
+          }));
+          return;
+        }
 
-      const sid = activeStationRef.current;
-      const snapshot = getSnapshot(sid);
-      const history = updateHistory(snapshot.sensors);
-      const alerts = getActiveAlerts(snapshot);
+        const sid = activeStationRef.current;
+        const snapshot = getSnapshot(sid);
+        const history = updateHistory(snapshot.sensors);
+        const alerts = getActiveAlerts(snapshot);
 
-      setStationData({
-        sensors: snapshot.sensors,
-        alerts: snapshot.alerts,
-        history,
-        activeAlerts: alerts,
-        eventTimeline: snapshot.eventTimeline || [],
-        timestamp: snapshot.timestamp,
-        connected: true,
-        bandwidth: null,
-        signalQuality: null,
-        activePatterns: snapshot.activePatterns || [],
-        offlineQueueSize: 0,
-        isCached: false,
-        telemetrySource: 'browser-demo',
-        provenance: { equipment: 'SIMULATED', environment: 'SIMULATED', storage: 'SIMULATED' },
+        setStationData({
+          sensors: snapshot.sensors,
+          alerts: snapshot.alerts,
+          history,
+          activeAlerts: alerts,
+          eventTimeline: snapshot.eventTimeline || [],
+          timestamp: snapshot.timestamp,
+          connected: true,
+          bandwidth: null,
+          signalQuality: null,
+          activePatterns: snapshot.activePatterns || [],
+          offlineQueueSize: 0,
+          isCached: false,
+          telemetrySource: 'browser-demo',
+          energy: null,
+          provenance: { equipment: 'SIMULATED', environment: 'SIMULATED', storage: 'SIMULATED' },
+        });
       });
+    }).catch((err) => {
+      console.error('[Demo] could not load the browser demo generator', err);
+      simUnsubRef.current = null;       // allow the next fallback to try again
     });
   }, [updateHistory, setDataSource]);
 

@@ -6,12 +6,13 @@
    variables, which is how not-yet-migrated panels stay dark inside a light shell
    (see LegacySurface).
 
-   The overrides deliberately move MUI away from stock Material: no elevation
-   shadows on surfaces (1 px borders instead), no uppercase buttons, 4/6 px radii,
-   denser controls, tabular figures, and no Paper gradient overlay in dark mode.
+   The overrides deliberately move MUI away from stock Material: depth from tone
+   (cards one step lighter than the page; a hairline only in light mode), one soft
+   shadow for floating layers only, no uppercase buttons, 8/12 px radii, denser
+   controls, tabular figures, and no Paper gradient overlay in dark mode.
    ═══════════════════════════════════════════════════════════════ */
 import { createTheme } from '@mui/material/styles';
-import { fonts, layout, motion, palette, radius, SPACING_UNIT, status, type } from './tokens';
+import { elevation, fonts, layout, motion, palette, radius, SPACING_UNIT, status, type } from './tokens';
 
 function schemePalette(mode) {
   const p = palette[mode];
@@ -40,6 +41,9 @@ function schemePalette(mode) {
       borderControl: p.border.control,
       textMuted: p.text.muted,
       accentTint: p.accent.tint,
+      shadowFloat: elevation[mode],
+      // Cards: tone carries the edge in dark mode; light mode keeps a hairline.
+      cardBorder: mode === 'dark' ? 'transparent' : p.border.subtle,
     },
     status: {
       normal: s.normal.main, normalTint: s.normal.tint,
@@ -75,8 +79,10 @@ export const theme = createTheme({
     caption: t('caption'),
     overline: { ...t('label'), textTransform: 'uppercase', letterSpacing: '0.06em' },
     button: { ...t('body'), fontWeight: 600, textTransform: 'none' },
-    // Custom variants
-    kpi: { ...t('kpi'), fontFamily: fonts.mono, fontVariantNumeric: 'tabular-nums' },
+    // Custom variants. Figures: Plex Sans with tabular figures ("tnum"), not mono.
+    kpi: { ...t('kpi'), fontFeatureSettings: '"tnum" 1', fontVariantNumeric: 'tabular-nums' },
+    kpiHero: { ...t('kpiHero'), fontFeatureSettings: '"tnum" 1', fontVariantNumeric: 'tabular-nums' },
+    label: t('label'),
     mono: { fontFamily: fonts.mono, fontSize: '13px', lineHeight: '18px', fontVariantNumeric: 'tabular-nums' },
   },
   transitions: {
@@ -87,7 +93,8 @@ export const theme = createTheme({
     },
     easing: { easeInOut: motion.easing, easeOut: motion.easing, easeIn: motion.easing, sharp: motion.easing },
   },
-  shadows: Array(25).fill('none').map((v, i) => (i === 8 ? '0 8px 24px rgba(0, 0, 0, 0.28)' : v)),
+  // Surfaces carry no shadow; floating layers use palette.aurora.shadowFloat (per scheme).
+  shadows: Array(25).fill('none'),
   zIndex: { appBar: 1200, drawer: 1100 },
   components: {
     MuiCssBaseline: {
@@ -118,15 +125,21 @@ export const theme = createTheme({
     },
     MuiCard: {
       defaultProps: { variant: 'outlined' },
-      styleOverrides: { root: { borderRadius: radius.card } },
+      styleOverrides: {
+        root: ({ theme }) => ({
+          borderRadius: radius.card,
+          backgroundColor: theme.vars.palette.background.paper,
+          borderColor: theme.vars.palette.aurora.cardBorder,
+        }),
+      },
     },
-    MuiCardContent: { styleOverrides: { root: { padding: 16, '&:last-child': { paddingBottom: 16 } } } },
+    MuiCardContent: { styleOverrides: { root: { padding: 20, '&:last-child': { paddingBottom: 20 } } } },
     MuiAppBar: {
       defaultProps: { elevation: 0, color: 'inherit' },
       styleOverrides: {
         root: ({ theme }) => ({
           backgroundColor: theme.vars.palette.background.paper,
-          borderBottom: `1px solid ${theme.vars.palette.divider}`,
+          borderBottom: `1px solid ${theme.vars.palette.aurora.borderSubtle}`,
         }),
       },
     },
@@ -153,7 +166,7 @@ export const theme = createTheme({
     },
     MuiChip: {
       styleOverrides: {
-        root: { borderRadius: radius.control, height: 22, fontSize: '12px', fontWeight: 500 },
+        root: { borderRadius: radius.chip, height: 22, fontSize: '12px', fontWeight: 500 },
         label: { paddingInline: 8 },
         outlined: ({ theme }) => ({ borderColor: theme.vars.palette.divider }),
         icon: { fontSize: 14, marginLeft: 6 },
@@ -166,6 +179,8 @@ export const theme = createTheme({
           backgroundColor: theme.vars.palette.aurora.surfaceOverlay,
           color: theme.vars.palette.text.primary,
           border: `1px solid ${theme.vars.palette.divider}`,
+          borderRadius: radius.chip,
+          boxShadow: theme.vars.palette.aurora.shadowFloat,
           fontSize: '12px',
           lineHeight: '16px',
           padding: '6px 8px',
@@ -182,7 +197,8 @@ export const theme = createTheme({
       styleOverrides: {
         paper: ({ theme }) => ({
           border: `1px solid ${theme.vars.palette.divider}`,
-          boxShadow: theme.shadows[8],
+          borderRadius: radius.card,
+          boxShadow: theme.vars.palette.aurora.shadowFloat,
           backgroundColor: theme.vars.palette.aurora.surfaceOverlay,
         }),
       },
@@ -193,22 +209,24 @@ export const theme = createTheme({
     MuiBackdrop: { styleOverrides: { root: { backgroundColor: 'rgba(8, 10, 13, 0.55)' } } },
     MuiMenu: {
       styleOverrides: {
-        paper: ({ theme }) => ({ border: `1px solid ${theme.vars.palette.divider}`, boxShadow: theme.shadows[8], backgroundColor: theme.vars.palette.aurora.surfaceOverlay }),
+        paper: ({ theme }) => ({ border: `1px solid ${theme.vars.palette.divider}`, borderRadius: radius.control, boxShadow: theme.vars.palette.aurora.shadowFloat, backgroundColor: theme.vars.palette.aurora.surfaceOverlay }),
       },
     },
     MuiListItemButton: {
       styleOverrides: {
         root: ({ theme }) => ({
-          borderRadius: radius.control,
+          borderRadius: 999,
           minHeight: 36,
           paddingBlock: 6,
           color: theme.vars.palette.text.secondary,
           '&:hover': { color: theme.vars.palette.text.primary },
+          transition: theme.transitions.create(['background-color', 'color'], { duration: motion.duration.short }),
+          // Active item: a soft accent-tinted pill with an accent icon (no edge bar).
           '&.Mui-selected': {
             color: theme.vars.palette.text.primary,
-            backgroundColor: theme.vars.palette.aurora.surfaceOverlay,
-            boxShadow: `inset 2px 0 0 ${theme.vars.palette.primary.main}`,
-            '&:hover': { backgroundColor: theme.vars.palette.aurora.surfaceOverlay },
+            backgroundColor: theme.vars.palette.aurora.accentTint,
+            '& .MuiListItemIcon-root': { color: theme.vars.palette.primary.main },
+            '&:hover': { backgroundColor: theme.vars.palette.aurora.accentTint },
           },
         }),
       },
@@ -218,9 +236,10 @@ export const theme = createTheme({
     MuiListSubheader: {
       styleOverrides: {
         root: ({ theme }) => ({
-          ...t('label'),
+          ...t('caption'),
+          fontWeight: 600,
           textTransform: 'uppercase',
-          letterSpacing: '0.06em',
+          letterSpacing: '0.08em',
           color: theme.vars.palette.aurora.textMuted,
           backgroundColor: 'transparent',
           lineHeight: '16px',
@@ -266,7 +285,7 @@ export const theme = createTheme({
     },
     MuiLinearProgress: {
       styleOverrides: {
-        root: ({ theme }) => ({ height: 4, borderRadius: 2, backgroundColor: theme.vars.palette.aurora.surfaceRaised }),
+        root: ({ theme }) => ({ height: 4, borderRadius: 2, backgroundColor: theme.vars.palette.aurora.borderSubtle }),
         bar: { borderRadius: 2 },
       },
     },
