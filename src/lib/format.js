@@ -44,7 +44,7 @@ const istTime = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
 });
 const istDateTime = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+  timeZone: 'Asia/Kolkata', day: '2-digit', month: 'numeric', year: 'numeric',
   hour: '2-digit', minute: '2-digit', hour12: false,
 });
 
@@ -60,10 +60,39 @@ export function formatTimeIST(ts) {
   return d ? `${istTime.format(d)} IST` : DASH;
 }
 
-/** "02 Oct 2026, 22:31 IST" */
+/** "02 Oct 2026, 22:31 IST" (month spelled by hand: never "Sept"). */
 export function formatDateTimeIST(ts) {
   const d = toDate(ts);
-  return d ? `${istDateTime.format(d)} IST` : DASH;
+  if (!d) return DASH;
+  const p = Object.fromEntries(istDateTime.formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.day} ${MONTHS[Number(p.month) - 1]} ${p.year}, ${p.hour === '24' ? '00' : p.hour}:${p.minute} IST`;
+}
+
+// Day, month and time parts in IST, assembled by hand: ICU's en-GB short month is "Sept"
+// in recent versions, and these labels should read "3 Sep" everywhere.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const istParts = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+function partsIST(d) {
+  const p = Object.fromEntries(istParts.formatToParts(d).map((x) => [x.type, x.value]));
+  return { day: Number(p.day), mon: MONTHS[Number(p.month) - 1], hm: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` };
+}
+
+/** "3 Sep 06:12" (IST, no suffix: chart ticks and compact labels). */
+export function formatShortDateTimeIST(ts) {
+  const d = toDate(ts);
+  if (!d) return DASH;
+  const p = partsIST(d);
+  return `${p.day} ${p.mon} ${p.hm}`;
+}
+
+/** "3 Sep" (IST). */
+export function formatDayIST(ts) {
+  const d = toDate(ts);
+  if (!d) return DASH;
+  const p = partsIST(d);
+  return `${p.day} ${p.mon}`;
 }
 
 /** "just now", "12 s ago", "4 min ago", "3 h ago", "2 d ago". */

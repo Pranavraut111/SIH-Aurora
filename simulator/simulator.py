@@ -438,6 +438,7 @@ class StationSimulator:
         """Execute one simulation tick. Returns readings for the backend."""
         self.tick_count += 1
         self._last_energy = None   # set only by a tick that ran the physics model
+        self._last_replay = None   # replay clock of this tick (reanalysis mode only)
 
         if self.mode == "reanalysis" and self.weather_available:
             return self._tick_reanalysis()
@@ -495,6 +496,13 @@ class StationSimulator:
         # 5. Store metadata for logging
         self._last_meta = meta
         self._last_energy = energy_summary(meta)
+        self._last_replay = {
+            "timeMs": weather.get("simulated_time_ms"),
+            "local": weather.get("simulated_time"),
+            "speedFactor": self.weather_layer.speed_factor,
+            "loop": weather.get("replay_loop"),
+            "utcOffsetSource": weather.get("utc_offset_source"),
+        }
         self._last_weather = weather
 
         # 6. Phase 3: Anomaly detection (scored every tick)
@@ -1351,6 +1359,8 @@ def main():
                         "weatherSource": source_info.get("dataset") or source_info.get("label"),
                         # Energy breakdown of THIS tick (same timestamp as the readings).
                         "energy": getattr(sim, "_last_energy", None),
+                        # ERA5 replay clock of THIS tick: the instant the readings describe.
+                        "replay": getattr(sim, "_last_replay", None),
                     })
 
             for payload in payloads:

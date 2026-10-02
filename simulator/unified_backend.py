@@ -292,7 +292,7 @@ def advance_fallback(sid: str) -> dict:
 
 def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts_ms: int,
                    last_batch_age, connected: bool, event_timeline=None, active_patterns=None,
-                   energy=None) -> dict:
+                   energy=None, replay=None) -> dict:
     """sensors → persistent threshold alerts (ALERTS.evaluate) → cascade → health → snapshot.
     Only the tick calls this (via select_snapshot), so alert state advances once per tick."""
     alerts, active_alerts = ALERTS.evaluate(sid, sensors, ts_ms)
@@ -313,6 +313,8 @@ def build_snapshot(sid: str, sensors: dict, *, source: str, provenance: dict, ts
         "sensors": sensors,
         # Physics energy breakdown of the same tick as `sensors` (None in random-walk mode).
         "energy": energy,
+        # ERA5 replay clock of the same tick (None: physics fallback runs on the wall clock).
+        "replay": replay,
         "alerts": alerts,
         "activeAlerts": active_alerts,
         "dependencyAlerts": dependency_alerts,
@@ -373,7 +375,7 @@ def snapshot_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
         ts_ms=batch.get("timestamp") or int(time.time() * 1000),
         last_batch_age=last_batch_age, connected=store.is_connected(sid),
         event_timeline=batch.get("eventTimeline"), active_patterns=batch.get("activePatterns"),
-        energy=batch.get("energy"),
+        energy=batch.get("energy"), replay=batch.get("replay"),
     )
 
 
@@ -608,6 +610,16 @@ class EnergySummary(BaseModel):
     loadPct: float | None = Field(None, allow_inf_nan=False)
 
 
+class ReplayClock(BaseModel):
+    """The ERA5 replay instant a simulator tick describes (reanalysis mode)."""
+    model_config = ConfigDict(extra="forbid")
+    timeMs: int | None = None                       # epoch ms (UTC); None if the offset is unknown
+    local: str | None = Field(None, max_length=32)  # the cache's own (station-local) timestamp
+    speedFactor: float | None = Field(None, allow_inf_nan=False, gt=0)
+    loop: int | None = None
+    utcOffsetSource: str | None = Field(None, max_length=40)
+
+
 class SensorBatch(BaseModel):
     """Superset of the legacy Java SensorBatchDTO (new fields are optional)."""
     stationId: str = Field(max_length=32)
@@ -620,6 +632,7 @@ class SensorBatch(BaseModel):
     injectedSensors: list[str] | None = None
     weatherSource: str | None = Field(None, max_length=200)
     energy: EnergySummary | None = None
+    replay: ReplayClock | None = None
 
     @field_validator("readings")
     @classmethod

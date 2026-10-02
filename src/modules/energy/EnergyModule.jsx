@@ -17,12 +17,13 @@ import { useState } from 'react';
 import {
   Alert, Box, Button, Grid, Skeleton, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography,
 } from '@mui/material';
-import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
+import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import { apiGet } from '../../services/api';
 import { usePolling } from '../../hooks/usePolling';
 import { rollingMean, useSeries, valueAgo } from '../../hooks/useSeries';
 import { sensorCatalog, stationMeta } from '../../data/stationConfig';
-import { formatNumber, formatTimeIST, formatValue, isNum } from '../../lib/format';
+import { formatDateTimeIST, formatNumber, formatShortDateTimeIST, formatTimeIST, formatValue, isNum } from '../../lib/format';
+import { formatSpan, movingAverage, onModelClock } from '../../lib/modelClock';
 import { useChartTheme } from '../../theme/chartTheme';
 import { fitDomain } from '../../lib/chartScale';
 import KpiCard from '../../ui/KpiCard';
@@ -32,9 +33,7 @@ import SectionCard from '../../ui/SectionCard';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
 const num = (v) => (isNum(v) ? v : null);
-const MIN = 60_000;
-const WINDOW_MIN = 30;
-const AVG_MIN = 15;
+const WINDOW_MIN = 30;   // wall-clock minutes of history kept (= 60 h of replay at 120×)
 const SERIES_KEYS = ['generator.gen_power', 'generator.gen_fuel_rate', 'generator.gen_temp', 'generator.gen_rpm'];
 // Present for screen readers (keeps the heading outline intact), invisible on screen.
 const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0, p: 0, m: -1 / 4 };
@@ -57,17 +56,46 @@ function thresholdText(catalog, sensor) {
   return null;
 }
 
-function OutputChart({ points, loaded, ratedKW, lowWarnKW }) {
+function ChartLegend({ items }) {
+  return (
+    <Stack direction="row" component="ul" aria-label="Legend" sx={{ gap: 4, m: 0, p: 0, mb: 2, listStyle: 'none', flexWrap: 'wrap' }}>
+      {items.map((it) => (
+        <Stack key={it.label} direction="row" component="li" sx={{ alignItems: 'center', gap: 1.5, fontSize: 12, color: 'text.secondary' }}>
+          <Box aria-hidden="true" sx={{ width: 16, height: 0, borderTop: `${it.width}px solid ${it.color}`, opacity: it.opacity }} />
+          {it.label}
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
+function ChartTip({ active, payload, clock, maLabel, chart }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  const when = clock.kind === 'replay' ? `${formatDateTimeIST(row.time)} (replay)` : formatTimeIST(row.time);
+  return (
+    <Box sx={{ ...chart.tooltip.contentStyle, boxShadow: chart.mode === 'dark' ? '0 8px 24px rgba(0,0,0,.45)' : '0 8px 24px rgba(23,27,33,.12)' }}>
+      <Box sx={{ color: chart.tooltip.labelStyle.color, mb: 0.5 }}>{when}</Box>
+      <Box>{maLabel}: <b>{formatValue(row.avg, 'kW', 1)}</b></Box>
+      <Box sx={{ color: chart.tooltip.labelStyle.color }}>Raw: {formatValue(row.kw, 'kW', 1)}</Box>
+    </Box>
+  );
+}
+
+function OutputChart({ points, loaded, ratedKW, lowWarnKW, clock }) {
   const chart = useChartTheme();
-  const data = (points || []).map(([time, kw]) => ({ time, kw }));
   if (!loaded) return <Skeleton variant="rounded" height={300} />;
-  if (data.length < 2) {
+  if (!points || points.length < 2) {
     return (
       <Box sx={{ height: 300, display: 'grid', placeItems: 'center' }}>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>Collecting samples. The chart fills in as telemetry arrives.</Typography>
       </Box>
     );
   }
+  // Primary line: trailing moving average on the model clock; raw samples stay visible, faint.
+  const avg = movingAverage(points, clock.maMs);
+  const data = points.map(([time, kw], i) => ({ time, kw, avg: avg[i][1] }));
+  const maLabel = `${formatSpan(clock.maMs)} average`;
   const values = data.map((d) => d.kw);
   const dataMax = Math.max(...values);
   // Rated capacity is drawn when it is near enough to keep the line readable; otherwise the
@@ -79,17 +107,22 @@ function OutputChart({ points, loaded, ratedKW, lowWarnKW }) {
     isNum(ratedKW) && !inRange(ratedKW) && `rated capacity ${formatValue(ratedKW, 'kW')}`,
     isNum(lowWarnKW) && !inRange(lowWarnKW) && `low-power warning ${formatValue(lowWarnKW, 'kW')}`,
   ].filter(Boolean);
-  const spanMin = Math.round((data.at(-1).time - data[0].time) / MIN);
+  const span = data.at(-1).time - data[0].time;
+  const tickFmt = clock.kind === 'replay' ? formatShortDateTimeIST : hhmm;
 
   return (
     <>
+      <ChartLegend items={[
+        { label: `${maLabel} (${clock.suffix})`, color: chart.accent, width: 2, opacity: 1 },
+        { label: `Raw (one sample per tick)`, color: chart.accent, width: 1, opacity: 0.45 },
+      ]} />
       <Box sx={{ height: 300 }} role="img"
-        aria-label={`Generator output over the last ${spanMin} minutes: between ${formatValue(Math.min(...values), 'kW', 1)} and ${formatValue(dataMax, 'kW', 1)}, latest ${formatValue(values.at(-1), 'kW', 1)}`}>
+        aria-label={`Generator output over the last ${formatSpan(span)} of ${clock.suffix}: ${maLabel.toLowerCase()} between ${formatValue(Math.min(...avg.map((p) => p[1])), 'kW', 1)} and ${formatValue(Math.max(...avg.map((p) => p[1])), 'kW', 1)}, latest ${formatValue(avg.at(-1)[1], 'kW', 1)}; raw latest ${formatValue(values.at(-1), 'kW', 1)}`}>
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid stroke={chart.grid} vertical={false} />
             <XAxis dataKey="time" type="number" domain={['dataMin', 'dataMax']} scale="time"
-              tickFormatter={hhmm} tick={chart.tick} stroke={chart.axis} tickLine={false} minTickGap={48} />
+              tickFormatter={tickFmt} tick={chart.tick} stroke={chart.axis} tickLine={false} minTickGap={clock.kind === 'replay' ? 72 : 48} />
             <YAxis tick={chart.tick} stroke={chart.axis} tickLine={false} axisLine={false} width={44}
               domain={domain} ticks={domain.ticks} tickFormatter={(v) => formatNumber(v)} />
             {inRange(ratedKW) && (
@@ -100,13 +133,13 @@ function OutputChart({ points, loaded, ratedKW, lowWarnKW }) {
               <ReferenceLine y={lowWarnKW} stroke={chart.referenceLine.warning} strokeDasharray="4 4"
                 label={{ value: `Low-power warning ${formatValue(lowWarnKW, 'kW')}`, position: 'insideBottomRight', fill: chart.labelFill, fontSize: 12 }} />
             )}
-            <ChartTooltip {...chart.tooltip}
-              wrapperStyle={{ outline: 'none' }}
-              labelFormatter={(t) => formatTimeIST(t)}
-              formatter={(v) => [formatValue(v, 'kW', 1), 'Output']} />
-            <Area type="monotone" dataKey="kw" stroke={chart.accent} strokeWidth={2} fill={chart.accent}
+            <ChartTooltip cursor={chart.tooltip.cursor} wrapperStyle={{ outline: 'none' }}
+              content={<ChartTip clock={clock} maLabel={maLabel} chart={chart} />} />
+            <Line type="linear" dataKey="kw" stroke={chart.accent} strokeOpacity={0.45} strokeWidth={1} dot={false}
+              activeDot={false} isAnimationActive={false} />
+            <Area type="monotone" dataKey="avg" stroke={chart.accent} strokeWidth={2} fill={chart.accent}
               fillOpacity={chart.areaOpacity} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: chart.accent }} isAnimationActive={false} />
-          </AreaChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </Box>
       {offScale.length > 0 && (
@@ -205,16 +238,16 @@ function FactRow({ label, value, note }) {
   );
 }
 
-function autonomyContext({ fuelError, stockL, avg }) {
+function autonomyContext({ fuelError, stockL, avg, clock }) {
   if (fuelError) return 'Fuel ledger unavailable';
   if (stockL == null) return 'No fuel stock in the ledger';
-  const mins = Math.max(1, Math.round(avg.spanMs / MIN));
-  const basis = mins >= AVG_MIN ? `at ${AVG_MIN}-min average burn` : `at ${mins}-min average burn (history filling)`;
+  const filling = avg.spanMs < clock.avgMs * 0.95;
+  const basis = `at ${formatSpan(filling ? avg.spanMs : clock.avgMs)} average burn (${clock.suffix}${filling ? ', history filling' : ''})`;
   return `${formatValue(stockL, 'L')} in stock (ledger) ${basis}`;
 }
 
 export default function EnergyModule({
-  sensorData = {}, energy = null, provenance = null, activeAlerts = [], activeStation = 'maitri',
+  sensorData = {}, energy = null, replay = null, provenance = null, activeAlerts = [], activeStation = 'maitri',
   telemetrySource, timestamp, updatedAt,
 }) {
   const meta = MODULES.energy;
@@ -225,9 +258,13 @@ export default function EnergyModule({
   const rpm = num(gen.gen_rpm);
   const coolantC = num(gen.gen_temp);
 
-  const { series, loaded } = useSeries({
-    station: activeStation, keys: SERIES_KEYS, minutes: WINDOW_MIN, sensors: sensorData, timestamp, source: telemetrySource,
+  const replayMs = num(replay?.timeMs);
+  const raw = useSeries({
+    station: activeStation, keys: SERIES_KEYS, minutes: WINDOW_MIN, sensors: sensorData, timestamp, source: telemetrySource, replayMs,
   });
+  const loaded = raw.loaded;
+  // Every window below is on the model's clock: the ERA5 replay clock when there is one.
+  const { clock, series } = onModelClock(raw.series, SERIES_KEYS, replayMs);
   const powerPts = series['generator.gen_power'];
   const fuelPts = series['generator.gen_fuel_rate'];
 
@@ -278,18 +315,20 @@ export default function EnergyModule({
   const genGap = powerKW != null && totalDemand != null ? powerKW - totalDemand : null;
   const genOverridden = (provenance?.injectedSensors || []).includes('generator.gen_power');
 
-  // Fuel autonomy at the rolling 15-min average burn, so it does not jump with every reading.
-  const avg = rollingMean(fuelPts, AVG_MIN * MIN);
+  // Fuel autonomy at the rolling average burn (24 h of replay time: a full diurnal heating
+  // cycle), so it does not jump with every reading.
+  const avg = rollingMean(fuelPts, clock.avgMs);
   const avgBurn = avg.mean ?? fuelRateLph;
   const stockL = fuelItem && fuelItem.unit === 'L' ? num(fuelItem.current) : null;
   const autonomyDays = stockL != null && avgBurn ? stockL / (avgBurn * 24) : null;
 
   const heatingDemand = num(energy?.heatingDemand_kW);
   const wasteShare = num(twinData?.wasteHeatRecovery);
-  const simulatedTime = twinData?.dataSource?.simulatedTime ?? twinData?.environment?.simulatedTime;
+  const spanMs = powerPts?.length > 1 ? powerPts.at(-1)[0] - powerPts[0][0] : null;
+  const replayLabel = replayMs != null ? `replay ${formatShortDateTimeIST(replayMs)} IST` : null;
   const telemetryKind = telemetrySource === 'browser-demo' ? 'SIMULATED' : 'MODEL-DERIVED';
   const station = stationMeta(activeStation).name;
-  const snapshotLabel = isNum(timestamp) ? formatTimeIST(timestamp) : '—';
+  const snapshotLabel = [isNum(timestamp) ? formatTimeIST(timestamp) : '—', replayLabel].filter(Boolean).join(' · ');
   const noBreakdown = !energy;
 
   return (
@@ -338,21 +377,23 @@ export default function EnergyModule({
         <KpiCard hero label="Generation" value={powerKW} unit="kW" decimals={1} testId="kpi-generation" sx={{ gridArea: 'hero' }}
           status={sensorStatus(activeAlerts, 'gen_power')}
           series={powerPts}
-          delta={powerKW != null && valueAgo(powerPts, AVG_MIN * MIN) != null ? powerKW - valueAgo(powerPts, AVG_MIN * MIN) : null}
-          context={twinLoading ? 'Loading rated power…' : `${formatNumber(loadPct)}% of ${formatValue(ratedKW, 'kW')} rated · last ${WINDOW_MIN} min`} />
+          delta={powerKW != null && valueAgo(powerPts, clock.deltaMs) != null ? powerKW - valueAgo(powerPts, clock.deltaMs) : null}
+          deltaLabel={clock.deltaLabel} sparkBucketMs={clock.sparkBucketMs}
+          context={twinLoading ? 'Loading rated power…' : `${formatNumber(loadPct)}% of ${formatValue(ratedKW, 'kW')} rated · last ${formatSpan(spanMs)} (${clock.suffix})`} />
         <KpiCard label="Fuel burn" value={fuelRateLph} unit="L/h" decimals={1} testId="kpi-fuel-burn" sx={{ gridArea: 'a' }}
           status={sensorStatus(activeAlerts, 'gen_fuel_rate')}
           series={fuelPts}
-          context={avg.mean != null ? `${AVG_MIN}-min average ${formatValue(avg.mean, 'L/h', 1)}` : '—'} />
+          sparkBucketMs={clock.sparkBucketMs}
+          context={avg.mean != null ? `${formatSpan(Math.min(avg.spanMs || clock.avgMs, clock.avgMs))} average ${formatValue(avg.mean, 'L/h', 1)} (${clock.suffix})` : '—'} />
         <KpiCard label="Fuel autonomy" value={autonomyDays} unit="days" testId="kpi-autonomy" sx={{ gridArea: 'b' }}
-          context={autonomyContext({ fuelError, stockL, avg })} />
+          context={autonomyContext({ fuelError, stockL, avg, clock })} />
         <KpiCard label="Coolant temperature" value={coolantC} unit="°C" decimals={1} testId="kpi-coolant" sx={{ gridArea: 'c' }}
           status={sensorStatus(activeAlerts, 'gen_temp')}
-          series={series['generator.gen_temp']}
+          series={series['generator.gen_temp']} sparkBucketMs={clock.sparkBucketMs}
           context={thresholdText(catalog, 'gen_temp')} />
         <KpiCard label="Engine speed" value={rpm} unit="rpm" testId="kpi-rpm" sx={{ gridArea: 'd' }}
           status={sensorStatus(activeAlerts, 'gen_rpm')}
-          series={series['generator.gen_rpm']}
+          series={series['generator.gen_rpm']} sparkBucketMs={clock.sparkBucketMs}
           context={thresholdText(catalog, 'gen_rpm')} />
       </Box>
 
@@ -360,11 +401,13 @@ export default function EnergyModule({
         <Grid size={{ xs: 12, lg: 7 }}>
           <SectionCard
             title="Generator output"
-            subtitle={`kW · last ${WINDOW_MIN} min, one sample per 2 s tick · times in IST`}
+            subtitle={clock.kind === 'replay'
+              ? `kW · last ${formatSpan(spanMs)} of ERA5 replay time (${replay?.speedFactor ?? '—'}× real time) · times in IST`
+              : `kW · last ${formatSpan(spanMs)}, wall clock, one sample per 2 s tick · times in IST`}
             provenance={<ProvenanceChip kind={telemetryKind} />}
             testId="energy-output-chart"
           >
-            <OutputChart points={powerPts} loaded={loaded} ratedKW={ratedKW} lowWarnKW={catalog.gen_power?.low?.warning} />
+            <OutputChart points={powerPts} loaded={loaded} clock={clock} ratedKW={ratedKW} lowWarnKW={catalog.gen_power?.low?.warning} />
           </SectionCard>
         </Grid>
         <Grid size={{ xs: 12, lg: 5 }}>
@@ -412,8 +455,16 @@ export default function EnergyModule({
               <li>One generator is modelled. The second gen-set is not.</li>
               <li>Oil pressure, vibration and bus frequency are not modelled.</li>
               <li>Fuel burn follows a Willans-line model with estimated parameters.</li>
-              <li>Fuel stock is the operator-entered ledger, not a tank sensor. Autonomy uses the {AVG_MIN}-min average burn.</li>
-              {simulatedTime && <li>Replay time in the physics model: <Box component="span" sx={{ typography: 'mono', color: 'text.primary' }}>{String(simulatedTime).replace('T', ' ')}</Box> (ERA5 replay clock).</li>}
+              <li>Fuel stock is the operator-entered ledger, not a tank sensor. Autonomy uses the {formatSpan(clock.avgMs)} average burn ({clock.suffix}).</li>
+              {replayMs != null ? (
+                <li>
+                  Replay time of this snapshot: <Box component="span" sx={{ typography: 'mono', color: 'text.primary' }}>{formatDateTimeIST(replayMs)}</Box>{' '}
+                  (ERA5 replayed at {replay?.speedFactor ?? '—'}× real time; 1 tick = {formatSpan(2000 * (replay?.speedFactor ?? 0))}).
+                  {replay?.utcOffsetSource === 'inferred-from-solar-radiation' && ' The weather cache had no UTC offset; it was inferred from the solar-radiation peak.'}
+                </li>
+              ) : (
+                <li>No replay clock for this source: averages and deltas use the wall clock.</li>
+              )}
             </Stack>
           </SectionCard>
         </Grid>

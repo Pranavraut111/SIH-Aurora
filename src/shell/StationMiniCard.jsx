@@ -5,14 +5,15 @@
    the sun's position. Every fact comes from station_config.json or is
    computed from it; nothing is typed in by hand.
 
-   Times are wall-clock "now". The replayed ERA5 day the twin shows can differ
-   (the replay clock is not exposed to the shell yet), so the day/night line
-   describes the station today, not the replayed weather.
+   The instant is the ERA5 replay clock of the latest snapshot while the twin
+   replays (labelled "replay date 3 Sep"), so the day/night line, sun times and
+   solar time describe the day the twin is showing. Without a replay clock
+   (physics fallback, browser demo) it is the wall clock, labelled "today".
    ═══════════════════════════════════════════════════════════════ */
 import { useMemo } from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 import { useNow } from '../hooks/useNow';
-import { formatTimeIST } from '../lib/format';
+import { formatDayIST, formatTimeIST, isNum } from '../lib/format';
 import { dayState, solarTimeOffsetMs } from '../lib/solar';
 import { STATION_IDS, stationMeta } from '../data/stationConfig';
 import Hint from '../ui/Hint';
@@ -95,8 +96,10 @@ function SunPath({ sun, now }) {
   );
 }
 
-export default function StationMiniCard({ activeStation, onStationChange }) {
-  const now = useNow(15_000);
+export default function StationMiniCard({ activeStation, onStationChange, replayMs = null }) {
+  const wall = useNow(15_000);
+  const onReplay = isNum(replayMs);
+  const now = onReplay ? replayMs : wall;
   const meta = stationMeta(activeStation);
   const minute = Math.floor(now / 60_000);
   const sun = useMemo(() => dayState(minute * 60_000, meta.latitude, meta.longitude), [minute, meta.latitude, meta.longitude]);
@@ -122,24 +125,31 @@ export default function StationMiniCard({ activeStation, onStationChange }) {
           <Typography component="p" sx={{ typography: 'mono', fontSize: 12, lineHeight: '16px', color: 'text.secondary', mt: 0.5 }}>
             {lat}<br />{lon}
           </Typography>
-          <Typography sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary', mt: 1 }}>{meta.elevation_m} m · {meta.personnelWinter} winter crew</Typography>
+          <Hint title="Local mean solar time at the shown instant, from the station's longitude. station_config.json records no official station time zone." sx={{ mt: 1 }}>
+            <Box component="span" tabIndex={0} sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
+              Solar <Box component="span" sx={{ typography: 'mono', fontSize: 12, color: 'text.primary' }}>{solar}</Box>
+            </Box>
+          </Hint>
         </Box>
       </Stack>
 
-      <Stack direction="row" sx={{ mt: 3, gap: 3, fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
-        <Hint title="Local mean solar time, from the station's longitude. station_config.json records no official station time zone.">
-          <span tabIndex={0}>Solar <Box component="span" sx={{ typography: 'mono', fontSize: 12, color: 'text.primary' }}>{solar}</Box></span>
-        </Hint>
-        <span>IST <Box component="span" sx={{ typography: 'mono', fontSize: 12, color: 'text.primary' }}>{istHHMM(now).replace(' IST', '')}</Box></span>
-      </Stack>
+      <Hint title={onReplay
+        ? 'The ERA5 replay clock of the latest snapshot: the day and time the twin is showing, in IST.'
+        : 'No replay clock for this data source: the station today, on the wall clock.'} sx={{ display: 'block', mt: 3 }}>
+        <Box tabIndex={0} data-testid="mini-card-clock" sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
+          {onReplay ? 'Replay date ' : 'Today (wall clock) '}
+          <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{formatDayIST(now)}</Box>
+          {' · '}<Box component="span" sx={{ typography: 'mono', fontSize: 12, color: 'text.primary' }}>{istHHMM(now)}</Box>
+        </Box>
+      </Hint>
 
-      <Hint title="Computed from the sun's position for the station's coordinates, today (wall clock). Model-derived; geometric horizon, no refraction." sx={{ display: 'block', mt: 2 }}>
+      <Hint title={`Computed from the sun's position for the station's coordinates at the ${onReplay ? 'replay' : 'wall-clock'} time. Model-derived; geometric horizon, no refraction.`} sx={{ display: 'block', mt: 1 }}>
         <Box tabIndex={0} data-testid="polar-day-line" sx={{ fontSize: 12, lineHeight: '16px', color: 'text.secondary' }}>
           <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }}>{day.label}</Box>
           {day.detail && ` · ${day.detail}`}
         </Box>
       </Hint>
-      <Box sx={{ mt: 1.5 }}><SunPath sun={sun} now={minute * 60_000} /></Box>
+      <Box sx={{ mt: 1 }}><SunPath sun={sun} now={minute * 60_000} /></Box>
     </Box>
   );
 }

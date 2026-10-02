@@ -156,6 +156,7 @@ export default function App() {
           <EnergyModule
             sensorData={stationData.sensors}
             energy={stationData.energy}
+            replay={stationData.replay}
             provenance={stationData.provenance}
             activeAlerts={activeAlerts}
             activeStation={activeStation}
@@ -242,6 +243,7 @@ export default function App() {
           onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
           activeStation={activeStation}
           onStationChange={handleStationChange}
+          replayMs={stationData.replay?.timeMs ?? null}
         />
 
         <main className="main-stage" id="main">
@@ -272,6 +274,7 @@ export default function App() {
                     timestamp={stationData.timestamp}
                     telemetrySource={telemetryBadge}
                     provenance={stationData.provenance}
+                    replay={stationData.replay}
                     onOpenTwinInspector={() => setShowTwinInspector(true)}
                   />
                 </Suspense>

@@ -42,7 +42,7 @@ function NavItem({ id, label, Icon, selected, collapsed, onClick }) {
   );
 }
 
-export function NavContent({ activeModule, onSelect, onAction, collapsed, onToggleCollapse, showCollapse, activeStation, onStationChange }) {
+export function NavContent({ activeModule, onSelect, onAction, collapsed, onToggleCollapse, showCollapse, activeStation, onStationChange, replayMs }) {
   return (
     <Box component="nav" aria-label="Modules" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pb: 2 }}>
@@ -77,11 +77,11 @@ export function NavContent({ activeModule, onSelect, onAction, collapsed, onTogg
       </Box>
       {!collapsed && activeStation && (
         <Suspense fallback={null}>
-          <StationMiniCard activeStation={activeStation} onStationChange={onStationChange} />
+          <StationMiniCard activeStation={activeStation} onStationChange={onStationChange} replayMs={replayMs} />
         </Suspense>
       )}
       {showCollapse && (
-        <Box sx={{ px: 3, pb: 3, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-end' }}>
+        <Box sx={{ px: 3, pb: 2, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-end' }}>
           <Hint title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right">
             <IconButton size="small" onClick={onToggleCollapse} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
               {collapsed ? <KeyboardDoubleArrowRight fontSize="small" /> : <KeyboardDoubleArrowLeft fontSize="small" />}

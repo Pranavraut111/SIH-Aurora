@@ -20,6 +20,7 @@ import ViewInArOutlined from '@mui/icons-material/ViewInArOutlined';
 import { apiPost } from '../services/api';
 import { formatCoords, stationMeta } from '../data/stationConfig';
 import { useSeries, valueAgo } from '../hooks/useSeries';
+import { onModelClock } from '../lib/modelClock';
 import { formatNumber, formatValue, isNum } from '../lib/format';
 import { windChill } from '../lib/windChill';
 import FadeValue from '../ui/FadeValue';
@@ -30,7 +31,6 @@ import { STATUS_LABEL } from '../ui/statusLabels';
 import { PROVENANCE } from '../ui/Provenance';
 
 const SERIES_KEYS = ['lab.env_temp', 'lab.env_wind', 'generator.gen_power'];
-const MIN = 60_000;
 
 function levelOf(activeAlerts, sensor) {
   const levels = activeAlerts.filter((a) => a.sensor === sensor).map((a) => a.level);
@@ -38,7 +38,7 @@ function levelOf(activeAlerts, sensor) {
 }
 
 /** Compact HUD figure: label, value, mini sparkline (a row on phones). */
-function HudFigure({ label, value, unit, decimals = 0, points, footer, status, testId }) {
+function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer, status, testId }) {
   const text = formatNumber(value, decimals);
   return (
     <Card component="section" aria-label={label} data-testid={testId} sx={(theme) => ({
@@ -57,7 +57,7 @@ function HudFigure({ label, value, unit, decimals = 0, points, footer, status, t
           {unit && isNum(value) && <Typography component="span" sx={{ color: 'text.secondary', fontSize: 13, fontWeight: 500 }}>{unit}</Typography>}
         </Stack>
       </Box>
-      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={28} />}</Box>
+      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={28} bucketMs={bucketMs} />}</Box>
     </Card>
   );
 }
@@ -79,6 +79,7 @@ export default function OverviewHUD({
   isConnected = true,
   timestamp,
   telemetrySource,
+  replay,
   provenance,
   onOpenTwinInspector,
 }) {
@@ -91,9 +92,12 @@ export default function OverviewHUD({
   const temp = num(envData.env_temp);
   const wind = num(envData.env_wind);
   const power = num(genData.gen_power);
-  const { series } = useSeries({ station: activeStation, keys: SERIES_KEYS, minutes: 30, sensors: sensorData, timestamp, source: telemetrySource });
+  const replayMs = num(replay?.timeMs);
+  const raw = useSeries({ station: activeStation, keys: SERIES_KEYS, minutes: 30, sensors: sensorData, timestamp, source: telemetrySource, replayMs });
+  // Trends on the model's clock (ERA5 replay time when replaying, else wall clock).
+  const { clock, series } = onModelClock(raw.series, SERIES_KEYS, replayMs);
   const tempPts = series['lab.env_temp'];
-  const temp15 = valueAgo(tempPts, 15 * MIN);
+  const tempAgo = valueAgo(tempPts, clock.deltaMs);
   const chill = windChill(temp, wind);
   const envKind = provenance?.environment;
   const envLabel = envKind ? (PROVENANCE[envKind]?.label ?? envKind) : null;
@@ -313,14 +317,15 @@ export default function OverviewHUD({
         <KpiCard hero label="Outside temperature" value={temp} unit="°C" decimals={1} testId="hud-temp"
           status={levelOf(activeAlerts, 'env_temp')}
           series={tempPts}
-          delta={temp != null && temp15 != null ? temp - temp15 : null}
+          delta={temp != null && tempAgo != null ? temp - tempAgo : null}
+          deltaLabel={clock.deltaLabel} sparkBucketMs={clock.sparkBucketMs}
           context={[chill != null && `Wind chill ${formatValue(chill, '°C', 1)}`, envLabel].filter(Boolean).join(' · ') || null}
           sx={(theme) => ({ gridArea: 'hero', boxShadow: { lg: theme.vars.palette.aurora.shadowFloat } })} />
         <Box sx={{ gridArea: 'wind', minWidth: 0 }}>
-          <HudFigure label="Wind" value={wind} unit="km/h" points={series['lab.env_wind']} status={levelOf(activeAlerts, 'env_wind')} testId="hud-wind" />
+          <HudFigure label="Wind" value={wind} unit="km/h" points={series['lab.env_wind']} bucketMs={clock.sparkBucketMs} status={levelOf(activeAlerts, 'env_wind')} testId="hud-wind" />
         </Box>
         <Box sx={{ gridArea: 'power', minWidth: 0 }}>
-          <HudFigure label="Generation" value={power} unit="kW" points={series['generator.gen_power']} status={levelOf(activeAlerts, 'gen_power')} testId="hud-power" />
+          <HudFigure label="Generation" value={power} unit="kW" points={series['generator.gen_power']} bucketMs={clock.sparkBucketMs} status={levelOf(activeAlerts, 'gen_power')} testId="hud-power" />
         </Box>
         <Box sx={{ gridArea: 'subs', minWidth: 0 }}>
           <HudFigure label="Subsystems normal" value={levels.length ? normalCount : null}

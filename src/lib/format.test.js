@@ -49,3 +49,13 @@ describe('formatRelative', () => {
     expect(formatRelative(null, now)).toBe(DASH);
   });
 });
+
+describe('IST short dates', () => {
+  it('reads "3 Sep" and "3 Sep 06:12", never "Sept"', async () => {
+    const { formatDayIST, formatShortDateTimeIST } = await import('./format');
+    const ts = Date.UTC(2026, 8, 3, 0, 42);          // 06:12 IST
+    expect(formatDayIST(ts)).toBe('3 Sep');
+    expect(formatShortDateTimeIST(ts)).toBe('3 Sep 06:12');
+    expect(formatDateTimeIST(ts)).toBe('03 Sep 2026, 06:12 IST');
+  });
+});

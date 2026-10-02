@@ -45,8 +45,9 @@ export default function KpiCard({
   progress,            // 0–100, optional bar under the value
   series,              // [[ts, value], …] for the sparkline
   delta,               // number: change vs `deltaLabel`
-  deltaLabel = 'vs 15 min ago',
+  deltaLabel,
   hero = false,
+  sparkBucketMs,       // sparkline bucket (model clock)
   loading = false,
   testId,
   sx,
@@ -100,7 +101,7 @@ export default function KpiCard({
 
         {series !== undefined && (
           <Box sx={{ mt: hero ? 0 : 1, pt: hero ? 2 : 0, flex: hero ? '1 1 72px' : 'none', minHeight: hero ? 72 : 0, display: 'flex' }}>
-            <Sparkline points={series} height={hero ? 72 : 28} fill={hero} />
+            <Sparkline points={series} height={hero ? 72 : 28} fill={hero} bucketMs={sparkBucketMs} />
           </Box>
         )}
 

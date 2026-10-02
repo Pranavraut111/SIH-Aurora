@@ -128,6 +128,7 @@ export function useStationData(activeStation = 'maitri') {
             eventTimeline: state.eventTimeline || [],
             timestamp: state.timestamp || Date.now(),
             energy: state.energy ?? null,
+            replay: state.replay ?? null,      // ERA5 replay clock of this tick (null: wall clock)
             connected: true,
             bandwidth: state.bandwidth ?? null,
             signalQuality: state.signalQuality ?? null,
@@ -235,6 +236,7 @@ export function useStationData(activeStation = 'maitri') {
           isCached: false,
           telemetrySource: 'browser-demo',
           energy: null,
+          replay: null,
           provenance: { equipment: 'SIMULATED', environment: 'SIMULATED', storage: 'SIMULATED' },
         });
       });

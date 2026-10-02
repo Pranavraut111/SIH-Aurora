@@ -191,6 +191,9 @@ def test_simulator_batch_energy_is_published_with_its_readings(client):
     assert snap["timestamp"] == batch["timestamp"]
     assert snap["energy"] == energy
 
+    assert snap["replay"] is None                     # this batch sent no replay clock
+    assert _ok(client, "/api/station/maitri/state")["replay"] is None   # fallback: wall clock
+
     batch["energy"] = {"totalDemand_kW": 1.0, "surprise": 2}
     assert client.post("/api/sensors/batch", json=batch).status_code == 422
 
@@ -210,6 +213,30 @@ def test_history_returns_published_points_oldest_first(client):
     assert times == sorted(times) and len(set(times)) == len(times)
     assert power[-1][1] == _ok(client, "/api/station/maitri/state")["sensors"]["generator"]["gen_power"]
     assert len(body["series"]["lab.env_temp"]) >= 3
+
+
+def test_replay_clock_is_published_and_kept_as_history(client):
+    import unified_backend as ub
+
+    current = _ok(client, "/api/station/bharati/state")
+    readings = {b: {k: {"value": v, "unit": ""} for k, v in sensors.items()}
+                for b, sensors in current["sensors"].items()}
+    now = int(time.time() * 1000)
+    for i, replay_ms in enumerate((1_756_684_800_000, 1_756_685_040_000)):     # 4 replay-min apart
+        batch = {"stationId": "bharati", "timestamp": now + i * 2000, "readings": readings,
+                 "replay": {"timeMs": replay_ms, "local": "2025-09-01T05:00:00", "speedFactor": 120,
+                            "loop": 0, "utcOffsetSource": "open-meteo"}}
+        assert client.post("/api/sensors/batch", json=batch).status_code == 200
+        ub.tick_station("bharati")
+    snap = _ok(client, "/api/station/bharati/state")
+    assert snap["replay"]["timeMs"] == 1_756_685_040_000
+    body = _ok(client, "/api/history?stationId=bharati&keys=replay.timeMs,generator.gen_power")
+    assert [v for _, v in body["series"]["replay.timeMs"]][-2:] == [1_756_684_800_000, 1_756_685_040_000]
+    # every replay point shares its wall-clock timestamp with a reading
+    power_ts = {t for t, _ in body["series"]["generator.gen_power"]}
+    assert all(t in power_ts for t, _ in body["series"]["replay.timeMs"])
+    bad = {"stationId": "bharati", "timestamp": now, "readings": readings, "replay": {"timeMs": 1, "x": 2}}
+    assert client.post("/api/sensors/batch", json=bad).status_code == 422
 
 
 def test_history_unknown_key_is_empty_and_bad_keys_are_422(client):

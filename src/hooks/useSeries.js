@@ -9,6 +9,8 @@
    (browser demo mode) it starts empty and fills from live snapshots only.
 
    keys: ['generator.gen_power', …]  →  series: {key: [[timestampMs, value], …]}
+   The replay clock ('replay.timeMs') is always loaded alongside, so callers can
+   put the series on the model's clock (lib/modelClock).
    ═══════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from 'react';
 import { apiGet } from '../services/api';
@@ -62,8 +64,9 @@ export function rollingMean(points, windowMs) {
   return { mean, spanMs: end - inWin[0][0], n: inWin.length };
 }
 
-export function useSeries({ station, keys, minutes = 30, sensors, timestamp, source }) {
-  const keyStr = keys.join(',');
+export function useSeries({ station, keys, minutes = 30, sensors: rawSensors, timestamp, source, replayMs }) {
+  const keyStr = [...keys, 'replay.timeMs'].join(',');
+  const sensors = rawSensors && isNum(replayMs) ? { ...rawSensors, replay: { timeMs: replayMs } } : rawSensors;
   const windowMs = minutes * 60_000;
   const id = `${station}|${keyStr}|${minutes}|${source}`;
   const fresh = { id, series: {}, loaded: source === 'browser-demo', error: null, lastTs: null };

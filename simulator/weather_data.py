@@ -32,6 +32,26 @@ def sim_hours_per_real_minute(speed_factor: float) -> float:
     i.e. speed_factor / 60 simulated hours per real minute (120x -> 2.0 h)."""
     return speed_factor / 60.0
 
+
+def infer_utc_offset_hours(hourly: dict, lon: float):
+    """UTC offset of a cache whose times are local (Open-Meteo timezone=auto) but which
+    predates storing `utc_offset_seconds`. Shortwave radiation peaks at local solar noon:
+    the radiation-weighted mean hour of each day, minus 0.5 h (Open-Meteo radiation is the
+    mean of the PRECEDING hour), minus solar noon in UTC (12 h - lon/15), rounded to the
+    hour. None when there is no daylight in the window (polar night)."""
+    times, rad = hourly.get("time") or [], hourly.get("shortwave_radiation") or []
+    days: dict = {}
+    for t, r in zip(times, rad, strict=False):   # a cache may lack the radiation column
+        if r and r > 0:
+            d = days.setdefault(t[:10], [0.0, 0.0])
+            d[0] += r
+            d[1] += r * (int(t[11:13]) + int(t[14:16]) / 60)
+    centroids = [w / s for s, w in days.values() if s > 0]
+    if not centroids:
+        return None
+    local_noon = sum(centroids) / len(centroids) - 0.5
+    return round(local_noon - (12 - lon / 15))
+
 # ── Station coordinates — from station_config.json (single source of truth) ──
 STATION_COORDS = {sid: station_config.coords(sid) for sid in station_config.station_ids()}
 
@@ -65,7 +85,9 @@ class WeatherDataLayer:
         self.units = {}        # Open-Meteo hourly_units of the cached data
         self._wind_to_kmh = 1.0  # set from hourly_units when data loads
         self.start_time = None # Real wall-clock time when replay started
-        self.data_start = None # The datetime of the first data point
+        self.data_start = None # The datetime of the first data point (cache-local time)
+        self.utc_offset_s = None       # cache-local time = UTC + utc_offset_s
+        self.utc_offset_source = "unknown"   # "open-meteo" | "inferred-from-solar-radiation" | "unknown"
         self._last_loop = 0    # How many times the replay window has wrapped
 
         if date:
@@ -87,13 +109,7 @@ class WeatherDataLayer:
             log.info(f"[{self.station_id}] Weather cache hit: {cache_file.name}")
             with open(cache_file) as f:
                 cached = json.load(f)
-            self.data = cached["hourly"]
-            self.units = cached.get("hourly_units") or {}
-            self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
-            self.data_start = datetime.strptime(
-                self.data["time"][0], "%Y-%m-%dT%H:%M"
-            )
-            self.start_time = time.time()
+            self._load(cached)
             return True
 
         params = {
@@ -134,18 +150,16 @@ class WeatherDataLayer:
                 },
                 "hourly": raw.get("hourly", {}),
                 "hourly_units": raw.get("hourly_units", {}),
+                # timezone=auto returns station-local times; keep the offset so the replay
+                # clock can be turned into an absolute instant (sun position, IST display).
+                "utc_offset_seconds": raw.get("utc_offset_seconds"),
+                "timezone": raw.get("timezone"),
             }
 
             with open(cache_file, "w") as f:
                 json.dump(cached, f, indent=2)
 
-            self.data = cached["hourly"]
-            self.units = cached.get("hourly_units") or {}
-            self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
-            self.data_start = datetime.strptime(
-                self.data["time"][0], "%Y-%m-%dT%H:%M"
-            )
-            self.start_time = time.time()
+            self._load(cached)
 
             n_points = len(self.data["time"])
             log.info(f"[{self.station_id}] Cached {n_points} hourly data points")
@@ -154,6 +168,26 @@ class WeatherDataLayer:
         except Exception as e:
             log.warning(f"[{self.station_id}] Weather fetch failed: {e}")
             return False
+
+    def _load(self, cached: dict):
+        self.data = cached["hourly"]
+        self.units = cached.get("hourly_units") or {}
+        self._wind_to_kmh = wind_factor_to_kmh(cache_wind_unit(cached))
+        self.data_start = datetime.strptime(self.data["time"][0], "%Y-%m-%dT%H:%M")
+        offset = cached.get("utc_offset_seconds")
+        if isinstance(offset, (int, float)):
+            self.utc_offset_s, self.utc_offset_source = int(offset), "open-meteo"
+        else:
+            hours = infer_utc_offset_hours(self.data, self.coords["lon"])
+            if hours is None:
+                self.utc_offset_s, self.utc_offset_source = None, "unknown"
+                log.warning("[%s] Weather cache has no UTC offset and no daylight to infer it; "
+                            "replay times cannot be placed on an absolute clock", self.station_id)
+            else:
+                self.utc_offset_s, self.utc_offset_source = hours * 3600, "inferred-from-solar-radiation"
+                log.info("[%s] Weather cache has no UTC offset; inferred UTC%+d from the solar "
+                         "radiation peak", self.station_id, hours)
+        self.start_time = time.time()
 
     @property
     def wind_to_kmh(self) -> float:
@@ -228,7 +262,12 @@ class WeatherDataLayer:
             "env_humidity": round(humidity, 1) if humidity is not None else None,
             "wind_direction": round(wind_dir, 0) if wind_dir is not None else None,
             "solar_radiation": round(solar, 1) if solar is not None else None,
-            "simulated_time": sim_time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "simulated_time": sim_time.strftime("%Y-%m-%dT%H:%M:%S"),   # cache-local time
+            # The same instant as epoch ms (UTC), or None when the cache's offset is unknown.
+            "simulated_time_ms": (
+                int((sim_time.replace(tzinfo=timezone.utc).timestamp() - self.utc_offset_s) * 1000)
+                if self.data_start and self.utc_offset_s is not None else None),
+            "utc_offset_source": self.utc_offset_source,
             "data_index": idx_lo,
             "data_total": len(self.data["time"]),
             "replay_loop": loop,

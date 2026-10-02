@@ -456,3 +456,26 @@ neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
 - **Bundle:** startup JS 465 kB raw / 148 kB gzip (was 512 / 163). The shell uses a small `Hint`
   instead of MUI Tooltip (no Popper at startup), `StatusDot` no longer pulls in Chip, and the
   browser-demo generator loads only when the backend is unreachable.
+
+### 11.1 Replay-clock honesty (review fixes, 2026-10-02)
+
+- **Model clock, not wall clock.** The twin replays ERA5 at `AURORA_SPEED` (120×: one 2 s tick =
+  4 min of model time), and heating demand and fuel burn evolve on that clock. So every delta,
+  rolling average and chart axis is on the **replay clock** and labelled "(replay time)": delta
+  vs 1 h earlier, fuel autonomy at the 24 h average burn (a full diurnal heating cycle), 1 h
+  moving average on the charts, 1 h sparkline buckets. With no replay clock (physics fallback,
+  browser demo) the model runs on the wall clock, and the windows switch to 15 min / 1 min,
+  labelled "(wall clock)" (`src/lib/modelClock.js`).
+- **The replay clock is in the telemetry.** Each simulator batch, and so each snapshot/WS
+  message, carries `replay` `{timeMs, local, speedFactor, loop, utcOffsetSource}`; the history
+  keeps `replay.timeMs` as a series, so past points are re-timed onto it (a replay loop restarts
+  the axis rather than mixing loops).
+- **Time zone of the replay.** The Open-Meteo request uses `timezone=auto`, so cached times are
+  station-local, and older caches never stored the offset. New caches store
+  `utc_offset_seconds`; for old ones the offset is inferred from the shortwave-radiation peak
+  (local solar noon) and flagged `utcOffsetSource: "inferred-from-solar-radiation"`: Maitri UTC+2,
+  Bharati UTC+5. Without that, Bharati's sun would have been 5 h out.
+- **Mini-card** day/night line, sun times and solar time use the replay instant ("Replay date
+  3 Sep"), or "Today (wall clock)" without one.
+- **Main chart:** raw samples as a thin faint line, the moving average as the primary line, a
+  legend, and a tooltip with both values and the (replay) time.

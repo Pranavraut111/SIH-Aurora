@@ -5,8 +5,9 @@
 
    points: [[timestampMs, value], …] oldest first. Time maps to x, so gaps in
    the data show as gaps in time rather than being squeezed out. Plotted as
-   1-min means once the window spans 3 min: a trend, without the model's
-   per-tick noise (the full-size charts keep every sample).
+   bucket means (1 h of replay time, or 1 min of wall clock: see
+   lib/modelClock) once the window spans 3 buckets: a trend without the
+   model's per-tick noise (the full-size charts keep every sample).
    ═══════════════════════════════════════════════════════════════ */
 import { Box } from '@mui/material';
 
@@ -14,8 +15,8 @@ import { sparkPath, SPARK_W as W } from './sparkPath';
 
 const VB_H = 40;   // viewBox height; CSS sets the drawn height
 
-export default function Sparkline({ points, height = 32, fill = false, sx }) {
-  const d = sparkPath(points, VB_H);
+export default function Sparkline({ points, height = 32, fill = false, bucketMs = 60_000, sx }) {
+  const d = sparkPath(points, VB_H, 2, bucketMs);
   return (
     <Box
       component="svg"

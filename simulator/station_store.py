@@ -96,7 +96,12 @@ class StationStore:
             if ts is None:
                 return
             series = st["series"]
-            for bld, sensors in (snapshot.get("sensors") or {}).items():
+            readings = dict(snapshot.get("sensors") or {})
+            # The replay clock is kept as a series too, so history can be re-timed to it.
+            replay_ms = (snapshot.get("replay") or {}).get("timeMs")
+            if replay_ms is not None:
+                readings["replay"] = {"timeMs": replay_ms}
+            for bld, sensors in readings.items():
                 for sensor, value in sensors.items():
                     if not isinstance(value, (int, float)) or isinstance(value, bool):
                         continue
