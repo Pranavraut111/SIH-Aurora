@@ -20,7 +20,7 @@ import MicNoneOutlined from '@mui/icons-material/MicNoneOutlined';
 import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
 import ViewInArOutlined from '@mui/icons-material/ViewInArOutlined';
 import { apiPost } from '../services/api';
-import { formatCoords, stationMeta } from '../data/stationConfig';
+import { crewLabel, formatCoords, stationMeta } from '../data/stationConfig';
 import { useSeries, valueAgo } from '../hooks/useSeries';
 import { onModelClock } from '../lib/modelClock';
 import { formatNumber, formatValue, isNum } from '../lib/format';
@@ -246,7 +246,7 @@ export default function OverviewHUD({
   const subsystemStatus = criticalCount ? 'critical' : warningCount ? 'warning' : undefined;
   const facts = [
     station.commissionedYear && `Est. ${station.commissionedYear}`,
-    isNum(station.personnelWinter) && `${station.personnelWinter} winter crew`,
+    crewLabel(activeStation),
     isNum(station.elevation_m) && `${station.elevation_m} m elevation`,
   ].filter(Boolean);
 

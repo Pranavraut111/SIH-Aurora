@@ -13,7 +13,8 @@ export function fitDomain(values, { include = [] } = {}) {
   const raw = (hi - lo) / 4;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
-  const a = Math.max(0, Math.floor(lo / step) * step);
+  // Never dip below zero for non-negative data (kW, %, L/h); negative data (°C) keeps its range.
+  const a = Math.min(...v) >= 0 ? Math.max(0, Math.floor(lo / step) * step) : Math.floor(lo / step) * step;
   const b = Math.ceil(hi / step) * step;
   const domain = [a, b];
   // Evenly spaced ticks on the same step, so the axis reads 70 / 75 / 80, not 69 / 73 / 77.

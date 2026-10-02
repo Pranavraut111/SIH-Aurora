@@ -15,7 +15,7 @@ import { Box, Stack, Typography } from '@mui/material';
 import { useNow } from '../hooks/useNow';
 import { formatDayIST, formatTimeIST, isNum } from '../lib/format';
 import { dayState, solarTimeOffsetMs } from '../lib/solar';
-import { STATION_IDS, stationMeta } from '../data/stationConfig';
+import { crewLabel, STATION_IDS, stationMeta } from '../data/stationConfig';
 import Hint from '../ui/Hint';
 import { ANTARCTICA_PATH, parallelRadius, project } from './antarctica';
 
@@ -134,7 +134,7 @@ export default function StationMiniCard({ activeStation, onStationChange, replay
       {/* Coordinates on one line; elevation and crew on the next (station_config.json). */}
       <Box data-testid="mini-card-coords" sx={{ ...line, ...fig, color: 'text.secondary', mt: 2.5 }}>{lat}, {lon}</Box>
       <Hint title="Winter crew size has medium confidence in station_config.json (needs NCPOR confirmation)." sx={{ display: 'block', mt: 0.5 }}>
-        <Box tabIndex={0} sx={line}>{meta.elevation_m} m · ≈ {meta.personnelWinter} winter crew</Box>
+        <Box tabIndex={0} sx={line}>{meta.elevation_m} m · {crewLabel(activeStation)}</Box>
       </Hint>
 
       <Hint title={onReplay

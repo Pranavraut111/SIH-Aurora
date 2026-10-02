@@ -27,8 +27,8 @@ const WRITE_HEADERS = ADMIN_TOKEN ? { 'X-Admin-Token': ADMIN_TOKEN } : {};
 // every visited module stayed stacked on screen. Both bugs hid behind a weaker check.
 const MODULES = [
   ['overview', null],
-  ['environmental', /Meteorological & AWS Observations/i],
-  ['infrastructure', /Station Infrastructure & Subsystems/i],
+  ['environmental', /Stored observations and analysis/i],
+  ['infrastructure', /Dependency map/i],
   ['energy', /Energy grid/i],
   ['logistics', /Logistics & Critical Supplies/i],
   ['remote', /Remote Commands/i],
@@ -275,3 +275,32 @@ test('on a phone the top bar fits, Sign in stays reachable and demo control cove
   expect(consoleErrors, 'console errors on a phone').toEqual([]);
   expect(failedRequests, 'failed requests on a phone').toEqual([]);
 });
+
+test('the building panel shows live readings from telemetry (audit F2)', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/');
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+  await openModule(page, 'infrastructure');
+  await page.getByTestId('building-tile-generator').click();
+
+  const drawer = page.getByTestId('building-drawer');
+  await expect(drawer).toBeVisible();
+  const rows = drawer.locator('[data-testid^="reading-"]');
+  await expect(rows).toHaveCount(4);                                // gen_power, fuel rate, rpm, coolant
+  // Live values, not "—" and not a built-in nominal: the drawer's generator power equals the tile's.
+  await expect(drawer.getByTestId('reading-gen_power')).not.toContainText('—');
+  // Dependency chips open the upstream building.
+  await drawer.getByRole('button', { name: /Logistics Store/ }).click();
+  await expect(drawer.getByRole('heading', { name: 'Logistics Store' })).toBeVisible();
+  await page.getByTestId('building-drawer-close').click();
+  await expect(drawer).toHaveCount(0);
+
+  // The dependency map opens the same panel from the keyboard.
+  await page.getByTestId('dep-node-generator').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('building-drawer')).toBeVisible();
+
+  expect(consoleErrors, 'console errors in the building panel').toEqual([]);
+  expect(failedRequests, 'failed requests in the building panel').toEqual([]);
+});
+

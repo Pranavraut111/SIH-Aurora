@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLOCKS, formatSpan, movingAverage, onModelClock, retime } from './modelClock';
+import { centredAverage, CLOCKS, formatSpan, movingAverage, onModelClock, retime } from './modelClock';
 
 const H = 3_600_000;
 
@@ -26,6 +26,11 @@ describe('model clock', () => {
   it('computes a trailing moving average over the window', () => {
     const pts = [[0, 0], [1, 10], [2, 20], [3, 30]];
     expect(movingAverage(pts, 1).map(([, v]) => v)).toEqual([0, 5, 15, 25]);
+  });
+
+  it('computes a centred average without lag', () => {
+    const pts = [[0, 0], [1, 10], [2, 20], [3, 30], [4, 40]];
+    expect(centredAverage(pts, 2).map(([, v]) => v)).toEqual([5, 10, 20, 30, 35]);
   });
 
   it('formats spans for labels', () => {

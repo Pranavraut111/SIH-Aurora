@@ -27,18 +27,17 @@ const AlertFeed = lazy(() => import('./components/AlertFeed'));
 const ConnectionPanel = lazy(() => import('./components/ConnectionPanel'));
 const DemoControl = lazy(() => import('./components/DemoControl'));
 const StationScene = lazy(() => import('./components/StationScene'));
-const BuildingPanel = lazy(() => import('./components/BuildingPanel'));
+const BuildingDrawer = lazy(() => import('./modules/infrastructure/BuildingDrawer'));
 const EventTimeline = lazy(() => import('./components/EventTimeline'));
 const TwinInspector = lazy(() => import('./components/TwinInspector'));
 const AiPanel = lazy(() => import('./components/AiPanel'));
-const EnvironmentalPanel = lazy(() => import('./components/EnvironmentalPanel'));
+const WeatherModule = lazy(() => import('./modules/weather/WeatherModule'));
 const WhatIfSimulationPanel = lazy(() => import('./components/WhatIfSimulationPanel'));
 const LogisticsPanel = lazy(() => import('./components/LogisticsPanel'));
 const RemoteControlPanel = lazy(() => import('./components/RemoteControlPanel'));
 const AdminPanel = lazy(() => import('./components/AdminPanel'));
 const ReportPanel = lazy(() => import('./components/ReportPanel'));
-const InfrastructurePanel = lazy(() =>
-  import('./components/ModulePanels').then((m) => ({ default: m.InfrastructurePanel })));
+const InfrastructureModule = lazy(() => import('./modules/infrastructure/InfrastructureModule'));
 const EnergyModule = lazy(() => import('./modules/energy/EnergyModule'));
 
 export default function App() {
@@ -103,6 +102,12 @@ export default function App() {
     });
   }, [activeStation]);
 
+  // Open (not toggle) a building's panel: Infrastructure tiles, dependency map, panel chips.
+  const openBuilding = useCallback((buildingId) => {
+    setSelectedBuilding(buildingId);
+    if (buildingId) trackBuildingView(buildingId, activeStation);
+  }, [activeStation]);
+
   const handleBuildingHover = useCallback((buildingId) => {
     setHoveredBuilding(buildingId);
   }, []);
@@ -138,21 +143,30 @@ export default function App() {
     switch (activeModule) {
       case 'environmental':
         return (
-          <EnvironmentalPanel
+          <WeatherModule
             sensorData={stationData.sensors}
             activeStation={activeStation}
             provenance={stationData.provenance}
+            telemetrySource={telemetryBadge}
+            timestamp={stationData.timestamp}
+            replay={stationData.replay}
+            updatedAt={updatedAt}
+            activeAlerts={activeAlerts}
           />
         );
       case 'infrastructure':
         return (
-          <InfrastructurePanel
+          <InfrastructureModule
             sensorData={stationData.sensors}
             alerts={stationData.alerts}
-            onBuildingClick={handleBuildingClick}
+            activeAlerts={activeAlerts}
+            onOpenBuilding={openBuilding}
             dependencyAlerts={dependencyAlerts}
             aiHealth={aiHealth}
+            provenance={stationData.provenance}
+            telemetrySource={telemetryBadge}
             activeStation={activeStation}
+            updatedAt={updatedAt}
           />
         );
       case 'energy':
@@ -290,6 +304,27 @@ export default function App() {
         </main>
       </div>
 
+      {/* Building panel (design system; follows the active colour scheme). */}
+      {selectedBuilding && (
+        <ErrorBoundary name="Building panel" resetKey={selectedBuilding}>
+          <Suspense fallback={null}>
+            <BuildingDrawer
+              buildingId={selectedBuilding}
+              activeStation={activeStation}
+              sensors={stationData.sensors}
+              alerts={stationData.alerts}
+              activeAlerts={activeAlerts}
+              provenance={stationData.provenance}
+              timestamp={stationData.timestamp}
+              replay={stationData.replay}
+              telemetrySource={telemetryBadge}
+              onClose={() => setSelectedBuilding(null)}
+              onOpenBuilding={openBuilding}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
       {/* ── Overlays (legacy styling until rollout 1B) ── */}
       <LegacySurface sx={{ display: 'contents' }}>
         <Suspense fallback={null}>
@@ -317,15 +352,6 @@ export default function App() {
             />
           )}
 
-          {selectedBuilding && (
-            <BuildingPanel
-              buildingId={selectedBuilding}
-              sensorData={stationData.sensors[selectedBuilding]}
-              historyData={stationData.history?.[selectedBuilding]}
-              alertLevel={stationData.alerts?.[selectedBuilding]}
-              onClose={() => setSelectedBuilding(null)}
-            />
-          )}
 
           {showTimeline && (
             <EventTimeline events={eventTimeline} onClose={() => setShowTimeline(false)} />

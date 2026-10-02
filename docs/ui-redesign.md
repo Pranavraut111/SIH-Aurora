@@ -502,3 +502,32 @@ neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
   capacity not configured" (the ledger's `max` is an operator-entered seed, not a tank spec).
 - **Phone status dot:** a button named "Data source: …"; a tap pins a tooltip with the label and
   its explanation (touch has no hover).
+
+## 12. Rollout 1B — checkpoint 1 (Monitor) — screenshots in `docs/ui-redesign/1b-1/`
+
+- **Weather** (`src/modules/weather/`): hero air temperature + wind, pressure, humidity on the
+  replay clock; one "Stored observations and analysis" card with tabs (observations as raw +
+  6 h *centred* average — stored history, so no trailing lag; anomalies with flagged points;
+  forecast with its band; correlation; rule-based risk). Each tab shows the backend's window /
+  provenance string; loading, empty and error states with retry. Ingest stays write-protected.
+- **Infrastructure** (`src/modules/infrastructure/`): hero "subsystems normal" with every
+  building's status; active alerts, cascade risks and station health; building tiles (open the
+  building panel); the dependency map — layout computed from the DAG depth (left→right, top→
+  bottom on phones), relations by line style, cascade edges in status colour, keyboard-operable
+  nodes, and a "dependencies as a list" table.
+- **Building panel** (`BuildingDrawer`): fixes **F2** — sensors from station_config, values from
+  live telemetry ("—" when missing; the legacy panel fell back to a built-in nominal), status from
+  the alert engine, trends from the backend history on the model clock, dependency chips.
+- **Honesty fixes found on the way:** "Prophet / Trend" was a degree ≤ 2 polynomial trend;
+  its band is ±1.96σ of the fit residuals (only ARIMA's is a 95 % prediction interval); the
+  anomaly features are value, rate of change and residual from a 5-point rolling mean (not "physics
+  expectation"); the frostbite text said "< 30 mins" for any wind chill above −40 °C (now the
+  Environment Canada bands); the risk engine claimed "+42 % heat loss" and "+28 kW" that nothing
+  computes (removed); "AI Health" was the rule-based alert roll-up (now "Station health"), and the
+  old graph showed the backend's "warning" health as "Critical".
+- **Bug:** `fitDomain` clamped every axis at 0, inverting the axis for negative series (°C).
+- **Overview framing:** the scene now keeps the horizon at least 10 % below the top edge and
+  fits the station above the cards with the largest zoom (≤ 1) that allows both, then the
+  smallest lens shift. Camera position and rendering unchanged.
+- Removed the dead legacy panels: EnvironmentalPanel, ModulePanels, BuildingPanel,
+  DependencyGraph, IconMap and the old Sparkline (+ their CSS).

@@ -26,6 +26,8 @@ import { formatDateTimeIST, formatNumber, formatShortDateTimeIST, formatTimeIST,
 import { formatSpan, movingAverage, onModelClock } from '../../lib/modelClock';
 import { useChartTheme } from '../../theme/chartTheme';
 import { fitDomain, sharesTo100 } from '../../lib/chartScale';
+import { sensorStatus, thresholdText } from '../../lib/thresholds';
+import { ChartLegend } from '../../ui/ChartParts';
 import KpiCard from '../../ui/KpiCard';
 import PageHeader from '../../ui/PageHeader';
 import ProvenanceChip from '../../ui/Provenance';
@@ -38,36 +40,6 @@ const SERIES_KEYS = ['generator.gen_power', 'generator.gen_fuel_rate', 'generato
 // Present for screen readers (keeps the heading outline intact), invisible on screen.
 const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0, p: 0, m: -1 / 4 };
 const hhmm = (t) => formatTimeIST(t).slice(0, 5);
-
-/** Highest active alert level for one sensor, from the backend alert engine. */
-function sensorStatus(activeAlerts, sensor) {
-  const levels = activeAlerts.filter((a) => a.sensor === sensor).map((a) => a.level);
-  return levels.includes('critical') ? 'critical' : levels.includes('warning') ? 'warning' : undefined;
-}
-
-function thresholdText(catalog, sensor) {
-  const c = catalog[sensor];
-  if (!c) return null;
-  const lo = c.low?.warning;
-  const hi = c.high?.warning;
-  if (lo != null && hi != null) return `Normal band ${formatNumber(lo)}–${formatValue(hi, c.unit)}`;
-  if (hi != null) return `Warning above ${formatValue(hi, c.unit)}`;
-  if (lo != null) return `Warning below ${formatValue(lo, c.unit)}`;
-  return null;
-}
-
-function ChartLegend({ items }) {
-  return (
-    <Stack direction="row" component="ul" aria-label="Legend" sx={{ gap: 4, m: 0, p: 0, mb: 2, listStyle: 'none', flexWrap: 'wrap' }}>
-      {items.map((it) => (
-        <Stack key={it.label} direction="row" component="li" sx={{ alignItems: 'center', gap: 1.5, fontSize: 12, color: 'text.secondary' }}>
-          <Box aria-hidden="true" sx={{ width: 16, height: 0, borderTop: `${it.width}px solid ${it.color}`, opacity: it.opacity }} />
-          {it.label}
-        </Stack>
-      ))}
-    </Stack>
-  );
-}
 
 function ChartTip({ active, payload, clock, maLabel, chart }) {
   if (!active || !payload?.length) return null;
@@ -138,13 +110,13 @@ function OutputChart({ powerPoints, fuelPoints, loaded, ratedKW, lowWarnKW, cloc
   const [cGen, cFuel] = chart.series;
 
   return (
-    <>
+    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChartLegend items={[
         { label: `Generation, ${maLabel} (kW, left)`, color: cGen, width: 2, opacity: 1 },
         { label: `Fuel burn, ${maLabel} (L/h, right)`, color: cFuel, width: 2, opacity: 1 },
         { label: 'Raw samples, one per tick', color: chart.labelFill, width: 1, opacity: 0.5 },
       ]} />
-      <Box sx={{ height: 300 }} role="img"
+      <Box sx={{ flex: 1, minHeight: 300 }} role="img"
         aria-label={`Generation and fuel burn over the last ${formatSpan(span)} of ${clock.suffix}. Generation ${maLabel.toLowerCase()} latest ${formatValue(genAvg.at(-1)[1], 'kW', 1)}; fuel burn ${maLabel.toLowerCase()} latest ${formatValue(fuelAvg.at(-1)[1], 'L/h', 1)}.`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 12, right: 0, bottom: 0, left: 0 }}>
@@ -179,7 +151,7 @@ function OutputChart({ powerPoints, fuelPoints, loaded, ratedKW, lowWarnKW, cloc
           Left axis fitted to the data; {offScale.join(' and ')} {offScale.length > 1 ? 'are' : 'is'} outside the visible range.
         </Typography>
       )}
-    </>
+    </Box>
   );
 }
 
@@ -445,6 +417,7 @@ export default function EnergyModule({
               : `Last ${formatSpan(spanMs)} of telemetry, wall clock, one sample per 2 s tick · times in IST`}
             provenance={<ProvenanceChip kind={telemetryKind} />}
             testId="energy-output-chart"
+            contentSx={{ display: 'flex', flexDirection: 'column' }}
           >
             <OutputChart powerPoints={powerPts} fuelPoints={fuelPts} loaded={loaded} clock={clock} ratedKW={ratedKW} lowWarnKW={catalog.gen_power?.low?.warning} />
           </SectionCard>

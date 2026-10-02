@@ -49,6 +49,12 @@ export default function StationScene(props) {
   return <StationScene3D {...props} onFatal={handleFatal} />;
 }
 
+// Framing constants, measured at zoom 1 from the default camera, in units of the canvas
+// height relative to its centre: the station's lowest point and the horizon (snow line).
+const MODEL_BOTTOM = 0.2;
+const HORIZON = -0.29;
+const HORIZON_MIN = 0.1;   // keep the horizon at least 10 % below the top edge
+
 function StationScene3D({
   alertStates = {},
   selectedBuilding,
@@ -677,12 +683,15 @@ function StationScene3D({
     camera.aspect = width / height;
     const band = avoidRef.current || 0;
     if (band > 0) {
-      // Measured at zoom 1: the station is ~0.37 × the canvas height tall, centred ~0.03 × h
-      // below the middle. Fit it into the free area above the band, with a 24 px margin.
-      const free = Math.max(height - band - 24, height * 0.3);
-      camera.zoom = Math.min(1, free / (0.37 * height * 1.12));
-      const centre = height / 2 + camera.zoom * 0.03 * height;
-      camera.setViewOffset(width, height, 0, centre - free / 2, width, height);
+      // Two constraints, linear in zoom z and lens shift s (px):
+      //   station bottom  h/2 + z·MODEL_BOTTOM·h − s ≤ free   (clear of the card band)
+      //   horizon         h/2 + z·HORIZON·h − s      ≥ HORIZON_MIN·h (some mountains stay visible)
+      // Take the largest zoom (≤ 1) that satisfies both, then the smallest shift.
+      const free = height - band - 24;
+      const z = Math.max(0.55, Math.min(1, (free - HORIZON_MIN * height) / ((MODEL_BOTTOM - HORIZON) * height)));
+      camera.zoom = z;
+      const shift = Math.max(0, height / 2 + z * MODEL_BOTTOM * height - free);
+      camera.setViewOffset(width, height, 0, shift, width, height);
     } else {
       camera.zoom = 1;
       camera.clearViewOffset();

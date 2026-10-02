@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fitDomain, sharesTo100 } from './chartScale';
-import { windChill } from './windChill';
+import { frostbiteRisk, windChill } from './windChill';
 
 describe('fitDomain', () => {
   it('fits the data instead of starting at zero', () => {
@@ -9,6 +9,13 @@ describe('fitDomain', () => {
     expect(lo).toBeLessThanOrEqual(72);
     expect(hi).toBeGreaterThanOrEqual(81);
     expect(hi).toBeLessThan(100);
+  });
+
+  it('keeps negative data on its own range (°C)', () => {
+    const [lo, hi] = fitDomain([-12.9, -9.8]);
+    expect(lo).toBeLessThanOrEqual(-12.9);
+    expect(hi).toBeGreaterThanOrEqual(-9.8);
+    expect(lo).toBeLessThan(hi);
   });
 
   it('extends to include a reference value when asked, and never goes below zero', () => {
@@ -35,5 +42,16 @@ describe('sharesTo100', () => {
   });
   it('is all zeros when there is nothing to share', () => {
     expect(sharesTo100([0, 0])).toEqual([0, 0]);
+  });
+});
+
+describe('frostbiteRisk', () => {
+  it('follows the Environment Canada bands', () => {
+    expect(frostbiteRisk(-5).level).toBe('Low');
+    expect(frostbiteRisk(-20).level).toBe('Moderate');
+    expect(frostbiteRisk(-30).text).toMatch(/10–30 minutes/);
+    expect(frostbiteRisk(-45).text).toMatch(/5–10 minutes/);
+    expect(frostbiteRisk(-60).level).toBe('Extreme');
+    expect(frostbiteRisk(null)).toBeNull();
   });
 });

@@ -24,11 +24,11 @@ export const MODULES = {
     title: 'Station overview', description: '3D digital twin of the station with live subsystem status.',
   },
   environmental: {
-    label: 'Weather', section: 'monitor', Icon: ThermostatOutlined,
-    title: 'Weather observations', description: 'Surface weather from the AWS feed and ERA5 reanalysis, with anomaly and forecast tools.',
+    label: 'Weather', section: 'monitor', Icon: ThermostatOutlined, migrated: true,
+    title: 'Weather', description: 'Live surface weather, stored AWS and ERA5 observations, and anomaly, forecast and risk tools.',
   },
   infrastructure: {
-    label: 'Infrastructure', section: 'monitor', Icon: ApartmentOutlined,
+    label: 'Infrastructure', section: 'monitor', Icon: ApartmentOutlined, migrated: true,
     title: 'Infrastructure', description: 'Building telemetry and the dependency graph between subsystems.',
   },
   energy: {

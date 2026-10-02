@@ -54,6 +54,22 @@ export function retime(points, clockPoints) {
   return out;
 }
 
+/** Centred moving average (±windowMs/2): for stored history, where a trailing window
+ *  would shift the curve later in time. One value per point. */
+export function centredAverage(points, windowMs) {
+  const half = windowMs / 2;
+  const out = [];
+  let lo = 0;
+  let hi = 0;
+  let sum = 0;
+  for (let i = 0; i < (points?.length ?? 0); i += 1) {
+    while (hi < points.length && points[hi][0] <= points[i][0] + half) { sum += points[hi][1]; hi += 1; }
+    while (points[lo][0] < points[i][0] - half) { sum -= points[lo][1]; lo += 1; }
+    out.push([points[i][0], sum / (hi - lo)]);
+  }
+  return out;
+}
+
 /** Trailing moving average over `windowMs` of the point's own clock, one value per point. */
 export function movingAverage(points, windowMs) {
   const out = [];
