@@ -397,7 +397,7 @@ export default function App() {
           {activeModule === 'overview' ? (
             // The 3D overview and the HUD over it stay dark in both schemes (decision, §9).
             <div className="overview-stage" data-tour="overview" data-color-scheme="dark">
-              {/* 3D Twin Scene — unchanged until the Phase 2 rebuild */}
+              {/* 3D twin: realistic station scenes + Antarctica view (Phase 2) */}
               <div className="scene-container">
                 <ErrorBoundary name="3D station view">
                   <Suspense fallback={<PanelFallback name="3D station view" />}>
@@ -408,6 +408,9 @@ export default function App() {
                       selectedBuilding={selectedBuilding}
                       onBuildingClick={handleBuildingClick}
                       onBuildingHover={handleBuildingHover}
+                      onStationChange={handleStationChange}
+                      sensors={stationData.sensors}
+                      replay={stationData.replay}
                     />
                   </Suspense>
                 </ErrorBoundary>

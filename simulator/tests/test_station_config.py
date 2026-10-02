@@ -84,6 +84,28 @@ def test_invalid_config_is_rejected(tmp_path, monkeypatch):
         sc.load.cache_clear()
 
 
+def test_scene_zones_cover_every_subsystem_with_provenance():
+    for sid in sc.station_ids():
+        scene = sc.station(sid)["scene"]
+        assert scene["layout"]["value"] == "schematic"
+        assert set(scene["zones"]) == {b["id"] for b in sc.buildings(sid)}
+
+
+def test_scene_zone_without_provenance_is_rejected(tmp_path, monkeypatch):
+    cfg = json.loads(json.dumps(sc.load()))
+    del cfg["stations"]["bharati"]["scene"]["zones"]["generator"]["source"]
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(cfg))
+    import config as app_config
+    monkeypatch.setattr(app_config, "STATION_CONFIG_PATH", bad)
+    sc.load.cache_clear()
+    try:
+        with pytest.raises(sc.StationConfigError):
+            sc.load()
+    finally:
+        sc.load.cache_clear()
+
+
 def test_config_endpoints(temp_db):
     import unified_backend as ub
     with TestClient(ub.app) as c:

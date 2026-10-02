@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayState, solarElevation, solarTimeOffsetMs } from './solar';
+import { dayState, solarAzimuth, solarElevation, solarPosition, solarTimeOffsetMs } from './solar';
 
 const MAITRI = [-70.77, 11.73];
 
@@ -35,5 +35,26 @@ describe('solar position', () => {
   it('local mean solar time follows longitude: 15° per hour', () => {
     expect(solarTimeOffsetMs(15)).toBe(3_600_000);
     expect(solarTimeOffsetMs(-7.5)).toBe(-1_800_000);
+  });
+});
+
+describe('solar azimuth', () => {
+  it('agrees with solarElevation', () => {
+    const t = Date.UTC(2026, 8, 3, 9, 30);
+    expect(solarPosition(t, ...MAITRI).elevation).toBeCloseTo(solarElevation(t, ...MAITRI), 6);
+  });
+
+  it('in the southern high latitudes the noon sun is due north', () => {
+    // Local solar noon at Maitri (11.73° E) is about 11:13 UTC.
+    const az = solarAzimuth(Date.UTC(2026, 11, 21, 11, 13), ...MAITRI);
+    expect(Math.min(az, 360 - az)).toBeLessThan(3);
+  });
+
+  it('the sun rises in the east-ish half and sets in the west-ish half', () => {
+    // Early October at Maitri: morning sun is east of north, evening sun west of north.
+    expect(solarAzimuth(Date.UTC(2026, 9, 2, 7, 0), ...MAITRI)).toBeGreaterThan(30);
+    expect(solarAzimuth(Date.UTC(2026, 9, 2, 7, 0), ...MAITRI)).toBeLessThan(150);
+    expect(solarAzimuth(Date.UTC(2026, 9, 2, 15, 30), ...MAITRI)).toBeGreaterThan(210);
+    expect(solarAzimuth(Date.UTC(2026, 9, 2, 15, 30), ...MAITRI)).toBeLessThan(330);
   });
 });
