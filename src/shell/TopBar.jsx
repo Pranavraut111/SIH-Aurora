@@ -14,7 +14,7 @@ import { AppBar, Box, ButtonBase, IconButton, Toolbar, Typography } from '@mui/m
 import { useColorScheme } from '@mui/material/styles';
 import DarkModeOutlined from '@mui/icons-material/DarkModeOutlined';
 import HistoryOutlined from '@mui/icons-material/HistoryOutlined';
-import KeyboardOutlined from '@mui/icons-material/KeyboardOutlined';
+import HelpOutlineOutlined from '@mui/icons-material/HelpOutlineOutlined';
 import SearchOutlined from '@mui/icons-material/SearchOutlined';
 import LightModeOutlined from '@mui/icons-material/LightModeOutlined';
 import MenuOutlined from '@mui/icons-material/MenuOutlined';
@@ -32,6 +32,7 @@ import StationSwitcher from './StationSwitcher';
 import { dataSourceInfo } from './dataSource';
 
 const TopBarMenu = lazy(() => import('./TopBarMenu'));
+const HelpMenu = lazy(() => import('./HelpMenu'));
 
 /** A compact status chip: tonal, 30 px tall; a button when it opens something. */
 function BarChip({ children, onClick, sx, ...rest }) {
@@ -78,11 +79,14 @@ export default function TopBar({
   activeStation, onStationChange, isDesktop, onOpenNav,
   telemetryBadge, isConnected, alertCount, criticalCount, updatedAt,
   onOpenLink, onOpenAlerts, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp, demoActive,
+  onStartTour, pageTourLabel, onStartPageTour, signInOpen, onSignInOpenChange,
 }) {
   const now = useNow(1000);
   const scheme = useSchemeToggle();
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [menuLoaded, setMenuLoaded] = useState(false);
+  const [helpAnchor, setHelpAnchor] = useState(null);
+  const [helpLoaded, setHelpLoaded] = useState(false);
   const [sourceHint, setSourceHint] = useState(false);
 
   const source = dataSourceInfo(telemetryBadge);
@@ -167,11 +171,18 @@ export default function TopBar({
             <Box component="kbd" sx={{ display: { xs: 'none', lg: 'inline' }, fontFamily: 'inherit', fontSize: 12, color: 'text.secondary', ml: 1 }}>⌘K</Box>
           </BarChip>
         </Hint>
-        <Hint title="Keyboard shortcuts (?)" sx={hideBelow('md')}>
-          <IconButton onClick={onOpenHelp} aria-label="Keyboard shortcuts" data-testid="help-open" data-tour="help">
-            <KeyboardOutlined fontSize="small" />
+        <Hint title="Help: tour and keyboard shortcuts" sx={hideBelow('sm')}>
+          <IconButton onClick={(e) => { setHelpLoaded(true); setHelpAnchor(e.currentTarget); }} aria-label="Help"
+            aria-haspopup="menu" aria-expanded={helpAnchor ? 'true' : undefined} data-testid="help-open" data-tour="help">
+            <HelpOutlineOutlined fontSize="small" />
           </IconButton>
         </Hint>
+        {helpLoaded && (
+          <Suspense fallback={null}>
+            <HelpMenu anchorEl={helpAnchor} onClose={() => setHelpAnchor(null)} onStartTour={onStartTour}
+              pageTourLabel={pageTourLabel} onStartPageTour={onStartPageTour} onOpenShortcuts={onOpenHelp} />
+          </Suspense>
+        )}
         <Hint title="Demo control: inject a synthetic fault" sx={hideBelow('sm')}>
           <IconButton onClick={onOpenDemo} data-tour="demo-control" aria-label={`Demo control${demoActive ? ' (scenario active)' : ''}`} data-testid="demo-control-open"
             sx={{ position: 'relative' }}>
@@ -185,7 +196,7 @@ export default function TopBar({
           </IconButton>
         </Hint>
 
-        <Box data-tour="operator-login" sx={{ flex: 'none', display: 'flex' }}><OperatorLogin /></Box>
+        <Box data-tour="operator-login" sx={{ flex: 'none', display: 'flex' }}><OperatorLogin dialogOpen={signInOpen} onDialogOpenChange={onSignInOpenChange} /></Box>
 
         {/* ── Phone overflow ───────────────────────────────── */}
         <IconButton
@@ -214,6 +225,7 @@ export default function TopBar({
               onOpenDemo={onOpenDemo}
               onOpenPalette={onOpenPalette}
               onOpenHelp={onOpenHelp}
+              onStartTour={onStartTour}
             />
           </Suspense>
         )}

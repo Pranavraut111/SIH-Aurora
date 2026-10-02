@@ -447,6 +447,7 @@ export default function WeatherModule({
   return (
     <Box data-testid="weather-module">
       <PageHeader
+        tourId="environmental"
         section={sectionLabel(meta.section)}
         title={meta.title}
         description={`${meta.description} ${station} station.`}

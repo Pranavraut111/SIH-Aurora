@@ -6,6 +6,8 @@
    width (with a quiet "Read-only" label beside it on wide screens), opening a
    dialog that says what signing in unlocks. Signed in: "Operator"; one click
    signs out. With write protection off (local dev) there is nothing to sign in to.
+   The dialog can be opened from outside (the command palette) through
+   dialogOpen / onDialogOpenChange; otherwise it keeps its own state.
    ═══════════════════════════════════════════════════════════════ */
 import { lazy, Suspense, useState } from 'react';
 import { Box, ButtonBase } from '@mui/material';
@@ -13,6 +15,7 @@ import LockOpenOutlined from '@mui/icons-material/LockOpenOutlined';
 import LockOutlined from '@mui/icons-material/LockOutlined';
 import { useAdminToken } from '../hooks/useAdminToken';
 import Hint from '../ui/Hint';
+import { useToast } from '../ui/feedbackContext';
 
 // The dialog (Modal, TextField, Alert) is only needed once someone signs in,
 // so it stays out of the initial bundle.
@@ -32,9 +35,12 @@ const buttonSx = (theme) => ({
 });
 const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
 
-export default function OperatorLogin() {
+export default function OperatorLogin({ dialogOpen, onDialogOpenChange }) {
   const { loggedIn, writeProtected, login, logout } = useAdminToken();
-  const [open, setOpen] = useState(false);
+  const toast = useToast();
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = (dialogOpen ?? ownOpen) && !loggedIn;
+  const setOpen = onDialogOpenChange ?? setOwnOpen;
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -56,6 +62,7 @@ export default function OperatorLogin() {
     if (res.ok) {
       setValue('');
       setOpen(false);
+      toast({ text: 'Signed in as operator. Controls that change state are enabled; each asks before it acts.' });
     } else {
       setError(res.error);
     }
@@ -65,7 +72,7 @@ export default function OperatorLogin() {
     return (
       <Hint title="Signed in as operator: controls that change state are enabled. Click to sign out.">
         <ButtonBase
-          onClick={logout}
+          onClick={() => { logout(); toast({ severity: 'info', text: 'Signed out. Aurora is read-only again.' }); }}
           data-testid="operator-logout"
           aria-label="Operator: signed in. Sign out"
           sx={(theme) => ({

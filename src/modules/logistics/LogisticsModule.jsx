@@ -202,7 +202,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
         </Card>
         <KpiCard label="At or below reorder level" value={ready ? low.length : null} testId="kpi-low" sx={{ gridArea: 'a' }}
           status={low.length ? 'warning' : undefined}
-          context={low.length ? low.map((i) => i.name).join(', ') : 'Every item is above its reorder level'} />
+          context={!ready ? 'Ledger not loaded' : low.length ? low.map((i) => i.name).join(', ') : 'Every item is above its reorder level'} />
         <KpiCard label="Items in the ledger" value={ready ? items.length : null} testId="kpi-items" sx={{ gridArea: 'b' }}
           context="Fuel, food, medical, spares, water" />
         <Card component="section" aria-label="Last ledger edit" data-testid="kpi-last-edit" sx={{ gridArea: 'c', p: 5, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -221,7 +221,9 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
 
       <SectionCard title="Inventory" subtitle="Autonomy = stock ÷ daily use. Low = at or below the item's reorder level." testId="logistics-inventory"
         provenance={<ProvenanceChip kind="OPERATOR-ENTERED" />}>
-        {!ready && !state.error ? <LoadingBlock lines={6} /> : !items.length ? (
+        {!ready && !state.error ? <LoadingBlock lines={6} /> : !ready ? (
+          <EmptyState title="Ledger not loaded">It appears here once the backend responds; the page retries automatically.</EmptyState>
+        ) : !items.length ? (
           <EmptyState title="No inventory items">The ledger has no items for this station.</EmptyState>
         ) : wide ? (
           <Table size="small" aria-label="Inventory ledger">
@@ -292,7 +294,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
       <Box sx={{ mt: 4 }}>
         <SectionCard title="Audit log" subtitle="Every ledger change, newest first" testId="logistics-history">
           {!ready && !state.error ? <LoadingBlock lines={4} /> : !history.length ? (
-            <Typography variant="body2" sx={{ color: 'text.secondary' }}>No edits recorded for this station yet.</Typography>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>{ready ? 'No edits recorded for this station yet.' : 'Not loaded.'}</Typography>
           ) : (
             <ScrollX label="Ledger audit log, scrollable">
               <Table size="small" aria-label="Ledger audit log" sx={{ minWidth: 560 }}>

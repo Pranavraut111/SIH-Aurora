@@ -144,7 +144,16 @@ export const theme = createTheme({
       },
     },
     MuiToolbar: { styleOverrides: { root: { minHeight: `${layout.appBarHeight}px !important` } } },
-    MuiButtonBase: { defaultProps: { disableRipple: true } },
+    // No ripple, so keyboard focus needs its own mark: the same 2 px accent ring as the
+    // global :focus-visible rule, which ButtonBase's `outline: 0` would otherwise cancel.
+    MuiButtonBase: {
+      defaultProps: { disableRipple: true },
+      styleOverrides: {
+        root: ({ theme }) => ({
+          '&.Mui-focusVisible': { outline: `2px solid ${theme.vars.palette.primary.main}`, outlineOffset: 2 },
+        }),
+      },
+    },
     MuiButton: {
       defaultProps: { disableElevation: true, size: 'medium' },
       styleOverrides: {
@@ -254,7 +263,8 @@ export const theme = createTheme({
         indicator: { height: 2 },
       },
     },
-    MuiTab: { styleOverrides: { root: { minHeight: 40, textTransform: 'none', fontWeight: 600, paddingInline: 12, minWidth: 0 } } },
+    // Inset focus ring: the tab scroller clips anything outside the tab.
+    MuiTab: { styleOverrides: { root: { minHeight: 40, textTransform: 'none', fontWeight: 600, paddingInline: 12, minWidth: 0, '&.Mui-focusVisible': { outlineOffset: -2 } } } },
     MuiToggleButton: {
       styleOverrides: {
         root: ({ theme }) => ({

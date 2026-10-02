@@ -274,7 +274,8 @@ colour can never be mistaken for a status.
   - Auto-starts on the first visit, after the first telemetry snapshot arrives.
   - Remembered per browser in `localStorage` (`aurora-tour-v1`, wrapped in try/catch).
     Bumping the version re-shows the tour after a big change.
-  - Restartable from the Help menu (`?` icon in the app bar) and the `?` shortcut.
+  - Restartable from the Help menu (`?` icon in the app bar), the `?` help dialog, the phone ⋮
+    menu and the command palette ("Start tour"). As built: see §15.
   - "Skip tour" on every step. Progress shows "3 of 12".
   - On phones, steps that target the sidebar open the drawer first.
 - **Steps** (targets are `data-tour` attributes, several already in the prototype):
@@ -621,3 +622,80 @@ neon, glass or gradient text). Screenshots: `docs/ui-redesign/v2/`.
   buildings; `index.html` promised "AI-powered forecasting and smart automation".
 - **Token change**: dark critical `#F0716A` → `#F47E77` (4.29:1 → 4.6:1 on its tint over
   surface.raised, found by axe on the alert centre).
+
+## 15. Rollout 1C — guided tour and polish — screenshots in `docs/ui-redesign/1c/`
+
+**Tour** (`src/tour/`):
+- `tourPrefs.js` (startup, tiny) holds the seen-flag and `?tour=`.
+- `steps.js` holds the step copy; `runTour.js` + `tour.css` (driver.js, lazy, 35 kB + 6 kB CSS)
+  run it. `App.jsx` starts it and owns the context.
+- **When it starts:**
+  - Once, on a first visit, after the first telemetry snapshot, and only when no dialog is open.
+  - `aurora-tour-v1` in localStorage records `{outcome, at}`, in try/catch; if storage is
+    blocked, the flag is kept in memory. Bump `TOUR_VERSION` to re-show it after a big change.
+  - `?tour=off` never starts it (and stays in the URL); `?tour=start` forces it (and is removed).
+- **Steps** (§6 table): station switcher, data source, alerts, sign-in (text depends on whether
+  the server protects writes), the 3D twin (switches to Overview if needed), Monitor, Operate,
+  Analyse, AI diagnostics, Twin inspector, Demo control, System.
+- **Phones:**
+  - Sidebar steps open the nav drawer first; while the tour runs, the drawer's focus trap and
+    focus-restore are off.
+  - Demo control points at the ⋮ button and says the control is in that menu.
+- **Before each step:**
+  - Switch the page, open or close the drawer, and click a tab if the step needs one.
+  - Wait until the target is visible and has stopped moving.
+  - If no target appears, show the step centred.
+- **Keyboard and focus:**
+  - ← → and Esc work; shortcuts are off while the tour runs.
+  - Next / Back / Skip tour and "n of 12"; Back is hidden on step 1. The last step says
+    "Finish tour".
+  - Focus moves to Next on each step and returns to the opener (or `#main`) at the end.
+  - A click on the overlay does nothing.
+- **Accessibility fixes in driver.js's markup:**
+  - Its title `<header>` (a second banner landmark at body level) is swapped for an `<h2>`.
+  - The ARIA it adds to targets (`aria-expanded` on a `<div>`) is put back to each element's
+    own values.
+- **Motion:**
+  - driver.js's own animation is off: a Next pressed mid-transition left two elements
+    highlighted and dropped arrow keys.
+  - The popover fades in over 160 ms via CSS, not under reduced motion; scrolling is smooth only
+    without reduced motion.
+- **Page tours** ("Tour this page" in the page header, the Help menu and the palette):
+  - Weather (live figures vs stored observations, the analysis tabs, ingest).
+  - Infrastructure (health, buildings, reading the dependency graph).
+  - What-if (hazard → intensity → run → cascade).
+  - Administration → Alert thresholds (opens the tab; defaults vs overrides; what saving does).
+- **CSP:** the stylesheet is a static file and driver.js positions with style attributes, so the
+  current `style-src 'self' 'unsafe-inline'` covers it. Verified on the production build under
+  the nginx header: no violations.
+
+**Polish:**
+
+| Found | Changed |
+|---|---|
+| No visible keyboard focus on any MUI button: ripples are disabled globally, and ButtonBase's `outline: 0` cancels the global `:focus-visible` ring | One 2 px accent ring on `.Mui-focusVisible` for every ButtonBase (inset on tabs) |
+| 25+ Tab stops before page content | A "Skip to content" link as the first stop; `#main` takes focus |
+| "Sign in or out" in the palette clicked the top-bar button through the DOM | The palette opens the sign-in dialog directly (controlled `OperatorLogin`), or signs out, and only appears when the server protects writes |
+| No feedback on sign-in / sign-out | Toasts: "Signed in as operator…" / "Signed out. Aurora is read-only again." |
+| Signed out, thresholds were editable and only Save was blocked | Inputs are read-only, with a note "Read-only: sign in as operator to edit thresholds" |
+| App loaded while the backend was down: "Sign in" never came back | The session probe retries every 10 s; components mounting together share one request |
+| Backend down: Logistics said "No inventory items" and "Every item is above its reorder level" | "Ledger not loaded" (it retries); the reorder card says "Ledger not loaded" |
+| Backend down: Infrastructure credited "the backend alert engine" | Says it is the roll-up of the browser-demo alerts |
+| Simulator or backend down: AI cards showed `cannot reach http://localhost:8001 (ConnectionError)` | Plain wording: what is unavailable, that telemetry continues, and that it retries |
+| Mobile nav drawer: dialog without a name (axe, surfaced by the tour) | `aria-label="Navigation"` |
+| Help was a shortcuts-only icon, hidden below md | A Help menu (tour, this page's tour, shortcuts) from sm up; ⋮ menu on phones; the `?` dialog is now "Help" with "Start the tour" |
+
+States were checked on every page with the simulator stopped (physics fallback) and with the
+backend stopped (browser demo): every page renders, says what is missing, and retries.
+
+**Results:**
+- axe: 0 violations of any impact on every page (40 views) and every tour step (48 views:
+  12 steps × 2 schemes × 1440/390 px).
+- Startup JS: 485.0 kB raw / 155.4 kB gzip (1B-3: 480.5 / 153.8).
+- New e2e tests:
+  - The desktop tour runs to the end, isn't shown again on the second visit, and restarts
+    from Help, the palette and `?`.
+  - `?tour=off` and `?tour=start` work.
+  - The phone tour opens the drawer and points Demo control at the ⋮ menu.
+  - Page tours run on all four pages.
+

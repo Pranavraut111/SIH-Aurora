@@ -4,6 +4,7 @@
      ?             keyboard shortcuts help
      g then a key  go to a page (keys in navigation.js), within 1.5 s
      Esc           closes the open dialog or drawer (handled by MUI)
+   Ignored while the product tour runs (it uses ← → Esc itself).
    Ignored while typing in a field, so they never steal keystrokes.
    ═══════════════════════════════════════════════════════════════ */
 import { useEffect, useRef } from 'react';
@@ -22,6 +23,8 @@ export function useShortcuts({ onPalette, onHelp, onGo }) {
   useEffect(() => {
     const onKey = (e) => {
       const h = handlers.current;
+      // The product tour owns the keyboard (← → Esc) while it runs.
+      if (document.body.classList.contains('driver-active')) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         h.onPalette();

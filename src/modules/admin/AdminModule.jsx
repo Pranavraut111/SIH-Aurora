@@ -94,7 +94,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
   const meta = MODULES.admin;
   const confirm = useConfirm();
   const toast = useToast();
-  const { writeProtected } = useAdminToken();
+  const { writeProtected, canWrite } = useAdminToken();
   const [tab, setTab] = useState('sources');
   const [state, setState] = useState({ station: null, config: null, error: null });
   const [attempt, setAttempt] = useState(0);
@@ -197,7 +197,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
 
   return (
     <Box data-testid="admin-module">
-      <PageHeader section={sectionLabel(meta.section)} title={meta.title} description={meta.description} />
+      <PageHeader section={sectionLabel(meta.section)} title={meta.title} description={meta.description} tourId="admin" />
       <SectionCard title="System" subtitle={`Settings for ${stationMeta(activeStation).fullName} unless a tab says otherwise`} testId="admin-card">
         <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile aria-label="Administration" sx={{ mb: 4 }}>
           {TABS.map((t) => <Tab key={t.id} value={t.id} label={t.label} data-testid={`admin-tab-${t.id}`} />)}
@@ -214,6 +214,11 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                   Defaults come from station_config.json; saved values are per-station overrides in SQLite. An alert clears after
                   {' '}{cfg.alertResolveTicks} consecutive normal ticks.
                 </Typography>
+                {!canWrite && (
+                  <Alert severity="info" sx={{ mb: 3 }} data-testid="thresholds-readonly">
+                    Read-only: sign in as operator to edit thresholds.
+                  </Alert>
+                )}
                 <ScrollX label="Alert thresholds, scrollable">
                   <Table size="small" aria-label="Alert thresholds" sx={{ minWidth: 760 }}>
                     <TableHead>
@@ -239,7 +244,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                               {effective?.[s]?.[dir] ? (
                                 <TextField size="small" type="number" value={valueOf(s, dir, lvl)} onChange={(e) => setEdit(s, dir, lvl, e.target.value)}
                                   error={edits[s]?.[dir]?.[lvl] !== undefined && (edits[s][dir][lvl] === '' || Number.isNaN(Number(edits[s][dir][lvl])))}
-                                  slotProps={{ htmlInput: { step: 'any', 'aria-label': `${rule.name} ${dir} ${lvl}`, 'data-threshold': `${s}.${dir}.${lvl}`, style: { textAlign: 'right' } } }}
+                                  slotProps={{ htmlInput: { step: 'any', readOnly: !canWrite, 'aria-label': `${rule.name} ${dir} ${lvl}`, 'data-threshold': `${s}.${dir}.${lvl}`, style: { textAlign: 'right' } } }}
                                   sx={{ width: 104 }} />
                               ) : <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>}
                             </TableCell>
@@ -255,7 +260,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                 <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gap: 3, alignItems: { sm: 'center' }, mt: 4 }}>
                   <TextField size="small" label="Your name (recorded with the change)" value={name} onChange={(e) => setName(e.target.value)}
                     error={!nameOk} helperText={nameOk ? 'Not a login: write access is the operator token.' : "2–60 letters, digits, spaces or . , ' ( ) _ -"}
-                    slotProps={{ htmlInput: { maxLength: 60 } }} sx={{ minWidth: 280 }} />
+                    slotProps={{ htmlInput: { maxLength: 60, readOnly: !canWrite } }} sx={{ minWidth: 280 }} />
                   <Box sx={{ flex: 1 }} />
                   <Typography variant="body2" sx={{ color: invalid.length ? 'status.warning' : 'text.secondary' }}>
                     {invalid.length ? `${invalid.length} invalid value(s)` : changeCount ? `${changeCount} unsaved change(s)` : 'No changes'}

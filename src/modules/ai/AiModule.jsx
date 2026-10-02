@@ -46,11 +46,11 @@ const f = (v, d = 1) => formatNumber(isNum(v) ? v : null, d);
 function describeError(err) {
   if (!err) return null;
   if (err.kind === 'http' && err.status === 503) {
-    const raw = typeof err.body?.detail === 'string' ? err.body.detail : '';
-    return { title: 'Simulator offline', detail: raw.replace(/^Simulator offline:\s*/, '') || 'the simulation service is not running' };
+    // The backend's detail names the internal simulator URL: useful in the log, not on screen.
+    return { title: 'Simulator offline', detail: 'These diagnostics run in the simulator, which is not responding. Telemetry continues from the physics fallback.' };
   }
   if (err.kind === 'http') return { title: `Backend error (HTTP ${err.status})`, detail: err.url };
-  return { title: 'Backend unreachable', detail: err.message };
+  return { title: 'Backend unreachable', detail: 'The backend is not responding. This panel retries automatically.' };
 }
 
 function useAiSource(path, station) {

@@ -79,6 +79,7 @@ export default function WhatIfModule({ activeStation = 'maitri', sensorData = {}
   return (
     <Box data-testid="whatif-module">
       <PageHeader
+        tourId="simulation"
         section={sectionLabel(meta.section)}
         title={meta.title}
         description={`${meta.description} ${stationMeta(activeStation).name} station.`}
@@ -176,7 +177,7 @@ export default function WhatIfModule({ activeStation = 'maitri', sensorData = {}
           </SectionCard>
         )}
         {!result && !run.error && !run.busy && (
-          <Card sx={{ p: 6 }}>
+          <Card sx={{ p: 6 }} data-testid="whatif-placeholder">
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>Run a scenario to see its effect on the current baseline.</Typography>
           </Card>
         )}

@@ -91,6 +91,32 @@ async function openModule(page, moduleId) {
     .toHaveAttribute('aria-current', 'page');
 }
 
+// The product tour auto-starts on a first visit. Every test except the tour tests runs
+// as a returning visitor, so the tour never covers what they click.
+const TOUR_KEY = 'aurora-tour-v1';
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.title.includes('product tour')) return;
+  await page.addInitScript((key) => {
+    try { window.localStorage.setItem(key, '{"outcome":"e2e"}'); } catch (err) { console.warn(err); }
+  }, TOUR_KEY);
+});
+
+/** Step through the open tour to the end: Next, → (keyboard) alternately. Returns the titles. */
+async function completeTour(page, total) {
+  const popover = page.getByTestId('tour-popover');
+  const titles = [];
+  for (let i = 1; i <= total; i++) {
+    await expect(popover).toHaveAttribute('data-tour-step', String(i));
+    await expect(popover).toContainText(`${i} of ${total}`);
+    await expect(page.getByTestId('tour-next')).toBeFocused();
+    titles.push(await popover.locator('h2').textContent());
+    if (i % 2) await page.getByTestId('tour-next').click();
+    else await page.keyboard.press('ArrowRight');
+  }
+  await expect(popover).toHaveCount(0);
+  return titles;
+}
+
 test.beforeAll(async ({ request }) => {
   // The whole stack must be up before the browser opens. The backend starts first and
   // caches its simulator probe for 5 s, so poll rather than asserting on the first read.
@@ -359,6 +385,16 @@ test('command palette, keyboard shortcuts, URL state and the alert centre tabs',
   await expect(page.getByTestId('module-panel')).toHaveAttribute('data-module', 'environmental');
   await expect(page).toHaveURL(/module=environmental&station=bharati/);
 
+  // With write protection on, "Sign in as operator" opens the sign-in dialog itself.
+  if (ADMIN_TOKEN) {
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByTestId('palette-input').fill('sign in');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('operator-token-input')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('operator-token-input')).toHaveCount(0);
+  }
+
   // "g" then a letter navigates; "?" opens the help; Esc closes it.
   await page.locator('body').click({ position: { x: 5, y: 300 } });
   await page.keyboard.press('g');
@@ -387,3 +423,106 @@ test('command palette, keyboard shortcuts, URL state and the alert centre tabs',
   expect(failedRequests, 'failed requests with palette/shortcuts').toEqual([]);
 });
 
+test('the product tour starts once on a first visit, runs to the end and is not shown again', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/');
+  // Auto-start waits for the first telemetry snapshot.
+  await expect(page.getByTestId('tour-popover')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('data-source-badge')).not.toHaveAttribute('data-source', 'connecting');
+  await expect(page.getByTestId('tour-back')).toBeHidden();         // nothing to go back to on step 1
+
+  // ← goes back a step; then run all 12 steps through.
+  await page.getByTestId('tour-next').click();
+  await expect(page.getByTestId('tour-popover')).toHaveAttribute('data-tour-step', '2');
+  await page.keyboard.press('ArrowLeft');
+  const titles = await completeTour(page, 12);
+  expect(titles[0]).toBe('Choose a station');
+  expect(titles[11]).toBe('System');
+  // Focus is back on the page, not lost on <body>.
+  await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  expect(await page.evaluate((k) => JSON.parse(localStorage.getItem(k)).outcome, TOUR_KEY)).toBe('completed');
+
+  // Second visit: no tour, even after telemetry arrives.
+  await page.reload();
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+
+  // Restartable from the Help menu, and Esc ends it.
+  await page.getByTestId('help-open').click();
+  await page.getByTestId('help-tour').click();
+  await expect(page.getByTestId('tour-popover')).toHaveAttribute('data-tour-step', '1');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+
+  // …and from the command palette and the "?" help dialog.
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByTestId('palette-input').fill('start tour');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('tour-popover')).toBeVisible();
+  await page.getByTestId('tour-skip').click();
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+  await page.locator('body').click({ position: { x: 5, y: 300 } });
+  await page.keyboard.press('?');
+  await page.getByTestId('shortcuts-start-tour').click();
+  await expect(page.getByTestId('tour-popover')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  expect(consoleErrors, 'console errors during the tour').toEqual([]);
+  expect(failedRequests, 'failed requests during the tour').toEqual([]);
+});
+
+test('product tour: ?tour=off suppresses it and ?tour=start forces it', async ({ page }) => {
+  await page.goto('/?tour=off');
+  await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/);
+  await page.waitForTimeout(2000);
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+
+  // Mark it seen, then force it.
+  await page.evaluate((k) => localStorage.setItem(k, '{"outcome":"completed"}'), TOUR_KEY);
+  await page.goto('/?module=energy&tour=start');
+  await expect(page.getByTestId('tour-popover')).toBeVisible({ timeout: 30_000 });
+  await expect(page).not.toHaveURL(/tour=start/);                   // a reload won't restart it
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('tour-popover')).toHaveCount(0);
+});
+
+test('product tour on a phone: sidebar steps open the drawer, demo control points at the ⋮ menu', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const popover = page.getByTestId('tour-popover');
+  await expect(popover).toBeVisible({ timeout: 30_000 });
+  const drawer = page.getByTestId('mobile-nav');
+  for (let i = 1; i <= 12; i++) {
+    await expect(popover).toHaveAttribute('data-tour-step', String(i));
+    const title = await popover.locator('h2').textContent();
+    if (['Monitor', 'Operate', 'Analyse', 'AI diagnostics', 'Twin inspector', 'System'].includes(title)) {
+      await expect(drawer, `${title}: the drawer is open`).toBeVisible();
+    }
+    if (title === 'Demo control') {
+      await expect(drawer).toBeHidden();
+      await expect(popover).toContainText('⋮ menu');
+      await expect(page.locator('.driver-active-element')).toHaveAttribute('data-testid', 'topbar-more');
+    }
+    // Every step is fully on screen.
+    const box = await popover.boundingBox();
+    expect(box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 844, `step ${i} fits`).toBe(true);
+    await page.getByTestId('tour-next').click();
+  }
+  await expect(popover).toHaveCount(0);
+  await expect(drawer).toBeHidden();
+
+  expect(consoleErrors, 'console errors in the phone tour').toEqual([]);
+  expect(failedRequests, 'failed requests in the phone tour').toEqual([]);
+});
+
+test('page tours: Tour this page on Weather, Infrastructure, What-if and Administration', async ({ page }) => {
+  for (const [id, steps] of [['environmental', 4], ['infrastructure', 3], ['simulation', 4], ['admin', 3]]) {
+    await page.goto(`/?module=${id}`);
+    await page.getByTestId('page-tour').click();
+    await completeTour(page, steps);
+  }
+  // The thresholds tour leaves Administration on its thresholds tab.
+  await expect(page.getByTestId('admin-tab-thresholds')).toHaveAttribute('aria-selected', 'true');
+});

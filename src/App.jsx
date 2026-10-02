@@ -4,9 +4,10 @@
    chips, Sign in), sectioned sidebar with the station mini-card, and the main
    stage — the 3D overview or one module page. The page and station live in
    the URL (?module=&station=); ⌘K opens the command palette, "?" the
-   shortcuts, "g" + a letter navigates.
+   shortcuts, "g" + a letter navigates. The product tour (src/tour) starts once
+   on a first visit, after the first telemetry snapshot; Help restarts it.
    ═══════════════════════════════════════════════════════════════ */
-import { useState, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { useMediaQuery } from '@mui/material';
 import { useColorScheme, useTheme } from '@mui/material/styles';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -19,6 +20,10 @@ import { useShortcuts } from './shell/useShortcuts';
 import { STATION_IDS, stationMeta } from './data/stationConfig';
 import { useStationData } from './hooks/useStationData';
 import { useDatabase } from './hooks/useDatabase';
+import { useAdminToken } from './hooks/useAdminToken';
+import { useToast } from './ui/feedbackContext';
+import { TourContext } from './tour/tourContext';
+import { PAGE_TOURS, markTourSeen, readTourParam, tourSeen } from './tour/tourPrefs';
 import { trackModuleView, trackBuildingView, trackConnectionToggle, trackStationSwitch } from './services/analyticsService';
 import './App.css';
 
@@ -52,6 +57,7 @@ export default function App() {
   // From lg up the HUD floats over the 3D scene (bottom band), so the scene is drawn with a
   // lens shift that lifts the station clear of it; below lg the HUD sits under the scene.
   const hudOverlays = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true });
+  const isPhone = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const [hudBand, setHudBand] = useState(0);   // px of HUD cards along the scene's bottom
 
   // ── State ──────────────────────────────────────────────────
@@ -73,6 +79,9 @@ export default function App() {
   const openLink = useCallback(() => show('link'), [show]);
   const { mode, systemMode, setMode } = useColorScheme();
   const scheme = (mode === 'system' ? systemMode : mode) || 'dark';
+  const { loggedIn, writeProtected, logout } = useAdminToken();
+  const [signInOpen, setSignInOpen] = useState(false);
+  const toast = useToast();
 
   // ── Live data (station-aware) ─────────────────────────────
   const { stationData, dataSource, toggleConnection, acknowledgeAlert } = useStationData(activeStation);
@@ -98,6 +107,64 @@ export default function App() {
   const eventTimeline = stationData.eventTimeline || [];
   const updatedAt = telemetryBadge === 'connecting' ? null : stationData.timestamp;
   const demoActive = Boolean(stationData.provenance?.activeScenario);
+
+  // ── Product tour ──────────────────────────────────────────
+  // driver.js loads on first start. The run context reads live values through refs,
+  // because a tour outlives the render that started it.
+  const [tourActive, setTourActive] = useState(false);
+  const tourParam = useState(readTourParam)[0];
+  const tourStop = useRef(null);
+  const live = useRef({});
+  useEffect(() => { live.current = { activeModule, isDesktop, isPhone, scheme, writeProtected }; });
+  const startTour = useCallback((kind = 'main') => {
+    if (tourStop.current) return;
+    // Focus goes back here when the tour ends (captured now: the opener may be a menu
+    // item that unmounts, in which case the page's main region takes it).
+    const opener = document.activeElement;
+    setOpen(null);
+    setSelectedBuilding(null);
+    setShowTwinInspector(false);
+    if (kind === 'main') markTourSeen('started');
+    setTourActive(true);
+    tourStop.current = () => {};
+    import('./tour/runTour').then(({ runTour }) => {
+      const l = live.current;
+      tourStop.current = runTour(kind, {
+        drawerNav: !l.isDesktop,
+        isPhone: l.isPhone,
+        scheme: l.scheme,
+        writeProtected: l.writeProtected,
+        stations: STATION_IDS.map((sid) => stationMeta(sid).name),
+        returnFocus: opener,
+        getModule: () => live.current.activeModule,
+        goTo: (id) => { setActiveModule(id); setSelectedBuilding(null); },
+        setNavOpen: setMobileNavOpen,
+        onEnd: (outcome) => {
+          tourStop.current = null;
+          setTourActive(false);
+          if (kind === 'main') markTourSeen(outcome);
+        },
+      });
+    }).catch((err) => {
+      console.error('[tour] could not load', err);
+      tourStop.current = null;
+      setTourActive(false);
+      toast({ severity: 'error', text: 'The tour could not load. Check the connection and try again from Help.' });
+    });
+  }, [toast]);
+  useEffect(() => () => tourStop.current?.(), []);
+
+  // Auto-start once: first visit (or ?tour=start), after the first telemetry snapshot,
+  // when nothing else is open. ?tour=off never starts it.
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (autoStarted.current || updatedAt == null || open || tourParam === 'off') return undefined;
+    if (tourParam !== 'start' && tourSeen()) { autoStarted.current = true; return undefined; }
+    const id = setTimeout(() => { autoStarted.current = true; startTour('main'); }, 700);
+    return () => clearTimeout(id);
+  }, [updatedAt, open, tourParam, startTour]);
+  const pageTour = PAGE_TOURS[activeModule] ? activeModule : null;
+  const tourValue = useMemo(() => ({ start: startTour, active: tourActive }), [startTour, tourActive]);
 
   // ── Handlers ──────────────────────────────────────────────
   const handleBuildingClick = useCallback((buildingId) => {
@@ -163,9 +230,13 @@ export default function App() {
     { id: 'events', group: 'Panels', label: 'Open the event log', keywords: 'timeline', run: () => show('events') },
     { id: 'demo', group: 'Panels', label: 'Open demo control', keywords: 'inject scenario fault', run: () => show('demo') },
     { id: 'theme', group: 'Settings', label: `Switch to ${scheme === 'dark' ? 'light' : 'dark'} theme`, keywords: 'colour color mode', run: () => setMode(scheme === 'dark' ? 'light' : 'dark') },
-    { id: 'signin', group: 'Settings', label: 'Sign in or out as operator', keywords: 'login token write', run: () => document.querySelector('[data-testid="operator-login"], [data-testid="operator-logout"]')?.click() },
-    { id: 'help', group: 'Settings', label: 'Keyboard shortcuts', keys: ['?'], run: () => show('help') },
-  ], [handleModuleChange, handleStationChange, openAlerts, openLink, show, scheme, setMode]);
+    ...(writeProtected !== true ? [] : loggedIn
+      ? [{ id: 'signout', group: 'Settings', label: 'Sign out', keywords: 'logout operator token', run: () => { logout(); toast({ severity: 'info', text: 'Signed out. Aurora is read-only again.' }); } }]
+      : [{ id: 'signin', group: 'Settings', label: 'Sign in as operator', keywords: 'login token write', run: () => setSignInOpen(true) }]),
+    { id: 'tour', group: 'Help', label: 'Start tour', keywords: 'guide introduction walkthrough help', run: () => startTour('main') },
+    ...(pageTour ? [{ id: 'page-tour', group: 'Help', label: `Tour this page (${PAGE_TOURS[pageTour]})`, keywords: 'guide help', run: () => startTour(pageTour) }] : []),
+    { id: 'help', group: 'Help', label: 'Keyboard shortcuts', keys: ['?'], run: () => show('help') },
+  ], [handleModuleChange, handleStationChange, openAlerts, openLink, show, scheme, setMode, writeProtected, loggedIn, logout, toast, startTour, pageTour]);
 
   useShortcuts({
     onPalette: () => show('palette'),
@@ -278,7 +349,10 @@ export default function App() {
   }
 
   return (
-    <div className="aurora-app">
+    <TourContext.Provider value={tourValue}>
+    <div className="aurora-app" data-tour-active={tourActive || undefined}>
+      {/* First Tab stop: past the top bar and sidebar (about 25 stops) to the page. */}
+      <a className="skip-link" href="#main">Skip to content</a>
       <TopBar
         activeStation={activeStation}
         onStationChange={handleStationChange}
@@ -295,6 +369,11 @@ export default function App() {
         onOpenDemo={() => show('demo')}
         onOpenPalette={() => show('palette')}
         onOpenHelp={() => show('help')}
+        onStartTour={() => startTour('main')}
+        pageTourLabel={pageTour ? PAGE_TOURS[pageTour] : null}
+        onStartPageTour={() => pageTour && startTour(pageTour)}
+        signInOpen={signInOpen}
+        onSignInOpenChange={setSignInOpen}
         demoActive={demoActive}
       />
 
@@ -311,9 +390,10 @@ export default function App() {
           activeStation={activeStation}
           onStationChange={handleStationChange}
           replayMs={stationData.replay?.timeMs ?? null}
+          tourActive={tourActive}
         />
 
-        <main className="main-stage" id="main">
+        <main className="main-stage" id="main" tabIndex={-1}>
           {activeModule === 'overview' ? (
             // The 3D overview and the HUD over it stay dark in both schemes (decision, §9).
             <div className="overview-stage" data-tour="overview" data-color-scheme="dark">
@@ -399,8 +479,9 @@ export default function App() {
         {mounted.events && <EventsDrawer open={open === 'events'} onClose={close} events={eventTimeline} />}
         {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation} />}
         {mounted.palette && <CommandPalette open={open === 'palette'} onClose={close} commands={commands} />}
-        {mounted.help && <ShortcutsDialog open={open === 'help'} onClose={close} />}
+        {mounted.help && <ShortcutsDialog open={open === 'help'} onClose={close} onStartTour={() => startTour('main')} />}
       </Suspense>
     </div>
+    </TourContext.Provider>
   );
 }

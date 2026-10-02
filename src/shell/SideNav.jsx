@@ -94,11 +94,11 @@ export function NavContent({ activeModule, onSelect, onAction, collapsed, onTogg
   );
 }
 
-export default function SideNav({ isDesktop, mobileOpen, onMobileClose, collapsed, ...rest }) {
+export default function SideNav({ isDesktop, mobileOpen, onMobileClose, collapsed, tourActive, ...rest }) {
   if (!isDesktop) {
     return (
       <Suspense fallback={null}>
-        <MobileNavDrawer open={mobileOpen} onClose={onMobileClose} {...rest} />
+        <MobileNavDrawer open={mobileOpen} onClose={onMobileClose} tourActive={tourActive} {...rest} />
       </Suspense>
     );
   }

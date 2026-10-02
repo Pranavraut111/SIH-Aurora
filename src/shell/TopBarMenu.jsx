@@ -1,9 +1,11 @@
 /* Aurora — the phone overflow menu of the top bar (loaded on first open):
-   telemetry link, event log, demo control, colour scheme, and the telemetry time. */
+   search, telemetry link, event log, demo control, the tour, shortcuts, colour
+   scheme, and the telemetry time. */
 import { Divider, ListItemIcon, ListItemText, Menu, MenuItem, Typography } from '@mui/material';
 import DarkModeOutlined from '@mui/icons-material/DarkModeOutlined';
 import HistoryOutlined from '@mui/icons-material/HistoryOutlined';
 import KeyboardOutlined from '@mui/icons-material/KeyboardOutlined';
+import TourOutlined from '@mui/icons-material/TourOutlined';
 import SearchOutlined from '@mui/icons-material/SearchOutlined';
 import LightModeOutlined from '@mui/icons-material/LightModeOutlined';
 import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
@@ -12,7 +14,7 @@ import SensorsOffOutlined from '@mui/icons-material/SensorsOffOutlined';
 
 export default function TopBarMenu({
   anchorEl, onClose, isConnected, demoActive, scheme, telemetryTime, sourceLabel,
-  onOpenLink, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp,
+  onOpenLink, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp, onStartTour,
 }) {
   const pick = (fn) => () => { onClose(); fn(); };
   return (
@@ -39,6 +41,10 @@ export default function TopBarMenu({
       <MenuItem onClick={pick(onOpenDemo)} data-testid="menu-demo-control" data-tour="demo-control-menu">
         <ListItemIcon><ScienceOutlined fontSize="small" /></ListItemIcon>
         <ListItemText primary="Demo control" secondary={demoActive ? 'A scenario is active' : 'Inject a synthetic fault'} />
+      </MenuItem>
+      <MenuItem onClick={pick(onStartTour)} data-testid="menu-tour">
+        <ListItemIcon><TourOutlined fontSize="small" /></ListItemIcon>
+        <ListItemText primary="Take the tour" />
       </MenuItem>
       <MenuItem onClick={pick(onOpenHelp)}>
         <ListItemIcon><KeyboardOutlined fontSize="small" /></ListItemIcon>

@@ -91,6 +91,7 @@ export default function InfrastructureModule({
   return (
     <Box data-testid="infrastructure-module">
       <PageHeader
+        tourId="infrastructure"
         section={sectionLabel(meta.section)}
         title={meta.title}
         description={`${meta.description} ${station} station.`}
@@ -138,7 +139,9 @@ export default function InfrastructureModule({
           <Typography variant="label" component="h3" sx={{ color: 'text.secondary' }}>Station health</Typography>
           <Box><StatusChip status={health} /></Box>
           <Typography variant="body2" sx={{ color: 'text.secondary', mt: 'auto' }}>
-            Rule-based roll-up of threshold alerts and cascade risks from the backend alert engine.
+            {telemetrySource === 'browser-demo'
+              ? 'Rule-based roll-up of the browser-demo alerts. The backend alert engine is unreachable.'
+              : 'Rule-based roll-up of threshold alerts and cascade risks from the backend alert engine.'}
           </Typography>
         </Card>
       </Box>

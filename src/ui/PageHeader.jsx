@@ -2,14 +2,18 @@
    Aurora — the page header every module uses: section, title, one-line
    description, last-updated time (IST + relative) and provenance chips.
    A faint topographic contour pattern sits behind this area only.
+   Pages with their own short tour pass `tourId`: a "Tour this page" link.
    ═══════════════════════════════════════════════════════════════ */
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Button, Stack, Typography } from '@mui/material';
+import TourOutlined from '@mui/icons-material/TourOutlined';
+import { useTour } from '../tour/tourContext';
 import { useNow } from '../hooks/useNow';
 import { formatRelative, formatTimeIST } from '../lib/format';
 import ContourPattern from './ContourPattern';
 
-export default function PageHeader({ section, title, description, updatedAt, updatedLabel = 'Updated', provenance, actions }) {
+export default function PageHeader({ section, title, description, updatedAt, updatedLabel = 'Updated', provenance, actions, tourId }) {
   const now = useNow(1000);
+  const tour = useTour();
   return (
     <Box
       component="header"
@@ -28,11 +32,19 @@ export default function PageHeader({ section, title, description, updatedAt, upd
       <ContourPattern sx={{ zIndex: -1 }} />
       <Box>
         <Box sx={{ minWidth: 0 }}>
-          {section && (
-            <Typography variant="overline" component="p" sx={{ color: 'text.secondary', display: 'block', mb: 1.5 }}>
-              {section}
-            </Typography>
-          )}
+          <Stack direction="row" sx={{ alignItems: 'center', gap: 2, mb: 1.5, minHeight: 24 }}>
+            {section && (
+              <Typography variant="overline" component="p" sx={{ color: 'text.secondary', display: 'block', m: 0, flex: 1 }}>
+                {section}
+              </Typography>
+            )}
+            {tourId && (
+              <Button size="small" variant="text" startIcon={<TourOutlined />} onClick={() => tour.start(tourId)}
+                data-testid="page-tour" sx={{ ml: 'auto', my: -1 }}>
+                Tour this page
+              </Button>
+            )}
+          </Stack>
           <Typography variant="h1" data-testid="page-title">{title}</Typography>
           {description && (
             <Typography variant="body1" sx={{ color: 'text.secondary', mt: 2, maxWidth: 720 }}>{description}</Typography>

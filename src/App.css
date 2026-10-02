@@ -18,6 +18,24 @@
   overflow: hidden;
 }
 
+/* "Skip to content": off screen until it has keyboard focus. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 2000;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font: 600 14px/20px "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
+  color: var(--aur-palette-primary-contrastText);
+  background: var(--aur-palette-primary-main);
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip-link:focus { transform: none; outline: 2px solid var(--aur-palette-text-primary); outline-offset: 2px; }
+
+.main-stage:focus { outline: none; }
+
 .app-layout-body {
   display: flex;
   min-height: 0;

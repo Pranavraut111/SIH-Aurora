@@ -1,12 +1,14 @@
-/* Aurora — the keyboard shortcuts help ("?"). Loaded on first open. */
-import { Dialog, DialogContent, DialogTitle, IconButton, Stack, Table, TableBody, TableCell, TableRow, Typography } from '@mui/material';
+/* Aurora — the help dialog ("?"): the product tour and the keyboard shortcuts.
+   Loaded on first open. */
+import { Box, Button, Dialog, DialogContent, DialogTitle, IconButton, Stack, Table, TableBody, TableCell, TableRow, Typography } from '@mui/material';
+import TourOutlined from '@mui/icons-material/TourOutlined';
 import CloseOutlined from '@mui/icons-material/CloseOutlined';
 import Keys from '../ui/Keys';
 import { MODULES, NAV_ACTIONS } from './navigation';
 
 const MOD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
-export default function ShortcutsDialog({ open, onClose }) {
+export default function ShortcutsDialog({ open, onClose, onStartTour }) {
   const rows = [
     [[MOD, 'K'], 'Command palette'],
     [['?'], 'This help'],
@@ -17,10 +19,17 @@ export default function ShortcutsDialog({ open, onClose }) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth aria-labelledby="shortcuts-title" slotProps={{ paper: { 'data-testid': 'shortcuts-dialog' } }}>
       <DialogTitle id="shortcuts-title" sx={{ display: 'flex', alignItems: 'center' }}>
-        <Stack sx={{ flex: 1 }}>Keyboard shortcuts</Stack>
-        <IconButton onClick={onClose} aria-label="Close keyboard shortcuts"><CloseOutlined /></IconButton>
+        <Stack sx={{ flex: 1 }}>Help</Stack>
+        <IconButton onClick={onClose} aria-label="Close help"><CloseOutlined /></IconButton>
       </DialogTitle>
       <DialogContent>
+        {onStartTour && (
+          <Box sx={{ p: 4, mb: 4, borderRadius: '10px', bgcolor: 'aurora.surfaceRaised', display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ flex: 1, minWidth: 180 }}>New here? A 12-step tour of the stations, data sources, alerts and pages.</Typography>
+            <Button variant="contained" size="small" startIcon={<TourOutlined />} onClick={() => { onClose(); onStartTour(); }} data-testid="shortcuts-start-tour">Start the tour</Button>
+          </Box>
+        )}
+        <Typography variant="h3" component="h3" sx={{ mb: 1 }}>Keyboard shortcuts</Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>Shortcuts are off while you type in a field. For “g” sequences, press g, then the letter.</Typography>
         <Table size="small" aria-label="Keyboard shortcuts">
           <TableBody>

@@ -18,6 +18,36 @@ in operator language — tracking the provenance of every number it shows.
 
 ---
 
+## The interface
+
+| | |
+|---|---|
+| ![Station overview: the 3D twin with weather, power and subsystem cards](docs/ui-redesign/1b-1/dark-desktop-overview.png) | ![Infrastructure in light mode: building tiles and the dependency map](docs/ui-redesign/1b-1/light-desktop-infrastructure.png) |
+| **Overview.** The 3D twin, with weather, generation and subsystem cards. Building colours follow the alert state. | **Infrastructure.** Building telemetry and the dependency map. Light and dark themes throughout. |
+| ![What-if result: baseline vs scenario, consequences and assumptions](docs/ui-redesign/1b-2/dark-desktop-whatif-result.png) | ![The guided tour pointing at Demo control](docs/ui-redesign/1c/tour-light-desktop-step11.png) |
+| **What-if.** A rule-based hazard applied to the current snapshot, with its assumptions. | **Guided tour.** 12 steps on a first visit; restart it from Help (?) or the command palette. |
+
+- **One top bar.** Station switcher, data source (live simulator / physics fallback / browser
+  demo), telemetry link, alerts, event log, search (⌘K), help, Demo control and **Sign in**,
+  visible at every width.
+- **Sidebar sections.** Monitor (Overview, Weather, Infrastructure, Energy grid), Operate
+  (Logistics, Remote commands), Analyse (What-if, AI diagnostics, Reports, Twin inspector)
+  and System (Administration). On phones the sidebar becomes a drawer.
+- **Provenance on every value.** A chip shows Real, Reanalysis, Model-derived, Simulated or
+  Hardcoded-demo, and each page shows how fresh its data is.
+- **Changes need sign-in and confirmation.** Every change asks first and reports its result.
+  Without the operator token everything is read-only.
+- **Keyboard.** ⌘K / Ctrl+K opens the command palette, `?` the help, and `g` then a letter
+  jumps to a page. A "Skip to content" link comes first, and every control shows a focus ring.
+- **Shareable URLs.** `?module=&station=` opens a page directly. `?tour=off` suppresses the
+  first-visit tour (for screenshots and demos); `?tour=start` forces it.
+- **No WebGL.** A 2D station overview replaces the 3D twin.
+
+Design notes, decisions and every review checkpoint's screenshots are in
+[docs/ui-redesign.md](docs/ui-redesign.md).
+
+---
+
 ## Quick start
 
 ### Docker (any Linux server, x86 or ARM)
@@ -234,11 +264,11 @@ This is demo-grade: one shared token, **no user accounts and no roles** — see
 
 | Suite | Command | Count |
 |---|---|---|
-| Python | `pytest` (repo root) | 247, offline, no network |
+| Python | `pytest` (repo root) | 357, offline, no network |
 | Python — ML | `pytest -m ml` | 7, needs `make setup-ml` (torch + chronos) |
 | Python — slow | `pytest -m slow` | 16, ERA5 walk-forward over the committed caches |
-| Frontend | `npm test` (Vitest + jsdom) | 56 |
-| End-to-end | `npm run test:e2e` (Playwright) | 3, starts the whole stack itself |
+| Frontend | `npm test` (Vitest + jsdom) | 124 |
+| End-to-end | `npm run test:e2e` (Playwright) | 12, starts the whole stack itself |
 
 ```bash
 make test        # pytest + Vitest
@@ -273,7 +303,9 @@ simulator/              Python services and engines
   config.py               The only module reading os.environ
   migrations/             Idempotent SQLite migrations
   tests/                  pytest suite
-src/                    React app (components, hooks, services, config.js)
+src/                    React app: shell/ (top bar, sidebar, palette, shortcuts, URL state),
+                          modules/ (one folder per page), overlays/ (drawers), tour/
+                          (guided tour), ui/ (shared components), theme/ (design tokens)
 docker/                 Dockerfiles, nginx config, Caddyfile, entrypoint
 tests/e2e/              Playwright smoke test
 docs/DEPLOYMENT.md      Server deployment guide
