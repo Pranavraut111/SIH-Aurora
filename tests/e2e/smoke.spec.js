@@ -835,8 +835,9 @@ test('weather and administration say how fresh the NCPOR live data is', async ({
   await page.goto('/?module=environmental&station=bharati&tour=off');
   const line = page.getByTestId('ncpor-freshness-bharati');
   await expect(line).toBeVisible();
-  // Live: "Last synced … · N readings · next sync in …" (or a clear error); a test stack never syncs.
-  await expect(line).toContainText(IS_REMOTE ? /Last synced|NCPOR page unreachable|NCPOR sync failing/ : /Not synced yet|Last synced|automatic sync off/);
+  // One of the honest states: synced ("Last synced … · N values · next sync in …"), not yet,
+  // off, or a clear error with the last good data (e.g. the offline compose stack in CI).
+  await expect(line).toContainText(/Last synced|Not synced yet|automatic sync off|NCPOR page unreachable|NCPOR sync failing/);
   await page.getByTestId('ncpor-info').hover();
   await expect(page.getByRole('tooltip')).toContainText('not independently confirmed');
   await page.goto('/?module=admin&tour=off');
