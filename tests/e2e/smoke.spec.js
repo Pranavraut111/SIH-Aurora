@@ -807,9 +807,10 @@ test('judge mode: anyone can run a demo scenario, every visitor sees the banner,
     const banner = page.getByTestId('demo-banner');
     await expect(banner).toContainText('Demo scenario running: Water system alert (started by a visitor), resets in');
     await expect(banner).toContainText('Simulated');
-    // Another visitor, on the other station, sees it too.
-    await b.page.goto('/?station=maitri');
-    await expect(b.page.getByTestId('demo-banner')).toContainText('at Bharati');
+    // Another visitor, on the other station, sees it too. The banner is part of the shell,
+    // so B uses a light page: two software-WebGL 3D scenes on a CI runner starve each other.
+    await b.page.goto('/?module=logistics&station=maitri');
+    await expect(b.page.getByTestId('demo-banner')).toContainText('at Bharati', { timeout: 30_000 });
     // A second scenario on the same station is refused politely.
     const busy = await b.page.request.post(`${API}/api/sim/inject/co2_spike?stationId=bharati`);
     expect([409, 429]).toContain(busy.status());
