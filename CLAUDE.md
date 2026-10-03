@@ -31,6 +31,17 @@
   Python reads it via `simulator/station_config.py`; the frontend imports it via `src/data/stationConfig.js`;
   it is served at `GET /api/config/stations`. Never hardcode coordinates, names, graphs or thresholds elsewhere.
   Physics parameters stay in `physics_model.py`.
+- **Aurora assistant** (`src/assistant/`, `simulator/assistant.py`): only the whitelisted actions in
+  `simulator/assistant_actions.json` can run (the backend builds the LLM's tools from it and validates
+  tool calls; the browser validates again and executes). State-changing ones (`startStory`,
+  `triggerDemoScenario`) are confirmed (click or voice) and go through the normal routes, so the public-demo
+  and ADMIN_TOKEN rules apply unchanged. Answers come only from `GET /api/assistant/context`; a reply that
+  quotes a number not in that context is replaced by the deterministic answer (`numbers_grounded`).
+  Common commands are parsed in the browser (`intents.js`) and lookups answered from data, so neither
+  calls the LLM; Groq calls go through the simulator's `/api/llm/chat` (router = `GROQ_ROUTER_MODEL`
+  with its own caps; explanations share `GROQ_MAX_CALLS_PER_*`). Incident playbooks
+  (`simulator/playbooks.json`) are example procedures, never official ones. Only `assistant/bus.js` and
+  the top-bar launcher are in the startup bundle; everything else is a lazy chunk.
 - **Alerts** come only from `simulator/alert_engine.py` (run by the tick): every sensor vs station_config
   defaults + `alert_threshold_overrides` (SQLite, set in System Admin). Alerts persist in `station_alerts`,
   are acknowledged by id (`POST /api/alerts/{id}/acknowledge` with `acknowledgedBy`), and auto-resolve after
@@ -77,7 +88,7 @@
 - `ADMIN_TOKEN` set → every **state-changing** route needs `X-Admin-Token`, enforced by the
   one `require_admin` dependency in `unified_backend.py`. Add it to any new POST/PUT/DELETE.
 - Reads and `/ws/station` stay public. The only unprotected POSTs are the ones that change
-  nothing — `/api/simulation/whatif` and the explain routes — which nginx rate-limits instead,
+  nothing — `/api/simulation/whatif`, the explain routes and `/api/assistant/chat` — which nginx rate-limits instead,
   and the visit beacon `POST /api/visit` (aggregate counts only, `simulator/visits.py`; reading
   them, `GET /api/admin/visits`, needs the token).
 - `simulator.py` authenticates its `/api/sensors/batch` POSTs with the same token.
