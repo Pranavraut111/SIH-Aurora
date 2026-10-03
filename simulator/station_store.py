@@ -29,7 +29,6 @@ class StationStore:
                 "series": {},                  # published: "bld.sensor" -> deque[(ts_ms, value)]
                 "fallback_snapshot": None,     # physics-fallback snapshot (+ _meta)
                 "published_snapshot": None,    # what clients see
-                "connected": True,             # simulated link flag
             }
             for sid in station_ids
         }
@@ -123,13 +122,3 @@ class StationStore:
         with self._lock:
             return self._stations[sid]["published_snapshot"]
 
-    # ── Simulated satellite link flag ─────────────────────────
-    def toggle_connected(self, sid: str) -> bool:
-        with self._lock:
-            st = self._stations[sid]
-            st["connected"] = not st["connected"]
-            return st["connected"]
-
-    def is_connected(self, sid: str) -> bool:
-        with self._lock:
-            return self._stations[sid]["connected"]

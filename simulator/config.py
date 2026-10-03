@@ -204,6 +204,18 @@ PUBLIC_DEMO = _get_bool("PUBLIC_DEMO", False)
 PUBLIC_DEMO_DURATION_S = _get_int("PUBLIC_DEMO_DURATION_S", 120)
 PUBLIC_DEMO_COOLDOWN_S = _get_int("PUBLIC_DEMO_COOLDOWN_S", 60)
 
+# ── Simulated satellite link (store-and-forward, link_buffer.py) ──
+# While a station's link is down its readings are held, one per tick, up to this many
+# (3600 × 2 s = 2 h); past it the oldest are dropped and counted.
+LINK_BUFFER_MAX_READINGS = _get_int("LINK_BUFFER_MAX_READINGS", 3600)
+
+# ── NCPOR live page sync (ncpor_sync.py) ─────────────────────
+# Both stations' NCPOR AWS pages are fetched every NCPOR_SYNC_INTERVAL_MIN minutes by the
+# backend (0 = off; the team's "Sync now" still works). After a failure the next try
+# backs off (doubling, up to NCPOR_SYNC_MAX_BACKOFF_MIN); the last good data is kept.
+NCPOR_SYNC_INTERVAL_MIN = _get_float("NCPOR_SYNC_INTERVAL_MIN", 30.0)
+NCPOR_SYNC_MAX_BACKOFF_MIN = _get_float("NCPOR_SYNC_MAX_BACKOFF_MIN", 240.0)
+
 # ── Deployment mode ──────────────────────────────────────────
 # "production" turns the soft warnings below into a refusal to start, so a public
 # deployment cannot come up with localhost origins or no write protection.

@@ -70,7 +70,7 @@ export default function WelcomeDialog({ open, view = 'welcome', onView, onClose,
             </Typography>
             <Stack sx={{ gap: 2 }}>
               <Choice primary icon={<PlayCircleOutlineOutlined />} title="Play a scenario" testId="welcome-play"
-                text="A guided two-minute story: a blizzard at Maitri, a generator failure at Bharati, or running low on fuel."
+                text="A guided two-minute story: a blizzard at Maitri, a generator failure or a satellite link drop at Bharati, or running low on fuel."
                 onClick={() => onView('stories')} />
               <Choice icon={<TourOutlined />} title="Take the tour" testId="welcome-tour"
                 text="A quick walk through each part of the screen, in 12 short steps." onClick={() => onChoose('tour')} />

@@ -49,7 +49,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Import digital twin engines
 sys.path.insert(0, str(Path(__file__).parent))
 import judge_mode
-from judge_mode import DEMO, SANDBOX
+from judge_mode import DEMO, LINK_SCENARIO, LINK_SCENARIO_NAME, SANDBOX
+from link_buffer import LinkBuffer
+from ncpor_sync import NcporSync
 from visits import VISITS
 
 import alert_engine
@@ -65,7 +67,7 @@ from analytics_ai_engine import (
     run_time_series_forecast,
 )
 from cascade import analyze_dependency_cascade
-from ncpor_ingestor import ingest_live_station, init_db
+from ncpor_ingestor import init_db
 from offline_explain import offline_explanation
 from physics_model import StationPhysicsModel, energy_summary
 from station_store import StationStore
@@ -84,6 +86,11 @@ PHYSICS = {sid: StationPhysicsModel(sid) for sid in STATIONS}
 store = StationStore(STATIONS, history_max_points=app_config.HISTORY_MAX_POINTS)
 # Persistent threshold alerts for every sensor (station_config defaults + admin overrides).
 ALERTS = AlertEngine(STATIONS, resolve_ticks=app_config.ALERT_RESOLVE_TICKS)
+# Simulated satellite link per station, with the station-side store-and-forward buffer.
+LINK = LinkBuffer(STATIONS)
+# Scheduled NCPOR live-page sync (every NCPOR_SYNC_INTERVAL_MIN, with back-off).
+NCPOR = NcporSync(STATIONS)
+_background: set[asyncio.Task] = set()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -349,7 +356,7 @@ def get_latest_weather_for_station(station_id: str):
         rows = conn.execute("""
             SELECT parameter, value, timestamp, source, dataset
             FROM observations
-            WHERE station_id = ?
+            WHERE station_id = ? AND quality != 'suspect'
             ORDER BY timestamp DESC LIMIT 30
         """, (station_id,)).fetchall()
 
@@ -503,7 +510,8 @@ def _coords(sid: str) -> str:
     return f"Lat {c['lat']}, Lon {c['lon']}"
 
 
-def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
+def reading_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
+    """One tick's reading from the physics fallback: the inputs of build_snapshot."""
     weather = fallback["weather"]
     provenance = {
         "equipment": "MODEL-DERIVED",
@@ -515,14 +523,17 @@ def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
         "equipmentModel": "Aurora causal energy & thermal model (physics fallback in backend)",
         "stationCoordinates": _coords(sid),
     }
-    return build_snapshot(
-        sid, fallback["sensors"], source="physics-fallback", provenance=provenance,
-        ts_ms=fallback["computedAt"], last_batch_age=last_batch_age,
-        connected=store.is_connected(sid), energy=energy_summary(fallback["meta"]),
-    )
+    return {"sid": sid, "sensors": fallback["sensors"], "source": "physics-fallback", "provenance": provenance,
+            "ts_ms": fallback["computedAt"], "last_batch_age": last_batch_age,
+            "energy": energy_summary(fallback["meta"])}
 
 
-def snapshot_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
+def snapshot_from_fallback(sid: str, fallback: dict, last_batch_age) -> dict:
+    return build_snapshot(**reading_from_fallback(sid, fallback, last_batch_age), connected=LINK.status(sid)["up"])
+
+
+def reading_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
+    """One tick's reading from the simulator's latest batch: the inputs of build_snapshot."""
     sensors = {
         bld: {sensor: reading["value"] for sensor, reading in readings.items()}
         for bld, readings in batch["readings"].items()
@@ -543,22 +554,23 @@ def snapshot_from_batch(sid: str, batch: dict, last_batch_age) -> dict:
                            else "Aurora physics model (simulator.py)"),
         "stationCoordinates": _coords(sid),
     }
-    return build_snapshot(
-        sid, sensors, source="simulator", provenance=provenance,
-        ts_ms=batch.get("timestamp") or int(time.time() * 1000),
-        last_batch_age=last_batch_age, connected=store.is_connected(sid),
-        event_timeline=batch.get("eventTimeline"), active_patterns=batch.get("activePatterns"),
-        energy=batch.get("energy"), replay=batch.get("replay"),
-    )
+    return {"sid": sid, "sensors": sensors, "source": "simulator", "provenance": provenance,
+            "ts_ms": batch.get("timestamp") or int(time.time() * 1000), "last_batch_age": last_batch_age,
+            "event_timeline": batch.get("eventTimeline"), "active_patterns": batch.get("activePatterns"),
+            "energy": batch.get("energy"), "replay": batch.get("replay")}
 
 
-def select_snapshot(sid: str) -> dict:
-    """Simulator batch if fresh (≤ SIM_BATCH_FRESH_S), else physics fallback."""
+def select_reading(sid: str) -> dict:
+    """This tick's reading: the simulator batch if fresh (≤ SIM_BATCH_FRESH_S), else the physics fallback."""
     age = store.batch_age(sid)
     batch = store.latest_batch(sid)
     if batch is not None and age is not None and age <= app_config.SIM_BATCH_FRESH_S:
-        return snapshot_from_batch(sid, batch, age)
-    return snapshot_from_fallback(sid, store.get_fallback(sid), age)
+        return reading_from_batch(sid, batch, age)
+    return reading_from_fallback(sid, store.get_fallback(sid), age)
+
+
+def select_snapshot(sid: str) -> dict:
+    return build_snapshot(**select_reading(sid), connected=LINK.status(sid)["up"])
 
 
 def published_snapshot(sid: str) -> dict:
@@ -572,18 +584,68 @@ def published_snapshot(sid: str) -> dict:
 #  Background tick (the only writer of physics state)
 # ═══════════════════════════════════════════════════════════════
 
+def _decorate(sid: str, snap: dict) -> dict:
+    """What every published snapshot carries besides the reading: the link state and its
+    events, and every running demo scenario (the banner, whichever station is viewed)."""
+    link = LINK.status(sid)
+    events = LINK.events(sid)
+    if events:
+        timeline = sorted((snap.get("eventTimeline") or []) + events, key=lambda e: e.get("timestamp") or 0)
+        snap["eventTimeline"] = timeline[-50:]
+    snap["link"] = link
+    snap["connected"] = link["up"]
+    snap["publicDemo"] = DEMO.status()
+    return snap
+
+
+def sync_link(sid: str) -> dict:
+    """The link is back: evaluate and publish every buffered reading in order (alerts at
+    their real timestamps, history backfilled), then record the sync summary."""
+    readings, meta = LINK.take(sid)
+    for r in readings:
+        store.publish(sid, build_snapshot(**r, connected=True))
+    raised = 0
+    if readings:
+        with db.connect() as conn:
+            raised = conn.execute(
+                "SELECT COUNT(*) FROM station_alerts WHERE station_id = ? AND timestamp BETWEEN ? AND ?",
+                (sid, readings[0]["ts_ms"], readings[-1]["ts_ms"])).fetchone()[0]
+    kb = meta["bytes"] / 1000
+    parts = [f"{len(readings)} reading{'s' if len(readings) != 1 else ''} ({kb:.1f} KB) synced",
+             f"{raised} alert{'s' if raised != 1 else ''} raised during the outage"]
+    if meta["dropped"]:
+        parts.append(f"{meta['dropped']} oldest reading(s) dropped: the station buffer was full")
+    summary = {"at": judge_mode.now_ms(), "readings": len(readings), "bytes": meta["bytes"], "alertsRaised": raised,
+               "dropped": meta["dropped"], "downSince": meta["since"], "lastContact": meta["lastContact"],
+               "outageS": round((judge_mode.now_ms() - (meta["since"] or judge_mode.now_ms())) / 1000),
+               "startedBy": meta["startedBy"], "message": "Link restored: " + ", ".join(parts) + "."}
+    LINK.record_sync(sid, summary)
+    log.info("[%s] %s", sid, summary["message"])
+    return summary
+
+
 def tick_station(sid: str) -> dict:
     """One station tick (blocking: physics + alert DB writes). Runs in a worker thread."""
     fallback = advance_fallback(sid)
     store.set_fallback(sid, fallback)
-    snap = select_snapshot(sid)
+    reading = select_reading(sid)
     # A scenario the simulator no longer runs (expired, or reset elsewhere) is not "running".
+    # (Link loss is not a simulator scenario: it ends when the link is restored.)
     rec = DEMO.get(sid)
-    if (rec and snap.get("dataSource") == "simulator" and not (snap.get("provenance") or {}).get("activeScenario")
-            and judge_mode.now_ms() - rec["startedAt"] > 8000):
+    if (rec and rec["scenario"] != LINK_SCENARIO and reading["source"] == "simulator"
+            and not reading["provenance"].get("activeScenario") and judge_mode.now_ms() - rec["startedAt"] > 8000):
         DEMO.clear(sid)
-    # Every visitor sees every running demo scenario (the banner), whichever station they view.
-    snap["publicDemo"] = DEMO.status()
+    prev = store.get_published(sid)
+    if LINK.is_down(sid) and prev is not None:
+        # Store-and-forward: the station keeps recording; the dashboard keeps the last
+        # data received (same timestamp, so nothing is appended to the history).
+        LINK.hold(sid, reading)
+        snap = _decorate(sid, {**prev})
+        store.publish(sid, snap)
+        return snap
+    if LINK.restore_due(sid):
+        sync_link(sid)
+    snap = _decorate(sid, build_snapshot(**reading, connected=True))
     store.publish(sid, snap)          # also appends to the rolling history served by /api/history
     return snap
 
@@ -599,6 +661,11 @@ async def run_tick():
         except Exception:
             log.exception("Tick failed for station %s", sid)
     for sid in DEMO.due():
+        if (DEMO.get(sid) or {}).get("scenario") == LINK_SCENARIO:
+            await asyncio.to_thread(_end_link_demo, sid, "public-demo-auto")
+            DEMO.clear(sid)
+            log.info("Public demo link loss on %s ended automatically: link restoring", sid)
+            continue
         try:
             await asyncio.to_thread(_sim_request, "POST", "/reset",
                                     params={"station": sid, "source": "public-demo-auto"})
@@ -607,6 +674,11 @@ async def run_tick():
             log.exception("Public demo auto-reset failed for %s; will retry", sid)
             continue
         DEMO.clear(sid)
+    for sid in NCPOR.due():
+        # Network + SQLite, up to ~12 s: off the tick, one task per station.
+        task = asyncio.create_task(asyncio.to_thread(NCPOR.run, sid, "scheduled"))
+        _background.add(task)
+        task.add_done_callback(_background.discard)
     global _ticks
     _ticks += 1
     if app_config.VISITOR_SANDBOX and _ticks % 30 == 0:
@@ -641,6 +713,9 @@ async def lifespan(_app: FastAPI):
         )
     init_db()
     ALERTS.load_open()   # open/acknowledged alerts survive restarts
+    if NCPOR.enabled:
+        NCPOR.start()
+        log.info("NCPOR live sync every %.0f min (first in %d s)", NCPOR.interval_s / 60, 20)
     await run_tick()   # prime: every station has a published snapshot before serving
     task = asyncio.create_task(tick_loop())
     log.info("Unified backend ready (v%s, tick %.1fs, batch freshness %.0fs)",
@@ -746,7 +821,7 @@ def get_stations():
             "region": m["region"],
             "established": m["commissionedYear"],
             "personnelWinter": m.get("personnelWinter"),
-            "dataSources": ["ERA5 reanalysis (Open-Meteo)", "NCPOR AWS live page (manual ingest)"],
+            "dataSources": ["ERA5 reanalysis (Open-Meteo)", "NCPOR AWS live page (synced automatically)"],
         })
     return out
 
@@ -993,13 +1068,16 @@ def get_ncpor_live(sid: str = Depends(station_param)):
 
 @app.post("/api/ncpor/ingest", dependencies=[Depends(require_admin)])
 def trigger_ncpor_ingestion(sid: str | None = Depends(optional_station_param)):
-    results = {}
-    if sid:
-        results[sid] = ingest_live_station(sid)
-    else:
-        results["maitri"] = ingest_live_station("maitri")
-        results["bharati"] = ingest_live_station("bharati")
+    """Team: "Sync now". Same path as the scheduled sync (checks, back-off reset on success)."""
+    results = {s: NCPOR.run(s, "manual") for s in ([sid] if sid else STATIONS)}
     return {"status": "success", "results": results}
+
+
+@app.get("/api/ncpor/status")
+def get_ncpor_status():
+    """Freshness of the NCPOR live data per station: last sync, readings, next sync,
+    errors since when, suspect values. Public (reads only)."""
+    return NCPOR.status()
 
 @app.get("/api/ncpor/observations")
 def get_ncpor_observations(
@@ -1296,14 +1374,62 @@ def run_what_if_simulation(req: WhatIfRequest, request: Request):
 #  Satellite Link & Connection Management APIs
 # ═══════════════════════════════════════════════════════════════
 
+def _cut_link(sid: str, started_by: str) -> bool:
+    last = (store.get_published(sid) or {}).get("timestamp")
+    return LINK.cut(sid, started_by, last)
+
+
+# The link-loss demo also starts a short CO₂ rise on the simulator while the link is down,
+# so visitors see an alert happen on site, wait in the buffer and arrive with its real time.
+LINK_DEMO_FAULT = "co2_spike"
+
+
+def _start_link_demo(sid: str, started_by: str) -> bool:
+    if not _cut_link(sid, started_by):
+        return False
+    try:
+        _sim_request("POST", f"/inject/{LINK_DEMO_FAULT}",
+                     params={"station": sid, "duration": app_config.PUBLIC_DEMO_DURATION_S, "source": "public-demo"})
+    except HTTPException as exc:
+        log.warning("[%s] link-loss demo: on-site fault not started (%s); the link loss runs without it",
+                    sid, exc.detail)
+    return True
+
+
+def _end_link_demo(sid: str, source: str) -> dict:
+    LINK.request_restore(sid)
+    try:
+        _sim_request("POST", "/reset", params={"station": sid, "source": source})
+    except HTTPException as exc:
+        log.warning("[%s] link-loss demo: simulator reset failed (%s)", sid, exc.detail)
+    return {"status": "reset", "station": sid, "scenario": LINK_SCENARIO,
+            "message": "Link restoring: the buffered readings sync on the next tick."}
+
+
 @app.post("/api/connection/toggle", dependencies=[Depends(require_admin)])
 def toggle_station_connection(sid: str = Depends(station_param)):
-    curr = store.toggle_connected(sid)
-    return {"status": "success", "stationId": sid, "connected": curr}
+    """Team: take the station's simulated satellite link down (its readings are buffered
+    on site) or bring it back (the next tick syncs the buffer). Visitors use the public
+    demo scenario 'link_loss' instead, which restores itself."""
+    link = LINK.status(sid)
+    if link["up"]:
+        _cut_link(sid, "team")
+        rec = DEMO.get(sid)
+        if not rec:
+            DEMO.start(sid, LINK_SCENARIO, LINK_SCENARIO_NAME, started_by="team", duration_s=24 * 3600)
+        connected = False
+    else:
+        LINK.request_restore(sid)
+        rec = DEMO.get(sid)
+        if rec and rec["scenario"] == LINK_SCENARIO:
+            DEMO.clear(sid)
+        connected = True
+    return {"status": "success", "stationId": sid, "connected": connected, "link": LINK.status(sid)}
 
 @app.get("/api/connection/status")
 def get_station_connection_status(sid: str = Depends(station_param)):
-    return {"status": "success", "stationId": sid, "connected": store.is_connected(sid)}
+    link = LINK.status(sid)
+    return {"status": "success", "stationId": sid, "connected": link["up"] or link["syncing"], "link": link}
 
 class AcknowledgeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1719,7 +1845,7 @@ def get_admin_config(request: Request, sid: str = Depends(station_param)):
             "name": "AURORA Antarctic Digital Twin Platform",
             "version": app_config.APP_VERSION,
             "activeStations": [station_config.meta_value(s_id, "name") for s_id in STATIONS],
-            "ingestionSource": "Open-Meteo ERA5 reanalysis cache + NCPOR AWS live page scrape (manual ingest)",
+            "ingestionSource": "Open-Meteo ERA5 reanalysis cache + NCPOR AWS live pages (synced automatically)",
         },
         # HARDCODED-DEMO: example roles only — there is no authentication or RBAC yet (P1-8).
         "usersProvenance": "HARDCODED-DEMO (no authentication / RBAC implemented)",
@@ -1895,7 +2021,19 @@ def ai_chronos(sid: str = Depends(station_param)):
 
 @app.get("/api/sim/scenarios")
 def sim_scenarios(sid: str = Depends(station_param)):
-    return _sim_request("GET", "/scenarios", params={"station": sid})
+    """The simulator's scenarios, plus the backend's own satellite link loss."""
+    res = _sim_request("GET", "/scenarios", params={"station": sid})
+    res.setdefault("scenarios", {})[LINK_SCENARIO] = {
+        "name": LINK_SCENARIO_NAME, "kind": "link", "targets": None,
+        "duration": app_config.PUBLIC_DEMO_DURATION_S,
+        "description": ("Cuts the station's satellite link. The dashboard freezes on the last data received while "
+                        "the station keeps recording, and a CO₂ rise in the living quarters (simulated) happens "
+                        "on site. When the link returns, everything recorded is sent in order: no gap in the charts, "
+                        "and the alert keeps its real time."),
+    }
+    if not LINK.status(sid)["up"]:
+        res["activeScenario"] = LINK_SCENARIO
+    return res
 
 
 def _demo_error(status: int, exc: judge_mode.DemoBusy):
@@ -1924,6 +2062,15 @@ def sim_inject(scenario_id: str, request: Request, sid: str = Depends(station_pa
             raise _demo_error(429, exc) from exc
         except judge_mode.DemoBusy as exc:
             raise _demo_error(409, exc) from exc
+        if scenario_id == LINK_SCENARIO:
+            if not _start_link_demo(sid, "visitor"):
+                DEMO.forget_start(sid, ip)
+                raise HTTPException(status_code=409, detail={"message": "The link is already down at this station.",
+                                                             "retryAfterS": 30})
+            rec = DEMO.set_name(sid, LINK_SCENARIO_NAME)
+            log.info("Public demo link_loss started on %s by a visitor", sid)
+            return {"scenario": LINK_SCENARIO, "name": LINK_SCENARIO_NAME, "station": sid, "duration": duration,
+                    "source": "public-demo", "publicDemo": rec}
         try:
             res = _sim_request("POST", f"/inject/{scenario_id}",
                                params={"station": sid, "duration": duration, "source": "public-demo"})
@@ -1933,6 +2080,11 @@ def sim_inject(scenario_id: str, request: Request, sid: str = Depends(station_pa
         rec = DEMO.set_name(sid, res.get("name", name))
         log.info("Public demo %s started on %s by a visitor", scenario_id, sid)
         return {**res, "publicDemo": rec}
+    if scenario_id == LINK_SCENARIO:
+        _start_link_demo(sid, "team")
+        rec = DEMO.start(sid, LINK_SCENARIO, LINK_SCENARIO_NAME, started_by="team",
+                         duration_s=app_config.PUBLIC_DEMO_DURATION_S)
+        return {"scenario": LINK_SCENARIO, "name": LINK_SCENARIO_NAME, "station": sid, "publicDemo": rec}
     res = _sim_request("POST", f"/inject/{scenario_id}", params={"station": sid})
     rec = DEMO.start(sid, scenario_id, res.get("name", scenario_id), started_by="team",
                      duration_s=float(res.get("duration") or 30))
@@ -1949,11 +2101,17 @@ def sim_reset(sid: str = Depends(station_param), actor: str = Depends(demo_actor
         if rec["startedBy"] != "visitor":
             raise HTTPException(status_code=403,
                                 detail="This scenario was started by the Aurora team; it ends by itself.")
-        res = _sim_request("POST", "/reset", params={"station": sid, "source": "public-demo"})
+        if rec["scenario"] == LINK_SCENARIO:
+            res = _end_link_demo(sid, "public-demo")
+        else:
+            res = _sim_request("POST", "/reset", params={"station": sid, "source": "public-demo"})
+    elif (DEMO.get(sid) or {}).get("scenario") == LINK_SCENARIO or not LINK.status(sid)["up"]:
+        res = _end_link_demo(sid, "team")
     else:
         res = _sim_request("POST", "/reset", params={"station": sid})
     DEMO.clear(sid)
     return res
+
 
 
 class ModeRequest(BaseModel):

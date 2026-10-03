@@ -7,7 +7,7 @@ import { apiPost } from '../services/api';
 export function visitEntry(search) {
   const q = new URLSearchParams(search || '');
   const story = q.get('story');
-  if (story && /^(blizzard|generator|fuel)$/.test(story)) return `story:${story}`;
+  if (story && /^(blizzard|generator|fuel|linkloss)$/.test(story)) return `story:${story}`;
   if (q.get('tour') === 'start') return 'tour';
   const mod = q.get('module');
   if (mod && /^[A-Za-z]{1,32}$/.test(mod) && mod !== 'overview') return `module:${mod}`;

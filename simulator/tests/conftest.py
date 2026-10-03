@@ -16,6 +16,7 @@ SIM_DIR = Path(__file__).resolve().parents[1]
 if str(SIM_DIR) not in sys.path:
     sys.path.insert(0, str(SIM_DIR))
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+os.environ.setdefault("NCPOR_SYNC_INTERVAL_MIN", "0")      # no scheduled NCPOR sync unless a test asks
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +46,9 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", db_path)     # the one SQLite helper reads DB_PATH at call time
     ncpor_ingestor.init_db()
     analytics_ai_engine.MODEL_CACHE.clear()
+    # The simulated satellite link is process state: every test starts with it up.
+    if "unified_backend" in sys.modules:
+        sys.modules["unified_backend"].LINK.reset()
     yield db_path
     analytics_ai_engine.MODEL_CACHE.clear()
 

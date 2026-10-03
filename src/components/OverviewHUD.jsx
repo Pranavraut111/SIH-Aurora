@@ -15,7 +15,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Button, Card, Stack, Typography, useMediaQuery } from '@mui/material';
 import { useColorScheme, useTheme } from '@mui/material/styles';
 import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
-import CloudOffOutlined from '@mui/icons-material/CloudOffOutlined';
 import MicNoneOutlined from '@mui/icons-material/MicNoneOutlined';
 import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
 import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
@@ -44,7 +43,7 @@ function levelOf(activeAlerts, sensor) {
 function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer, status, testId }) {
   const text = formatNumber(value, decimals);
   return (
-    <Card component="section" aria-label={label} data-testid={testId} sx={(theme) => ({
+    <Card component="section" aria-label={label} data-testid={testId} data-kpi="" sx={(theme) => ({
       p: { xs: 4, lg: 3.5 }, minWidth: 0, boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
       display: 'grid', gap: 2, alignItems: 'center',
       gridTemplateColumns: { xs: 'minmax(0, 1fr) minmax(0, 0.9fr)', lg: '1fr' },
@@ -56,7 +55,7 @@ function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer,
           {status && <Box component="span" sx={(theme) => ({ fontSize: 12, fontWeight: 600, color: theme.vars.palette.status[status] })}>{STATUS_LABEL[status]}</Box>}
         </Stack>
         <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1, mt: 1 }}>
-          <Typography variant="kpi" component="p" sx={{ m: 0, fontSize: 26, lineHeight: '32px' }}><FadeValue>{text}</FadeValue></Typography>
+          <Typography variant="kpi" component="p" className="kpi-value" sx={{ m: 0, fontSize: 26, lineHeight: '32px' }}><FadeValue>{text}</FadeValue></Typography>
           {unit && isNum(value) && <Typography component="span" sx={{ color: 'text.secondary', fontSize: 13, fontWeight: 500 }}>{unit}</Typography>}
         </Stack>
       </Box>
@@ -79,7 +78,6 @@ export default function OverviewHUD({
   alerts = {},
   activeAlerts = [],
   activeStation,
-  isConnected = true,
   timestamp,
   telemetrySource,
   replay,
@@ -276,20 +274,6 @@ export default function OverviewHUD({
         '& > *': { pointerEvents: 'auto' },
       }}
     >
-      {/* Offline banner */}
-      {!isConnected && (
-        <Card role="status" sx={(theme) => ({
-          position: { lg: 'absolute' }, top: { lg: 24 }, left: { lg: '50%' }, transform: { lg: 'translateX(-50%)' },
-          px: 4, py: 3, display: 'flex', gap: 3, alignItems: 'center', boxShadow: theme.vars.palette.aurora.shadowFloat,
-        })}>
-          <CloudOffOutlined sx={{ color: 'status.offline' }} />
-          <Box>
-            <Typography sx={{ fontWeight: 600, fontSize: 14 }}>Link cut (simulated): local autonomous mode</Typography>
-            <Typography variant="body2" sx={{ color: 'text.secondary' }}>Showing the last received values; readings are queued for resync.</Typography>
-          </Box>
-        </Card>
-      )}
-
       {/* ── Station card ─────────────────────────────────── */}
       <Card component="section" aria-label={`${station.fullName}`} data-testid="hud-station-card" sx={(theme) => ({
         p: { xs: 5, sm: 6, lg: 5 }, width: { lg: 400 }, flex: 'none', boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },

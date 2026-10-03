@@ -30,6 +30,7 @@ import { FROSTBITE_SOURCE, frostbiteRisk, windChill } from '../../lib/windChill'
 import { useChartTheme } from '../../theme/chartTheme';
 import { ChartLegend, ChartTipBox } from '../../ui/ChartParts';
 import KpiCard from '../../ui/KpiCard';
+import NcporFreshness from '../../ui/NcporFreshness';
 import PageHeader from '../../ui/PageHeader';
 import ProvenanceChip from '../../ui/Provenance';
 import ScrollX from '../../ui/ScrollX';
@@ -413,9 +414,9 @@ export default function WeatherModule({
   const [ingesting, setIngesting] = useState(false);
   async function runIngest() {
     const ok = await confirm({
-      title: `Ingest NCPOR data for ${stationMeta(activeStation).name}?`,
-      body: 'Fetches the NCPOR AWS live page and stores the new observations in the station database.',
-      confirmLabel: 'Ingest',
+      title: `Sync NCPOR data for ${stationMeta(activeStation).name} now?`,
+      body: 'Fetches the NCPOR AWS live page now (it is also synced automatically), checks each value and stores the new observations.',
+      confirmLabel: 'Sync now',
     });
     if (!ok) return;
     setIngesting(true);
@@ -423,8 +424,8 @@ export default function WeatherModule({
       const res = await apiPost(`/ncpor/ingest?stationId=${activeStation}`);
       const r = res?.results?.[activeStation];
       toast(r?.status === 'success'
-        ? { text: `Ingested ${formatNumber(r.records_ingested)} records from ${r.source} (${(r.parameters || []).length} series).` }
-        : { severity: 'error', text: `Ingest failed: ${r?.error || r?.message || 'no result returned'}. Nothing was stored.` });
+        ? { text: `Synced ${formatNumber(r.records_ingested)} readings from ${r.source}${r.suspect ? `; ${r.suspect} flagged suspect` : ''}.` }
+        : { severity: 'error', text: `Sync failed: ${r?.error || r?.message || 'no result returned'}. The last good data is kept.` });
       setAttempt((n) => n + 1);
     } catch (err) {
       console.error('[WeatherModule] ingest failed', err);
@@ -440,7 +441,7 @@ export default function WeatherModule({
   const ingestButton = (
     <WriteButton team variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} onClick={runIngest}
       disabled={ingesting} data-testid="ncpor-ingest">
-      {ingesting ? 'Ingesting…' : 'Ingest NCPOR data'}
+      {ingesting ? 'Syncing…' : 'Sync NCPOR now'}
     </WriteButton>
   );
 
@@ -481,6 +482,10 @@ export default function WeatherModule({
           status={level('env_humidity')} series={series['lab.env_humidity']} sparkBucketMs={clock.sparkBucketMs}
           context={envKind ? `Source: ${envKind === 'REANALYSIS' ? 'ERA5 reanalysis replay' : envKind === 'REAL' ? 'NCPOR AWS' : envKind.toLowerCase()}` : null} />
       </Box>
+
+      <Card sx={{ p: 4, mb: 4, bgcolor: 'aurora.surfaceRaised', borderColor: 'transparent' }}>
+        <NcporFreshness stations={[activeStation]} title={`NCPOR live data for ${station}`} />
+      </Card>
 
       <SectionCard title="Stored observations and analysis" testId="weather-analysis"
         subtitle="Stored NCPOR AWS and ERA5 rows in the station database, not the live figures above"

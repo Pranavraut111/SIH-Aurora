@@ -36,7 +36,7 @@ IST = timezone(timedelta(hours=5, minutes=30))     # no daylight saving; no tzda
 VISIT_GAP_S = 30 * 60
 MAX_TRACKED = 20_000                                 # per day; beyond, visits count without de-duplication
 RETENTION_DAYS = 90
-ENTRY_RE = re.compile(r"^(main|tour|story:(blizzard|generator|fuel)|module:[A-Za-z]{1,32})$")
+ENTRY_RE = re.compile(r"^(main|tour|story:(blizzard|generator|fuel|linkloss)|module:[A-Za-z]{1,32})$")
 NOT_A_PERSON = re.compile(r"bot|crawl|spider|slurp|preview|headless|lighthouse|monitor|curl|wget|python|httpx",
                           re.IGNORECASE)
 

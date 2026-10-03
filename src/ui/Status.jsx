@@ -17,7 +17,8 @@ export function StatusChip({ status = 'normal', label, ...rest }) {
       icon={<StatusDot status={status} size={6} sx={{ ml: '8px !important' }} />}
       data-status={status}
       sx={(theme) => ({
-        color: theme.vars.palette.status[status],
+        // The offline grey is a dot colour; as text on its tint it falls below AA.
+        color: status === 'offline' ? theme.vars.palette.text.primary : theme.vars.palette.status[status],
         backgroundColor: theme.vars.palette.status[`${status}Tint`],
         '& .MuiChip-icon': { marginRight: '-2px' },
       })}

@@ -177,6 +177,59 @@ export const STORIES = {
       },
     ],
   },
+
+  linkloss: {
+    id: 'linkloss',
+    title: 'Satellite link drops at Bharati',
+    summary: 'The link to India goes down: the station keeps working and recording, then everything syncs when the link returns.',
+    station: 'bharati',
+    scenario: 'link_loss',
+    minutes: 2,
+    steps: [
+      {
+        page: 'overview', station: 'bharati', targets: [tour('overview')],
+        title: 'Satellite link drops at Bharati',
+        body: 'Bharati talks to India over a satellite link that can drop for hours in bad weather. Press Next to cut it (simulated) and see what happens to the data.',
+      },
+      {
+        targets: [tid('link-banner'), tid('demo-banner')],
+        before: async (c) => { await c.inject(); await c.waitFor((d) => d.link && !d.link.up, 8000); },
+        title: 'The link is down',
+        body: ({ joined }) => (joined
+          ? 'Another visitor already cut this link, so you are following theirs. The dashboard keeps the last data it received and says when that was.'
+          : 'The dashboard keeps the last data it received, and says when that was. Every figure is greyed and marked stale.'),
+      },
+      {
+        targets: [tid('link-buffered'), tid('link-banner')],
+        before: async (c) => { await c.waitFor((d) => (d.link?.bufferedReadings || 0) >= 5, 15000); },
+        title: 'The station keeps working',
+        body: 'Power, heating and water carry on, and the station records every reading on site. This count, and its size in KB, grows every two seconds.',
+      },
+      {
+        targets: [tid('link-buffered'), tid('link-banner')],
+        before: async (c) => { await c.waitFor((d) => (d.link?.bufferedReadings || 0) >= 12, 20000); },
+        title: 'Something happens on site',
+        body: 'Meanwhile the CO₂ level in the living quarters rises past its limit (part of this demo). The readings that show it are on site, but nobody in India can see them yet.',
+      },
+      {
+        targets: [tid('alerts-pill')],
+        before: async (c) => {
+          await c.reset();
+          await c.waitFor((d) => d.link?.up && d.link?.lastSync && Date.now() - d.link.lastSync.at < 60000, 15000);
+        },
+        title: 'The link returns',
+        body: ({ story }) => {
+          const m = story?.data?.()?.link?.lastSync?.message;
+          return `${m ? `${m} ` : ''}Everything recorded is sent in order, and the CO₂ alert appears with the time it really happened.`;
+        },
+      },
+      {
+        page: 'overview', targets: [tid('hud-kpis'), tour('overview')],
+        title: 'No hole in the data',
+        body: 'The charts fill the gap with the readings recorded during the outage. This is the store-and-forward pattern a real station computer would use; the readings themselves come from our model.',
+      },
+    ],
+  },
 };
 
 export const STORY_IDS = Object.keys(STORIES);

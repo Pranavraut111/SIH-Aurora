@@ -3,12 +3,13 @@
 
    Welcome card: shown once on a first visit (localStorage `aurora-welcome-v1`; storage
    errors fall back to memory for this page load), reopened from Help. URL:
-   ?story=blizzard|generator|fuel starts that story (removed from the URL after reading). */
+   ?story=blizzard|generator|fuel|linkloss starts that story (removed from the URL after reading). */
 
 export const STORY_META = {
   blizzard: { station: 'maitri', scenario: 'blizzard' },
   generator: { station: 'bharati', scenario: 'generator_failure' },
   fuel: { station: 'maitri', scenario: null },
+  linkloss: { station: 'bharati', scenario: 'link_loss' },
 };
 
 const WELCOME_KEY = 'aurora-welcome-v1';
