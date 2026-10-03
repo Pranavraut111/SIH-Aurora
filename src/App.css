@@ -135,3 +135,13 @@
   .module-page { max-width: none !important; padding: 0 !important; }
   .report-document { border: 0 !important; box-shadow: none !important; padding: 0 !important; max-width: none !important; }
 }
+
+/* Simulated satellite link down (link_buffer.py): every figure on screen is the last data
+   received. Greyed, values in the secondary colour (still AA), and marked "Stale". */
+.aurora-app[data-link-down] [data-kpi] { position: relative; filter: grayscale(1); }
+.aurora-app[data-link-down] [data-kpi] .kpi-value { color: var(--aur-palette-text-secondary); }
+.aurora-app[data-link-down] [data-kpi]::after {
+  content: 'Stale'; position: absolute; top: 8px; right: 8px; padding: 0 6px; border-radius: 6px;
+  font-size: 11px; font-weight: 600; line-height: 18px; color: var(--aur-palette-text-secondary);
+  border: 1px solid var(--aur-palette-divider); background: var(--aur-palette-background-paper);
+}

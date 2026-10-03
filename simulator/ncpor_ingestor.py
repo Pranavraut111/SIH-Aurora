@@ -191,6 +191,7 @@ def init_db():
 
 
 def parse_canvasjs_series(html_text):
+    """{series name: [(epoch ms, value), …]} from the CanvasJS charts on an NCPOR live page."""
     results = {}
     pattern = r'name:\s*"([^"]+)"[\s\S]*?dataPoints:\s*\[([\s\S]*?)\]'
     matches = re.findall(pattern, html_text)
@@ -209,102 +210,150 @@ def parse_canvasjs_series(html_text):
             results[series_name] = parsed_points
     return results
 
+
+# Series on the NCPOR live page → (parameter, unit, sensor). The wind unit is taken from
+# the page's own axis title ("Wind Speed (m/s)"); NCPOR does not document it elsewhere,
+# so it is reported as "as labelled on the page, not independently confirmed".
+NCPOR_SERIES = {
+    "temperature": ("temperature", "°C", "IMD AWS Temp Sensor"),
+    "wind speed": ("wind_speed", "m/s", "Anemometer (10m)"),
+    "air pressure": ("air_pressure", "hPa", "Barometric Pressure Sensor"),
+    "relative humidity": ("relative_humidity", "%", "Hygrometer (2m)"),
+    "wind direction": ("wind_direction", "°", "Wind Vane (10m)"),
+}
+NCPOR_DATASET = "NCPOR-AWS-Live"
+NCPOR_SOURCE = "NCPOR Official Data Portal"
+
+# Plausibility (a value outside → "suspect"): physical limits for a coastal/near-coastal
+# Antarctic AWS, and the largest believable change per hour between two readings.
+PLAUSIBLE_RANGE = {
+    "temperature": (-90.0, 25.0), "wind_speed": (0.0, 60.0), "air_pressure": (850.0, 1080.0),
+    "relative_humidity": (0.0, 100.0), "wind_direction": (0.0, 360.0),
+}
+MAX_CHANGE_PER_HOUR = {"temperature": 12.0, "wind_speed": 20.0, "air_pressure": 8.0, "relative_humidity": 50.0}
+SUSPECT = "suspect"
+GOOD = "verified_aws_telemetry"
+
+
+class NcporPageError(Exception):
+    """The page answered but could not be used (format changed, no known series)."""
+
+
+def page_wind_unit(html_text: str) -> str | None:
+    """The unit in the page's wind-speed axis title, e.g. 'm/s', or None if absent."""
+    m = re.search(r'title:\s*"Wind Speed\s*\(([^)]+)\)"', html_text, re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def check_plausibility(param: str, points: list[tuple[int, float]]) -> list[tuple[int, float, str | None]]:
+    """[(ts, value, reason or None)], oldest first. A value is suspect if it is outside the
+    physical range, or changed faster than MAX_CHANGE_PER_HOUR since the last good value
+    (so one spike is flagged, not the reading after it)."""
+    lo, hi = PLAUSIBLE_RANGE.get(param, (float("-inf"), float("inf")))
+    rate = MAX_CHANGE_PER_HOUR.get(param)
+    out, last_good = [], None
+    for ts, v in sorted(points):
+        reason = None
+        if not (lo <= v <= hi):
+            reason = f"outside the plausible range {lo:g}…{hi:g}"
+        elif rate is not None and last_good is not None:
+            hours = max(1.0, (ts - last_good[0]) / 3_600_000)
+            if abs(v - last_good[1]) > rate * hours:
+                reason = f"jumped {abs(v - last_good[1]):.1f} in {hours:.1f} h (limit {rate:g}/h)"
+        if reason is None:
+            last_good = (ts, v)
+        out.append((ts, v, reason))
+    return out
+
+
+def fetch_live_page(url: str) -> str:
+    headers = {"User-Agent": "AntarcticDigitalTwin/1.0 (NCPOR Scientific Integration)"}
+    resp = requests.get(url, headers=headers, timeout=12)
+    if resp.status_code != 200:
+        raise NcporPageError(f"HTTP {resp.status_code}")
+    return resp.text
+
+
 def ingest_live_station(station_id: str):
+    """Fetch, parse, check and store one station's NCPOR live page. Never raises: the
+    result says success/failed, and every attempt is logged in ingestion_logs. A failed
+    attempt stores nothing, so the last good data stays in place."""
     info = STATION_INFO.get(station_id.lower())
     if not info:
         return {"status": "error", "message": f"Unknown station {station_id}"}
 
     url = info["live_url"]
-    headers = {"User-Agent": "AntarcticDigitalTwin/1.0 (NCPOR Scientific Integration)"}
     try:
-        resp = requests.get(url, headers=headers, timeout=12)
-        if resp.status_code != 200:
-            raise Exception(f"HTTP {resp.status_code}")
-
-        series_map = parse_canvasjs_series(resp.text)
-        if not series_map:
-            raise Exception("No data series parsed from page")
+        html = fetch_live_page(url)
+        series_map = parse_canvasjs_series(html)
+        known = {}
+        unknown = []
+        for series_name, points in series_map.items():
+            meta = next((m for k, m in NCPOR_SERIES.items() if k in series_name.lower()), None)
+            if meta is None:
+                unknown.append(series_name)
+            else:
+                known[series_name] = (meta, points)
+        if not known:
+            raise NcporPageError("page format changed: no known data series found"
+                                 + (f" (found: {', '.join(unknown)})" if unknown else ""))
+        if unknown:
+            log.warning("[%s] NCPOR page has unknown series %s (ignored)", station_id, unknown)
+        wind_unit = page_wind_unit(html)
+        if any(m[0] == "wind_speed" for m, _ in known.values()) and wind_unit not in ("m/s", None):
+            raise NcporPageError(f"wind speed is now labelled '{wind_unit}' on the page (expected m/s)")
 
         now_ts = int(time.time() * 1000)
-        ingested_count = 0
-        skipped = 0
+        ingested = suspect = 0
+        suspects = []
+        newest = None
         with db.connect() as conn:
-            c = conn.cursor()
-
-            name_map = {
-                "temperature": ("temperature", "°C", "IMD AWS Temp Sensor"),
-                "wind speed": ("wind_speed", "m/s", "Anemometer (10m)"),
-                "air pressure": ("air_pressure", "hPa", "Barometric Pressure Sensor"),
-                "relative humidity": ("relative_humidity", "%", "Hygrometer (2m)"),
-                "wind direction": ("wind_direction", "°", "Wind Vane (10m)")
-            }
-
-            for series_name, points in series_map.items():
-                key = series_name.lower()
-                match = None
-                for k, meta in name_map.items():
-                    if k in key:
-                        match = meta
-                        break
-
-                if not match:
-                    param, unit, sensor = key.replace(" ", "_"), "units", "Station Instrument"
-                else:
-                    param, unit, sensor = match
-
-                for pt_ts, val in points:
-                    iso_time = datetime.fromtimestamp(pt_ts / 1000.0, tz=timezone.utc).isoformat()
-                    try:
-                        c.execute("""
-                            INSERT OR REPLACE INTO observations
-                            (station_id, station_name, timestamp, iso_time, parameter, value, unit,
-                             source, dataset, sensor, quality, latitude, longitude, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            info["id"],
-                            info["name"],
-                            pt_ts,
-                            iso_time,
-                            param,
-                            val,
-                            unit,
-                            "NCPOR Official Data Portal",
-                            "NCPOR-AWS-Live",
-                            sensor,
-                            "verified_aws_telemetry",
-                            info["latitude"],
-                            info["longitude"],
-                            now_ts
-                        ))
-                        ingested_count += 1
-                    except sqlite3.Error as e:
-                        skipped += 1
-                        if skipped == 1:
-                            log.warning("[%s] NCPOR row insert failed (%s); further failures counted", station_id, e)
-
-            if skipped:
-                log.warning("[%s] NCPOR ingest skipped %d rows", station_id, skipped)
-            c.execute("""
+            for (param, unit, sensor), points in known.values():
+                for pt_ts, val, reason in check_plausibility(param, points):
+                    quality = SUSPECT if reason else GOOD
+                    conn.execute("""
+                        INSERT OR REPLACE INTO observations
+                        (station_id, station_name, timestamp, iso_time, parameter, value, unit,
+                         source, dataset, sensor, quality, latitude, longitude, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (info["id"], info["name"], pt_ts,
+                          datetime.fromtimestamp(pt_ts / 1000.0, tz=timezone.utc).isoformat(),
+                          param, val, unit, NCPOR_SOURCE, NCPOR_DATASET, sensor, quality,
+                          info["latitude"], info["longitude"], now_ts))
+                    ingested += 1
+                    newest = pt_ts if newest is None else max(newest, pt_ts)
+                    if reason:
+                        suspect += 1
+                        suspects.append({"parameter": param, "timestamp": pt_ts, "value": val, "reason": reason})
+            message = f"Ingested {ingested} observations from NCPOR AWS"
+            if suspect:
+                message += f"; {suspect} flagged suspect"
+                log.warning("[%s] NCPOR: %d suspect value(s): %s", station_id, suspect, suspects[:5])
+            conn.execute("""
                 INSERT INTO ingestion_logs (station_id, source_url, status, records_ingested, message, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (station_id, url, "success", ingested_count,
-                  f"Ingested {ingested_count} observations from NCPOR AWS", now_ts))
+            """, (station_id, url, "success", ingested, message, now_ts))
 
         return {
             "status": "success",
             "station_id": station_id,
-            "records_ingested": ingested_count,
-            "parameters": list(series_map.keys()),
-            "source": "https://data.ncpor.res.in"
+            "records_ingested": ingested,
+            "suspect": suspect,
+            "suspectValues": suspects[:20],
+            "newestObservation": newest,
+            "windUnitOnPage": wind_unit,
+            "parameters": [n for n in known],
+            "source": "https://data.ncpor.res.in",
         }
-    except Exception as e:
+    except (requests.RequestException, NcporPageError, sqlite3.Error) as e:
         log.warning("[%s] NCPOR live ingest failed: %s", station_id, e)
+        message = f"NCPOR page unreachable: {e}" if isinstance(e, requests.RequestException) else str(e)
         with db.connect() as conn:
             conn.execute("""
                 INSERT INTO ingestion_logs (station_id, source_url, status, records_ingested, message, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (station_id, url, "failed", 0, str(e), int(time.time() * 1000)))
-        return {"status": "failed", "error": str(e), "station_id": station_id}
+            """, (station_id, url, "failed", 0, message, int(time.time() * 1000)))
+        return {"status": "failed", "error": message, "station_id": station_id}
 
 def ingest_cached_historical_data():
     """

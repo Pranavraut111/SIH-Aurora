@@ -38,6 +38,7 @@ const AlertCentre = lazy(() => import('./overlays/AlertCentre'));
 const LinkDrawer = lazy(() => import('./overlays/LinkDrawer'));
 const DemoControlDrawer = lazy(() => import('./overlays/DemoControlDrawer'));
 const DemoBanner = lazy(() => import('./shell/DemoBanner'));
+const LinkBanner = lazy(() => import('./shell/LinkBanner'));
 const WelcomeDialog = lazy(() => import('./judge/WelcomeDialog'));
 const AboutDialog = lazy(() => import('./judge/AboutDialog'));
 const EventsDrawer = lazy(() => import('./overlays/EventsDrawer'));
@@ -266,6 +267,20 @@ export default function App() {
     return toggleConnection();
   }, [toggleConnection, isConnected]);
 
+  // Simulated satellite link (store-and-forward): when a station's buffered readings have
+  // just synced, everyone viewing it gets the summary ("Link restored: 142 readings …").
+  const link = stationData.link;
+  const linkDown = dataSource === 'websocket' && link && !link.up;
+  const lastSync = link?.lastSync;
+  const seenSync = useRef(undefined);
+  useEffect(() => {
+    if (!lastSync?.at || seenSync.current === lastSync.at) return;
+    const first = seenSync.current === undefined;
+    seenSync.current = lastSync.at;
+    if (first && Date.now() - lastSync.at > 20000) return;      // an old sync, not news
+    toast({ text: lastSync.message });
+  }, [lastSync, toast]);
+
   // "Share this view": the URL already carries ?module=&station= (useUrlState).
   const shareView = useCallback(async () => {
     const url = window.location.href;
@@ -292,7 +307,7 @@ export default function App() {
       id: `station-${sid}`, group: 'Station', label: `Switch to ${stationMeta(sid).name}`, keywords: stationMeta(sid).region, run: () => handleStationChange(sid),
     })),
     { id: 'alerts', group: 'Panels', label: 'Open the alert centre', keywords: 'alarms acknowledge history', run: openAlerts },
-    { id: 'link', group: 'Panels', label: 'Telemetry link details', keywords: 'connection source', run: openLink },
+    { id: 'link', group: 'Panels', label: 'Satellite link details', keywords: 'connection source telemetry link loss', run: openLink },
     { id: 'events', group: 'Panels', label: 'Open the event log', keywords: 'timeline', run: () => show('events') },
     { id: 'demo', group: 'Panels', label: 'Open demo control', keywords: 'inject scenario fault', run: () => show('demo') },
     { id: 'theme', group: 'Settings', label: `Switch to ${scheme === 'dark' ? 'light' : 'dark'} theme`, keywords: 'colour color mode', run: () => setMode(scheme === 'dark' ? 'light' : 'dark') },
@@ -419,7 +434,7 @@ export default function App() {
 
   return (
     <TourContext.Provider value={tourValue}>
-    <div className="aurora-app" data-tour-active={tourActive || undefined}>
+    <div className="aurora-app" data-tour-active={tourActive || undefined} data-link-down={linkDown || undefined}>
       {/* First Tab stop: past the top bar and sidebar (about 25 stops) to the page. */}
       <a className="skip-link" href="#main">Skip to content</a>
       <TopBar
@@ -451,6 +466,11 @@ export default function App() {
       />
 
       <div className="demo-banner-slot">
+        {linkDown && (
+          <Suspense fallback={null}>
+            <LinkBanner link={link} activeStation={activeStation} onOpenLink={openLink} />
+          </Suspense>
+        )}
         {anyDemoRunning && (
           <Suspense fallback={null}>
             <DemoBanner publicDemo={stationData.publicDemo} receivedAt={stationData.receivedAt} activeStation={activeStation}
@@ -505,7 +525,6 @@ export default function App() {
                     alerts={stationData.alerts}
                     activeAlerts={activeAlerts}
                     activeStation={activeStation}
-                    isConnected={isConnected}
                     timestamp={stationData.timestamp}
                     telemetrySource={telemetryBadge}
                     provenance={stationData.provenance}
@@ -559,8 +578,9 @@ export default function App() {
             onAcknowledge={acknowledgeAlert} activeStation={activeStation} canAcknowledge={dataSource === 'websocket'} />
         )}
         {mounted.link && (
-          <LinkDrawer open={open === 'link'} onClose={close} isConnected={isConnected} onToggleConnection={handleToggleConnection}
-            offlineQueueSize={stationData.offlineQueueSize || 0} telemetryBadge={telemetryBadge} provenance={stationData.provenance} />
+          <LinkDrawer open={open === 'link'} onClose={close} link={link} onToggleConnection={handleToggleConnection}
+            telemetryBadge={telemetryBadge} provenance={stationData.provenance} activeStation={activeStation}
+            onOpenDemo={() => show('demo')} />
         )}
         {(mounted.welcome || mounted.stories) && (
           <WelcomeDialog open={open === 'welcome' || open === 'stories'} view={open === 'stories' ? 'stories' : 'welcome'}

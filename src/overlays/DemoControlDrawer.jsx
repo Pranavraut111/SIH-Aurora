@@ -76,18 +76,22 @@ export default function DemoControlDrawer({ open, onClose, activeStation, public
   async function inject(id, sc) {
     const ok = await confirm({
       title: `Run “${sc.name}” at ${name}?`,
-      body: visitor
-        ? <>Every visitor sees it: for {minutes} minutes it overrides {targetText(activeStation, sc.targets)}. The values are labelled Simulated and will raise alerts; then the station resets itself. Nothing real is affected.</>
-        : <>Overrides for {sc.duration} s: {targetText(activeStation, sc.targets)}. The values are labelled Simulated and may raise alerts. Nothing real is affected.</>,
+      body: sc.kind === 'link'
+        ? <>Every visitor sees it: for {minutes} minutes the dashboard freezes on the last data from {name} while the station keeps recording. Then the link returns and everything recorded is sent. Nothing real is disconnected.</>
+        : visitor
+          ? <>Every visitor sees it: for {minutes} minutes it overrides {targetText(activeStation, sc.targets)}. The values are labelled Simulated and will raise alerts; then the station resets itself. Nothing real is affected.</>
+          : <>Overrides for {sc.duration} s: {targetText(activeStation, sc.targets)}. The values are labelled Simulated and may raise alerts. Nothing real is affected.</>,
       confirmLabel: 'Run scenario', danger: !visitor,
     });
     if (!ok) return;
     setBusy(id);
     try {
       await apiPost(`/sim/inject/${id}?stationId=${activeStation}`);
-      toast({ text: visitor
-        ? `Running “${sc.name}” at ${name}: watch the alerts, the cards and the 3D view. It resets itself in ${minutes} minutes.`
-        : `Injected “${sc.name}” into ${name} for ${sc.duration} s.` });
+      toast({ text: sc.kind === 'link'
+        ? `${name}'s link is down (simulated): watch the readings waiting on site grow. It comes back in ${minutes} minutes.`
+        : visitor
+          ? `Running “${sc.name}” at ${name}: watch the alerts, the cards and the 3D view. It resets itself in ${minutes} minutes.`
+          : `Injected “${sc.name}” into ${name} for ${sc.duration} s.` });
     } catch (err) {
       console.error('[Demo] inject failed', err);
       toast({ severity: err?.status === 409 || err?.status === 429 ? 'info' : 'error', text: `Not started: ${refusal(err)}` });
@@ -156,7 +160,7 @@ export default function DemoControlDrawer({ open, onClose, activeStation, public
                   })}>
                   <Stack direction="row" sx={{ gap: 2, alignItems: 'baseline' }}>
                     <Typography sx={{ fontWeight: 600, fontSize: 14, flex: 1 }}>{sc.name}</Typography>
-                    <Typography variant="caption" sx={{ color: 'text.secondary', fontFeatureSettings: '"tnum" 1' }}>{visitor ? `${minutes} min` : `${sc.duration} s`}</Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary', fontFeatureSettings: '"tnum" 1' }}>{visitor || sc.kind === 'link' ? `${minutes} min` : `${sc.duration} s`}</Typography>
                   </Stack>
                   <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>{sc.description}</Typography>
                   {sc.targets && <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 1, mb: 0 }}>Overrides: {targetText(activeStation, sc.targets)}</Typography>}

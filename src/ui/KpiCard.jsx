@@ -62,6 +62,7 @@ export default function KpiCard({
       aria-label={label}
       data-testid={testId}
       data-kpi-size={hero ? 'hero' : 'compact'}
+      data-kpi=""
       sx={[{ height: '100%', minWidth: 0 }, ...(Array.isArray(sx) ? sx : [sx])]}
     >
       <Box sx={{ p: hero ? 6 : 5, display: 'flex', flexDirection: 'column', gap: hero ? 3 : 2, height: '100%' }}>
@@ -81,7 +82,7 @@ export default function KpiCard({
           <Skeleton variant="text" width="60%" sx={{ fontSize: hero ? 52 : 30 }} />
         ) : (
           <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1.5, minWidth: 0 }}>
-            <Typography variant={hero ? 'kpiHero' : 'kpi'} component="p" sx={{ color: missing ? 'text.disabled' : 'text.primary', m: 0 }}>
+            <Typography variant={hero ? 'kpiHero' : 'kpi'} component="p" className="kpi-value" sx={{ color: missing ? 'text.disabled' : 'text.primary', m: 0 }}>
               <FadeValue>{text}</FadeValue>
             </Typography>
             {unit && !missing && (

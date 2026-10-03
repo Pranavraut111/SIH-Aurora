@@ -25,6 +25,7 @@ import { STATION_IDS, stationMeta, stationMetaDetailed } from '../../data/statio
 import { formatNumber } from '../../lib/format';
 import { describeFailure } from '../../lib/failure';
 import PageHeader from '../../ui/PageHeader';
+import NcporFreshness from '../../ui/NcporFreshness';
 import ProvenanceChip from '../../ui/Provenance';
 import ScrollX from '../../ui/ScrollX';
 import SectionCard from '../../ui/SectionCard';
@@ -56,15 +57,17 @@ function DataSources({ stationNames, onIngest, busy, system }) {
               <ProvenanceChip kind="REAL" />
             </Stack>
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-              Station observations scraped from data.ncpor.res.in on request (manual ingest), stored in the station database.
+              Weather station observations from data.ncpor.res.in, fetched automatically for both stations, each value checked
+              for plausibility, and stored in the station database.
             </Typography>
             <Typography sx={{ typography: 'mono', fontSize: 12, color: 'text.secondary', mt: 1 }}>https://data.ncpor.res.in/</Typography>
+            <NcporFreshness stations={STATION_IDS} title="Sync status" sx={{ mt: 3 }} />
           </Box>
           <Stack direction="row" sx={{ gap: 2, flexWrap: 'wrap' }}>
             {STATION_IDS.map((sid) => (
               <WriteButton team key={sid} variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} disabled={busy}
                 onClick={() => onIngest(sid)} data-testid={`admin-ingest-${sid}`}>
-                Ingest {stationNames[sid]}
+                Sync {stationNames[sid]} now
               </WriteButton>
             ))}
           </Stack>
@@ -142,9 +145,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
 
   async function ingest(sid) {
     const ok = await confirm({
-      title: `Ingest NCPOR data for ${stationNames[sid]}?`,
-      body: 'Fetches the NCPOR AWS live page and stores the new observations in the station database.',
-      confirmLabel: 'Ingest',
+      title: `Sync NCPOR data for ${stationNames[sid]} now?`,
+      body: 'Fetches the NCPOR AWS live page now (it is also synced automatically), checks each value and stores the new observations.',
+      confirmLabel: 'Sync now',
     });
     if (!ok) return;
     setBusy(true);
@@ -152,8 +155,8 @@ export default function AdminModule({ activeStation = 'maitri' }) {
       const res = await apiPost(`/ncpor/ingest?stationId=${sid}`);
       const r = res?.results?.[sid];
       toast(r?.status === 'success'
-        ? { text: `Ingested ${formatNumber(r.records_ingested)} NCPOR AWS records for ${stationNames[sid]}.` }
-        : { severity: 'error', text: `NCPOR ingest failed for ${stationNames[sid]}: ${r?.error || 'no result'}. Nothing was stored.` });
+        ? { text: `Synced ${formatNumber(r.records_ingested)} NCPOR readings for ${stationNames[sid]}${r.suspect ? `; ${r.suspect} flagged suspect` : ''}.` }
+        : { severity: 'error', text: `NCPOR sync failed for ${stationNames[sid]}: ${r?.error || 'no result'}. The last good data is kept.` });
     } catch (err) {
       console.error('[Admin] ingest failed', err);
       toast({ severity: 'error', text: `Ingest failed: ${describeApiError(err)}` });

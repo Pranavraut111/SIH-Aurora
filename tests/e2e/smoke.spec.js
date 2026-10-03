@@ -600,7 +600,7 @@ test('product tour on a phone: sidebar steps open the drawer, demo control point
 });
 
 test('page tours: Tour this page on Weather, Infrastructure, What-if and Administration', async ({ page }) => {
-  for (const [id, steps] of [['environmental', 4], ['infrastructure', 3], ['simulation', 4], ['admin', 3]]) {
+  for (const [id, steps] of [['environmental', 5], ['infrastructure', 3], ['simulation', 4], ['admin', 3]]) {
     await page.goto(`/?module=${id}`);
     await page.getByTestId('page-tour').click();
     await completeTour(page, steps);
@@ -830,6 +830,22 @@ test('judge mode: anyone can run a demo scenario, every visitor sees the banner,
   expect(failedRequests.filter((f) => !/ 40[39] | 429 /.test(f)), 'failed requests in the public demo').toEqual([]);
 });
 
+test('weather and administration say how fresh the NCPOR live data is', async ({ page }) => {
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  await page.goto('/?module=environmental&station=bharati&tour=off');
+  const line = page.getByTestId('ncpor-freshness-bharati');
+  await expect(line).toBeVisible();
+  // Live: "Last synced … · N readings · next sync in …" (or a clear error); a test stack never syncs.
+  await expect(line).toContainText(IS_REMOTE ? /Last synced|NCPOR page unreachable|NCPOR sync failing/ : /Not synced yet|Last synced|automatic sync off/);
+  await page.getByTestId('ncpor-info').hover();
+  await expect(page.getByRole('tooltip')).toContainText('not independently confirmed');
+  await page.goto('/?module=admin&tour=off');
+  await expect(page.getByTestId('ncpor-freshness-maitri')).toBeVisible();
+  await expect(page.getByTestId('ncpor-freshness-bharati')).toBeVisible();
+  expect(consoleErrors, 'console errors').toEqual([]);
+  expect(failedRequests, 'failed requests').toEqual([]);
+});
+
 /** Play a story from the picker (or a deep link) to its last step. */
 async function playStory(page, id) {
   const popover = page.getByTestId('tour-popover');
@@ -850,14 +866,14 @@ async function playStory(page, id) {
 }
 
 for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
-  for (const id of ['blizzard', 'generator', 'fuel']) {
+  for (const id of ['blizzard', 'generator', 'fuel', 'linkloss']) {
     test(`story "${id}" completes on ${label}`, async ({ page, request }) => {
       const judge = await judgeMode(request);
       test.skip(id !== 'fuel' && !judge.publicDemo, 'PUBLIC_DEMO is off on this stack');
       test.skip(id === 'fuel' && !judge.sandbox, 'VISITOR_SANDBOX is off on this stack');
       test.setTimeout(240_000);
       const { consoleErrors, failedRequests } = watchForProblems(page);
-      const station = id === 'generator' ? 'bharati' : 'maitri';
+      const station = id === 'generator' || id === 'linkloss' ? 'bharati' : 'maitri';
       if (id !== 'fuel') await waitForFreeStation(request, station);
       // On a live deployment one visitor may start a scenario per minute.
       if (id !== 'fuel' && IS_REMOTE) await page.waitForTimeout(61_000);
@@ -869,6 +885,12 @@ for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['ph
         // The story reset its scenario at the end.
         await expect.poll(async () => Boolean((await (await request.get(`${API}/api/station/${station}/state`)).json()).publicDemo?.[station]),
           { timeout: 20_000 }).toBe(false);
+        if (id === 'linkloss') {
+          // The link is back and what the station recorded meanwhile was synced.
+          const link = (await (await request.get(`${API}/api/station/bharati/state`)).json()).link;
+          expect(link.up).toBe(true);
+          expect(link.lastSync.readings).toBeGreaterThan(0);
+        }
       } else {
         await page.request.post(`${API}/api/sandbox/reset`);
       }

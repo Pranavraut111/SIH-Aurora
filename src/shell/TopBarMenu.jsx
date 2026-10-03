@@ -65,7 +65,7 @@ export default function TopBarMenu({
       </MenuItem>
       <MenuItem onClick={pick(onOpenLink)} sx={phone}>
         <ListItemIcon>{isConnected ? <SensorsOutlined fontSize="small" /> : <SensorsOffOutlined fontSize="small" />}</ListItemIcon>
-        <ListItemText primary={isConnected ? 'Telemetry link: up' : 'Telemetry link: cut (simulated)'} />
+        <ListItemText primary={isConnected ? 'Satellite link: up' : 'Satellite link: down (simulated)'} />
       </MenuItem>
       <MenuItem onClick={pick(onToggleTimeline)} sx={phone}>
         <ListItemIcon><HistoryOutlined fontSize="small" /></ListItemIcon>

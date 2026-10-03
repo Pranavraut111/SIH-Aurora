@@ -13,7 +13,7 @@ import ProvenanceChip from '../../ui/Provenance';
 import ScrollX from '../../ui/ScrollX';
 import { EmptyState, ErrorState, LoadingBlock } from '../../ui/States';
 
-const STORY_NAMES = { blizzard: 'Blizzard hits Maitri', generator: 'Generator failure at Bharati', fuel: 'Running low on fuel' };
+const STORY_NAMES = { blizzard: 'Blizzard hits Maitri', generator: 'Generator failure at Bharati', fuel: 'Running low on fuel', linkloss: 'Satellite link drops at Bharati' };
 
 function entryName(entry) {
   if (entry === 'main') return 'Main link';

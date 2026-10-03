@@ -15,8 +15,8 @@ export const DATA_SOURCES = {
     help: 'Backend unreachable. Random-walk demo data generated in this browser. Not real.',
   },
   offline: {
-    label: 'Link cut (simulated)', status: 'offline',
-    help: 'Simulated link loss: showing the last received values.',
+    label: 'Link down (simulated)', status: 'offline',
+    help: 'Simulated satellite link loss: the station keeps recording on site; this dashboard shows the last data received until the link returns.',
   },
   connecting: {
     label: 'Connecting…', status: 'offline',

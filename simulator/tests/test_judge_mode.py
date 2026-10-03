@@ -365,7 +365,7 @@ def test_one_scenario_per_station_and_a_friendly_cooldown(judge):
     assert other.status_code == 200
     # Only the predefined scenarios are public.
     assert ub.judge_mode.PUBLIC_SCENARIOS == ("generator_failure", "heating_failure", "blizzard", "water_crisis",
-                                              "co2_spike")
+                                              "co2_spike", "link_loss")
     assert b.post("/api/sim/inject/not_a_demo?stationId=maitri", headers={"X-Real-IP": "10.7.7.7"}).status_code == 403
 
 

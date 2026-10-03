@@ -33,7 +33,11 @@ import db
 log = logging.getLogger("aurora.judge_mode")
 
 COOKIE_NAME = "aurora_sandbox"
-PUBLIC_SCENARIOS = ("generator_failure", "heating_failure", "blizzard", "water_crisis", "co2_spike")
+# link_loss is not a simulator scenario: the backend takes the station's simulated
+# satellite link down (link_buffer.py) and restores it when the demo ends.
+LINK_SCENARIO = "link_loss"
+LINK_SCENARIO_NAME = "Satellite link loss"
+PUBLIC_SCENARIOS = ("generator_failure", "heating_failure", "blizzard", "water_crisis", "co2_spike", LINK_SCENARIO)
 KINDS = ("threshold", "ledger", "ledger_audit", "ack", "command")
 
 

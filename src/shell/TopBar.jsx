@@ -128,12 +128,12 @@ export default function TopBar({
             </BarChip>
           </Hint>
 
-          <Hint title="Telemetry link details" sx={hideBelow('sm')}>
+          <Hint title="Satellite link details" sx={hideBelow('sm')}>
             <BarChip onClick={onOpenLink} className="status-pill connection"
-              aria-label={`Telemetry link: ${isConnected ? 'up' : 'cut (simulated)'}`}
+              aria-label={`Satellite link: ${isConnected ? 'up' : 'down (simulated)'}`}
               sx={(theme) => ({ color: isConnected ? undefined : theme.vars.palette.status.offline })}>
               {isConnected ? <SensorsOutlined /> : <SensorsOffOutlined />}
-              <Box component="span" sx={{ display: { xs: 'none', lg: 'inline' } }}>{isConnected ? 'Link up' : 'Link cut (simulated)'}</Box>
+              <Box component="span" sx={{ display: { xs: 'none', lg: 'inline' } }}>{isConnected ? 'Link up' : 'Link down'}</Box>
             </BarChip>
           </Hint>
 

@@ -105,9 +105,14 @@ const PAGE_TOUR_STEPS = {
       body: 'Observations, anomaly scoring, a statistical forecast, correlations and a cold-exposure risk view. Each one names its method and the data it used.',
     },
     {
+      targets: ['[data-testid="ncpor-freshness"]'],
+      title: 'Real data from NCPOR',
+      body: 'Real weather station readings from NCPOR\'s public website are fetched automatically every half hour. This line says when, and any reading that looks implausible is flagged instead of being used.',
+    },
+    {
       targets: ['[data-testid="ncpor-ingest"]'],
-      title: 'Fetch new observations',
-      body: 'Pulls the latest NCPOR data into the database. It changes stored data, so it needs operator sign-in and asks for confirmation.',
+      title: 'Sync now',
+      body: 'The Aurora team can also fetch the newest NCPOR data at once. It changes stored data, so it needs Team sign-in and asks for confirmation.',
     },
   ],
   infrastructure: [

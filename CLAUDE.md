@@ -17,6 +17,14 @@
   **only** code that advances physics state (`advance_fallback`). All GET/WS reads return the last
   published snapshot (`dataSource`: `simulator` | `physics-fallback`, plus `provenance`). Never call
   `StationPhysicsModel.compute()` from a request handler.
+- **Simulated satellite link** (`simulator/link_buffer.py`): while a station's link is down the tick
+  holds each reading in a station-side buffer instead of publishing it; on restore the next tick
+  evaluates and publishes them in order (`sync_link`: alerts at their real time, history backfilled).
+  Team toggle `POST /api/connection/toggle`; visitors use the public demo scenario `link_loss`.
+- **NCPOR live sync** (`simulator/ncpor_sync.py`): the backend fetches both NCPOR AWS pages every
+  `NCPOR_SYNC_INTERVAL_MIN` (back-off on failure); `GET /api/ncpor/status` reports freshness.
+  Implausible values are stored with `quality = 'suspect'` and every observation reader excludes them.
+  Parser tests use the saved pages in `simulator/tests/fixtures/ncpor/`.
 - Station ids are validated by one dependency (`station_param` / `require_station`): unknown → 404.
 - **Station facts live in ONE file: `simulator/station_config.json`** (metadata with source/confidence,
   buildings, dependency graph, default alert thresholds for every sensor, remote-command catalogue).

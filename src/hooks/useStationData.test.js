@@ -179,7 +179,7 @@ describe('message handling', () => {
     const { result } = renderHook(() => useStationData('maitri'));
     await act(async () => { latest().open(); });
     await act(async () => { latest().send(snapshot()); });
-    await act(async () => { latest().send(snapshot({ sensors: { generator: { gen_temp: 75 } } })); });
+    await act(async () => { latest().send(snapshot({ sensors: { generator: { gen_temp: 75 } }, timestamp: 1_700_000_002_000 })); });
     const series = result.current.stationData.history.generator.gen_temp;
     expect(series.map((p) => p.value)).toEqual([72, 75]);
   });
@@ -194,23 +194,33 @@ describe('message handling', () => {
   });
 });
 
-describe('manual link-loss simulation', () => {
-  it('queues incoming messages instead of overwriting the cached snapshot', async () => {
+describe('simulated satellite link (backend store-and-forward)', () => {
+  const down = { up: false, syncing: false, lastContact: 1_700_000_000_000, bufferedReadings: 3, bufferedBytes: 4200 };
+
+  it('shows the backend link state: stale while down, buffer count from the backend', async () => {
     const { result } = renderHook(() => useStationData('maitri'));
     await act(async () => { latest().open(); });
     await act(async () => { latest().send(snapshot()); });
-
-    await act(async () => { await result.current.toggleConnection(); });
+    // While down the backend repeats the last data received (same timestamp) with the live buffer.
+    await act(async () => { latest().send(snapshot({ link: down })); });
     expect(result.current.stationData.connected).toBe(false);
     expect(result.current.stationData.isCached).toBe(true);
+    expect(result.current.stationData.offlineQueueSize).toBe(3);
+    expect(result.current.stationData.link.bufferedBytes).toBe(4200);
+    expect(result.current.stationData.history.generator.gen_temp).toHaveLength(1);   // nothing new added
 
-    await act(async () => { latest().send(snapshot({ sensors: { generator: { gen_temp: 99 } } })); });
-    expect(result.current.stationData.sensors.generator.gen_temp).toBe(72);   // cached, not overwritten
-    expect(result.current.stationData.offlineQueueSize).toBe(2);
-
-    await act(async () => { await result.current.toggleConnection(); });
+    await act(async () => { latest().send(snapshot({ timestamp: 1_700_000_010_000, link: { ...down, up: true, bufferedReadings: 0 } })); });
     expect(result.current.stationData.connected).toBe(true);
     expect(result.current.stationData.offlineQueueSize).toBe(0);
+  });
+
+  it('the team toggle asks the backend; nothing is simulated in the browser', async () => {
+    const { apiPost } = await import('../services/api');
+    const { result } = renderHook(() => useStationData('maitri'));
+    await act(async () => { latest().open(); });
+    await act(async () => { await result.current.toggleConnection(); });
+    expect(apiPost).toHaveBeenCalledWith('/connection/toggle?stationId=maitri');
+    expect(result.current.stationData.connected).toBe(true);           // until the backend says otherwise
   });
 });
 

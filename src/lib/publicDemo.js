@@ -10,6 +10,7 @@ const LABELS = {
   blizzard: 'Blizzard',
   water_crisis: 'Water system alert',
   co2_spike: 'CO₂ spike',
+  link_loss: 'Satellite link loss',
 };
 
 /** "Generator failure" for a running record (or a scenario id). */

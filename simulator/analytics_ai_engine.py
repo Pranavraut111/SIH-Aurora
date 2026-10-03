@@ -63,7 +63,7 @@ def latest_window(station_id, parameter="temperature", limit=500, dataset=None):
         if dataset is None:
             row = conn.execute(
                 "SELECT dataset FROM observations WHERE station_id = ? AND parameter = ? "
-                "ORDER BY timestamp DESC LIMIT 1", (station_id, parameter)).fetchone()
+                "AND quality != 'suspect' ORDER BY timestamp DESC LIMIT 1", (station_id, parameter)).fetchone()
             dataset = row[0] if row else None
         if dataset is None:
             empty = pd.DataFrame(columns=["timestamp", "iso_time", "parameter", "value", "unit", "source",
@@ -73,7 +73,7 @@ def latest_window(station_id, parameter="temperature", limit=500, dataset=None):
             """
             SELECT timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, latitude, longitude
             FROM observations
-            WHERE station_id = ? AND parameter = ? AND dataset = ?
+            WHERE station_id = ? AND parameter = ? AND dataset = ? AND quality != 'suspect'
             ORDER BY timestamp DESC
             LIMIT ?
             """, conn, params=[station_id, parameter, dataset, int(limit)])
@@ -102,7 +102,8 @@ def query_observations(station_id, parameter="temperature", frequency="h", start
         return df
     with db.connect() as conn:
         q = ("SELECT timestamp, iso_time, parameter, value, unit, source, dataset, sensor, quality, "
-             "latitude, longitude FROM observations WHERE station_id = ? AND parameter = ?")
+             "latitude, longitude FROM observations WHERE station_id = ? AND parameter = ? "
+             "AND quality != 'suspect'")
         params = [station_id, parameter]
         if start_ts:
             q += " AND timestamp >= ?"
@@ -341,7 +342,7 @@ def run_correlation_matrix(station_id):
         df = pd.read_sql_query("""
             SELECT timestamp, parameter, value
             FROM observations
-            WHERE station_id = ? AND dataset = ? AND timestamp BETWEEN ? AND ?
+            WHERE station_id = ? AND dataset = ? AND timestamp BETWEEN ? AND ? AND quality != 'suspect'
             ORDER BY timestamp ASC
         """, conn, params=[station_id, meta["dataset"],
                            int(pd.Timestamp(meta["start"]).timestamp() * 1000), meta["endTimestamp"]])
@@ -379,7 +380,7 @@ def assess_blizzard_and_polar_risks(station_id):
         df = pd.read_sql_query("""
             SELECT parameter, value, unit, timestamp, dataset, source
             FROM observations
-            WHERE station_id = ?
+            WHERE station_id = ? AND quality != 'suspect'
             ORDER BY timestamp DESC
             LIMIT 100
         """, conn, params=[station_id])

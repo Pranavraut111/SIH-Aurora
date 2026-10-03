@@ -50,6 +50,8 @@ const serviceEnv = {
   VISITOR_SANDBOX: 'true',
   PUBLIC_DEMO: 'true',
   PUBLIC_DEMO_COOLDOWN_S: '3',
+  // Never fetch the real NCPOR site from a test run (the freshness line says so).
+  NCPOR_SYNC_INTERVAL_MIN: '0',
 };
 
 export default defineConfig({

@@ -52,8 +52,7 @@ export function useStationData(activeStation = 'maitri') {
   const simUnsubRef = useRef(null);   // the ONE browser-demo subscription (B20)
   const historyRef = useRef({});
   const activeStationRef = useRef(activeStation);
-  const isManuallyDisconnectedRef = useRef(false);
-  const offlineQueueRef = useRef(0);
+  const lastTsRef = useRef(null);      // timestamp of the last snapshot added to the history
 
   // Keep station ref updated
   useEffect(() => {
@@ -105,20 +104,14 @@ export function useStationData(activeStation = 'maitri') {
             return;
           }
 
-          // If link is simulated as LOST, queue readings and do not overwrite with live data
-          if (isManuallyDisconnectedRef.current) {
-            offlineQueueRef.current += 1;
-            setStationData(prev => ({
-              ...prev,
-              connected: false,
-              signalQuality: 0,
-              isCached: true,
-              offlineQueueSize: offlineQueueRef.current,
-            }));
-            return;
-          }
-
-          const history = updateHistory(state.sensors || {});
+          // The simulated satellite link (backend, store-and-forward): while it is down
+          // every snapshot repeats the last data received (same timestamp) with the live
+          // buffer counts, so nothing new is added to the history.
+          const link = state.link ?? null;
+          const up = link ? link.up : true;
+          const fresh = state.timestamp !== lastTsRef.current;
+          lastTsRef.current = state.timestamp;
+          const history = fresh ? updateHistory(state.sensors || {}) : { ...historyRef.current };
 
           setStationData({
             sensors: state.sensors || {},
@@ -132,12 +125,13 @@ export function useStationData(activeStation = 'maitri') {
             // Demo scenarios running on any station (judge mode), with the time they were received.
             publicDemo: state.publicDemo ?? null,
             receivedAt: Date.now(),
-            connected: true,
+            connected: up,
+            link,
             bandwidth: state.bandwidth ?? null,
             signalQuality: state.signalQuality ?? null,
             activePatterns: state.activePatterns || [],
-            offlineQueueSize: 0,
-            isCached: false,
+            offlineQueueSize: link?.bufferedReadings ?? 0,
+            isCached: !up,
             // Backend telemetry source + provenance ("simulator" | "physics-fallback")
             telemetrySource: state.dataSource ?? null,
             provenance: state.provenance ?? null,
@@ -159,10 +153,8 @@ export function useStationData(activeStation = 'maitri') {
           return; // a new socket is already connecting; no fallback, no retry
         }
         if (ws._disposed) return; // hook unmounted
-        if (!isManuallyDisconnectedRef.current) {
-          fallbackToSimulation();
-          scheduleReconnect();
-        }
+        fallbackToSimulation();
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
@@ -207,18 +199,6 @@ export function useStationData(activeStation = 'maitri') {
       startSimulation(2000);
 
       simUnsubRef.current = subscribeSim(() => {
-        if (isManuallyDisconnectedRef.current) {
-          offlineQueueRef.current += 1;
-          setStationData(prev => ({
-            ...prev,
-            connected: false,
-            signalQuality: 0,
-            isCached: true,
-            offlineQueueSize: offlineQueueRef.current,
-          }));
-          return;
-        }
-
         const sid = activeStationRef.current;
         const snapshot = getSnapshot(sid);
         const history = updateHistory(snapshot.sensors);
@@ -249,39 +229,12 @@ export function useStationData(activeStation = 'maitri') {
     });
   }, [updateHistory, setDataSource]);
 
-  // ── Link Toggle Handler ───────────────────────────────────
-  const toggleConnection = useCallback(async () => {
-    const nextState = !stationData.connected;
-    isManuallyDisconnectedRef.current = !nextState;
-
-    if (!nextState) {
-      // Transition to OFFLINE / LINK LOST
-      offlineQueueRef.current = 1;
-      setStationData(prev => ({
-        ...prev,
-        connected: false,
-        signalQuality: 0,
-        isCached: true,
-        offlineQueueSize: 1,
-      }));
-    } else {
-      // Transition to ONLINE / RESTORED (the missed messages were dropped, not stored)
-      offlineQueueRef.current = 0;
-      setStationData(prev => ({
-        ...prev,
-        connected: true,
-        isCached: false,
-        offlineQueueSize: 0,
-      }));
-    }
-
-    // Inform backend if running
-    try {
-      await apiPost(`/connection/toggle?stationId=${activeStationRef.current}`);
-    } catch (e) {
-      console.warn('[Link] backend toggle failed (UI-only link simulation)', e);
-    }
-  }, [stationData.connected]);
+  // ── Simulated satellite link (team) ────────────────────────
+  // The backend takes the station's link down (its readings are buffered on site) or
+  // brings it back (the buffer syncs on the next tick). Every visitor sees the result in
+  // the next snapshot's `link`; nothing is simulated in this browser. Throws ApiError.
+  const toggleConnection = useCallback(
+    () => apiPost(`/connection/toggle?stationId=${activeStationRef.current}`), []);
 
   // Real acknowledge: recorded in the backend (who/when) and persisted. The alert
   // stays visible (marked acknowledged) until its condition clears and it auto-resolves.
@@ -329,7 +282,7 @@ export function useStationData(activeStation = 'maitri') {
   useEffect(() => {
     const onSandbox = () => {
       const old = wsRef.current;
-      if (!old || isManuallyDisconnectedRef.current) return;
+      if (!old) return;
       old._switching = true;
       old.close();
       wsRef.current = null;
@@ -345,8 +298,9 @@ export function useStationData(activeStation = 'maitri') {
   // StrictMode's dev double-mount doesn't trigger a spurious reconnect.
   useEffect(() => {
     historyRef.current = {};
+    lastTsRef.current = null;
     const old = wsRef.current;
-    if (old && old._station !== activeStation && !isManuallyDisconnectedRef.current) {
+    if (old && old._station !== activeStation) {
       old._switching = true;
       old.close();
       wsRef.current = null;

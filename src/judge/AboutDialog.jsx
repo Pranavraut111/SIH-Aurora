@@ -51,13 +51,14 @@ export default function AboutDialog({ open, onClose, focus }) {
             <ProvenanceChip kind="REAL" /><ProvenanceChip kind="REANALYSIS" /><ProvenanceChip kind="MODEL-DERIVED" />
             <ProvenanceChip kind="SIMULATED" /><ProvenanceChip kind="OPERATOR-ENTERED" />
           </Box>
-          <P>Every value carries one of these labels. Real: observations scraped from NCPOR&apos;s public AWS page on request. Reanalysis: ERA5 weather
+          <P>Every value carries one of these labels. Real: weather station observations from NCPOR&apos;s public AWS pages, fetched every 30 minutes and checked for plausibility. Reanalysis: ERA5 weather
             (ECMWF), not a live feed. Model-derived: computed by the physics model. Simulated: injected demo faults and test mode. Operator-entered:
             the logistics ledger. Nothing is presented as more real than it is.</P>
         </Section>
         <Section title="What is simulated, and why" id="about-simulated">
           <P>There is no live telemetry from the stations&apos; equipment available to us, so the equipment readings come from the physics model, and
-            faults are injected by the simulator for demonstration. Station layouts in 3D are schematic. Remote commands are recorded, never sent.
+            faults are injected by the simulator for demonstration. Station layouts in 3D are schematic. Remote commands are recorded, never sent. The satellite link and its outages are
+            simulated too, to show how a station would store its readings during an outage and send them when the link returns.
             On this public site, demo scenarios are shared and reset after two minutes, and each visitor&apos;s changes stay in a private one-hour sandbox.</P>
         </Section>
         <Section title="Source code" id="about-source">

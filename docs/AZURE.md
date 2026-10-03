@@ -235,7 +235,7 @@ removing the others, which helps if everyone is locked out.
 ## Judge mode (unattended judging)
 
 Judges open the site from the PPT on their own, at any time. `.env` on the VM sets
-`VISITOR_SANDBOX=true` and `PUBLIC_DEMO=true` (both default to false):
+`VISITOR_SANDBOX=true`, `PUBLIC_DEMO=true` (both default to false) and `NCPOR_SYNC_INTERVAL_MIN=30`:
 
 - **Visitor sandbox:** an anonymous visitor's threshold changes, ledger edits,
   acknowledgements and remote commands are kept in their own private one-hour session
@@ -244,8 +244,15 @@ Judges open the site from the PPT on their own, at any time. `.env` on the VM se
 - **Public demo:** anyone may run the five Demo Control scenarios, one per station at a
   time. Each lasts 2 minutes and then resets, with a 60 s cooldown per visitor, and every
   visitor sees a banner while one runs.
-- **Team only:** simulator mode, replay, NCPOR ingest and the shared state need the
-  `ADMIN_TOKEN`, via Team sign-in in the ⋮ menu.
+- **Satellite link loss:** one of those scenarios (`link_loss`): the station's simulated link
+  drops for 2 minutes, readings are buffered "on site" and synced when it returns.
+- **NCPOR live data:** both NCPOR AWS pages are fetched every `NCPOR_SYNC_INTERVAL_MIN` (30)
+  minutes, starting 20 s after the backend starts. Check with
+  `curl -s https://aurora-sih.centralindia.cloudapp.azure.com/api/ncpor/status | python3 -m json.tool`
+  or in `docker compose logs backend | grep ncpor_sync`. Failures back off up to
+  `NCPOR_SYNC_MAX_BACKOFF_MIN`; the last good data is kept.
+- **Team only:** simulator mode, replay, NCPOR "Sync now", the link toggle and the shared
+  state need the `ADMIN_TOKEN`, via Team sign-in in the ⋮ menu.
 
 ### Nightly reset (03:00 IST)
 
