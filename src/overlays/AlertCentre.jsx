@@ -18,6 +18,7 @@ import { formatDateTimeIST, formatRelative, formatValue } from '../lib/format';
 import { EmptyState, ErrorState, LoadingBlock } from '../ui/States';
 import { StatusChip } from '../ui/Status';
 import WriteButton from '../ui/WriteButton';
+import { SandboxNotice, SandboxTag } from '../ui/Sandbox';
 import { useConfirm, useToast } from '../ui/feedbackContext';
 
 const levelStatus = (l) => (l === 'critical' ? 'critical' : 'warning');
@@ -30,6 +31,7 @@ function AlertItem({ a, now, onOpen, action }) {
         <Stack direction="row" sx={{ gap: 2, alignItems: 'center' }}>
           <StatusChip status={levelStatus(a.level)} />
           <Typography sx={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{a.buildingName || a.buildingId}</Typography>
+          <SandboxTag show={a.sandboxThreshold} label="Your threshold" />
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>{formatRelative(a.timestamp, now)}</Typography>
         </Stack>
         <Typography variant="body2" sx={{ mt: 1.5 }}>{a.message}</Typography>
@@ -94,7 +96,7 @@ export default function AlertCentre({ open, onClose, alerts = [], onAlertClick, 
               {pending === a.id ? 'Acknowledging…' : 'Acknowledge'}
             </WriteButton>
           ) : <Typography variant="caption" sx={{ color: 'text.secondary' }}>Browser-demo alert: cannot be acknowledged</Typography>)
-            : <Typography variant="caption" sx={{ color: 'text.secondary' }} data-testid="alert-acked">Acknowledged by {a.acknowledgedBy}{a.acknowledgedAt ? `, ${formatDateTimeIST(a.acknowledgedAt)}` : ''}</Typography>} />
+            : <Typography variant="caption" sx={{ color: 'text.secondary' }} data-testid="alert-acked">Acknowledged by {a.acknowledgedBy}{a.acknowledgedAt ? `, ${formatDateTimeIST(a.acknowledgedAt)}` : ''} <SandboxTag show={a.sandbox} sx={{ ml: 1 }} /></Typography>} />
       ))}
     </Stack>
   ) : <EmptyState title={emptyTitle} height={160}>{emptyText}</EmptyState>);
@@ -110,6 +112,7 @@ export default function AlertCentre({ open, onClose, alerts = [], onAlertClick, 
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
           {active.filter((a) => a.level === 'critical').length} critical · {active.filter((a) => a.level !== 'critical').length} warning unacknowledged
         </Typography>
+        <SandboxNotice sx={{ mt: 3, mb: 0 }}>Acknowledging here is recorded for you only.</SandboxNotice>
       </Box>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth" aria-label="Alert views" sx={{ px: 6 }}>
         <Tab value="active" label={`Active (${active.length})`} data-testid="alerts-tab-active" />

@@ -165,7 +165,14 @@ GROQ_API_KEY = _get("GROQ_API_KEY", "")
 GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
 # Cap on outbound Groq calls per rolling hour, across the whole process. Past the cap the
 # explain routes return the offline summary instead — honest, and it bounds the bill.
-GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 60)
+# Sized for Groq's free tier on openai/gpt-oss-120b (30 req/min, 1,000 req/day, 8,000
+# tokens/min, 200,000 tokens/day): one explanation is about 1–1.5k tokens, so the daily
+# token budget (~130 calls) is the binding limit, not the request count.
+GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 40)
+GROQ_MAX_CALLS_PER_DAY = _get_int("GROQ_MAX_CALLS_PER_DAY", 120)
+# Identical explanation requests (same station, question, text and alert state) within
+# this many seconds reuse the previous LLM answer instead of spending another call.
+EXPLAIN_CACHE_S = _get_int("EXPLAIN_CACHE_S", 120)
 
 # ── Write protection ─────────────────────────────────────────
 # When set, every state-changing route requires `X-Admin-Token: <ADMIN_TOKEN>`.
@@ -173,6 +180,29 @@ GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 60)
 # nobody can change thresholds, the inventory ledger or the simulator.
 # Unset means no protection: fine locally, never on a public host (see APP_ENV below).
 ADMIN_TOKEN = _get("ADMIN_TOKEN", "")
+
+# ── Judge mode: public demo scenarios + visitor sandbox ──────
+# VISITOR_SANDBOX=true (the public deployment): anonymous visitors may write, but every
+# write lands in a private, per-visitor sandbox session (httpOnly cookie, server-side
+# store) that the API overlays on the shared state for that visitor only. The shared
+# state still needs ADMIN_TOKEN. Off by default, so local development and the test
+# suites keep their behaviour unless a test opts in.
+def _get_bool(name: str, default: bool) -> bool:
+    raw = _get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+VISITOR_SANDBOX = _get_bool("VISITOR_SANDBOX", False)
+SANDBOX_TTL_S = _get_int("SANDBOX_TTL_S", 3600)              # a session lives 1 h from creation
+SANDBOX_MAX_SESSIONS = _get_int("SANDBOX_MAX_SESSIONS", 500)  # concurrent live sessions
+SANDBOX_WRITES_PER_MIN = _get_int("SANDBOX_WRITES_PER_MIN", 30)
+# Anonymous visitors may run the predefined Demo Control scenarios: one per station at a
+# time, PUBLIC_DEMO_DURATION_S long, then reset automatically; PUBLIC_DEMO_COOLDOWN_S per IP.
+PUBLIC_DEMO = _get_bool("PUBLIC_DEMO", False)
+PUBLIC_DEMO_DURATION_S = _get_int("PUBLIC_DEMO_DURATION_S", 120)
+PUBLIC_DEMO_COOLDOWN_S = _get_int("PUBLIC_DEMO_COOLDOWN_S", 60)
 
 # ── Deployment mode ──────────────────────────────────────────
 # "production" turns the soft warnings below into a refusal to start, so a public

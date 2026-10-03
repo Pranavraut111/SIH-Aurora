@@ -24,6 +24,7 @@ import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
 import SensorsOutlined from '@mui/icons-material/SensorsOutlined';
 import SensorsOffOutlined from '@mui/icons-material/SensorsOffOutlined';
 import { useNow } from '../hooks/useNow';
+import { useAdminToken } from '../hooks/useAdminToken';
 import { formatRelative, formatTimeIST } from '../lib/format';
 import Hint from '../ui/Hint';
 import StatusDot from '../ui/StatusDot';
@@ -79,7 +80,7 @@ export default function TopBar({
   activeStation, onStationChange, isDesktop, onOpenNav,
   telemetryBadge, isConnected, alertCount, criticalCount, updatedAt,
   onOpenLink, onOpenAlerts, onToggleTimeline, onOpenDemo, onOpenPalette, onOpenHelp, demoActive,
-  onStartTour, pageTourLabel, onStartPageTour, signInOpen, onSignInOpenChange,
+  onStartTour, pageTourLabel, onStartPageTour, signInOpen, onSignInOpenChange, onShare, onOpenAbout, onOpenWelcome, onOpenStories,
 }) {
   const now = useNow(1000);
   const scheme = useSchemeToggle();
@@ -88,6 +89,10 @@ export default function TopBar({
   const [helpAnchor, setHelpAnchor] = useState(null);
   const [helpLoaded, setHelpLoaded] = useState(false);
   const [sourceHint, setSourceHint] = useState(false);
+  const { judge, loggedIn, writeProtected } = useAdminToken();
+  // Judge mode: the ⋮ menu is at every width (it holds Team sign-in and Share this view).
+  const menuEverywhere = judge.sandbox || judge.publicDemo;
+  const teamSignIn = judge.sandbox && writeProtected === true && !loggedIn;
 
   const source = dataSourceInfo(telemetryBadge);
   const warningCount = alertCount - criticalCount;
@@ -180,6 +185,7 @@ export default function TopBar({
         {helpLoaded && (
           <Suspense fallback={null}>
             <HelpMenu anchorEl={helpAnchor} onClose={() => setHelpAnchor(null)} onStartTour={onStartTour}
+              onOpenWelcome={onOpenWelcome} onOpenStories={onOpenStories} onOpenAbout={onOpenAbout}
               pageTourLabel={pageTourLabel} onStartPageTour={onStartPageTour} onOpenShortcuts={onOpenHelp} />
           </Suspense>
         )}
@@ -205,7 +211,7 @@ export default function TopBar({
           aria-expanded={menuAnchor ? 'true' : undefined}
           data-testid="topbar-more"
           onClick={(e) => { setMenuLoaded(true); setMenuAnchor(e.currentTarget); }}
-          sx={{ position: 'relative', ...showBelow('sm') }}
+          sx={{ position: 'relative', ...(menuEverywhere ? {} : showBelow('sm')) }}
         >
           <MoreVertOutlined />
           {(demoActive || !isConnected) && <StatusDot status={demoActive ? 'simulated' : 'offline'} size={7} sx={{ position: 'absolute', top: 6, right: 6 }} />}
@@ -226,6 +232,11 @@ export default function TopBar({
               onOpenPalette={onOpenPalette}
               onOpenHelp={onOpenHelp}
               onStartTour={onStartTour}
+              phoneOnly={menuEverywhere}
+              onTeamSignIn={teamSignIn ? () => onSignInOpenChange?.(true) : null}
+              onShare={onShare}
+              onAbout={onOpenAbout}
+              onStories={onOpenStories}
             />
           </Suspense>
         )}

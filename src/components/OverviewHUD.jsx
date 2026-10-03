@@ -17,6 +17,7 @@ import { useColorScheme, useTheme } from '@mui/material/styles';
 import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
 import CloudOffOutlined from '@mui/icons-material/CloudOffOutlined';
 import MicNoneOutlined from '@mui/icons-material/MicNoneOutlined';
+import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
 import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
 import ViewInArOutlined from '@mui/icons-material/ViewInArOutlined';
 import { apiPost } from '../services/api';
@@ -85,6 +86,7 @@ export default function OverviewHUD({
   provenance,
   onOverlayBand,
   onOpenTwinInspector,
+  onOpenDemo,
 }) {
   const theme = useTheme();
   const overlays = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true });
@@ -306,8 +308,14 @@ export default function OverviewHUD({
           <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1.5 }}>{facts.join(' · ')}</Typography>
         )}
         <Stack direction="row" sx={{ gap: 2, mt: 5, flexWrap: 'wrap' }}>
+          {onOpenDemo && (
+            <Button variant="contained" onClick={onOpenDemo} startIcon={<ScienceOutlined />} data-testid="try-demo" data-tour="try-demo"
+              title="Run a simulated fault (shared, resets after 2 minutes) and watch the station respond">
+              Try a demo
+            </Button>
+          )}
           {onOpenTwinInspector && (
-            <Button variant="contained" onClick={onOpenTwinInspector} startIcon={<ViewInArOutlined />} endIcon={<ArrowForwardOutlined />}
+            <Button variant={onOpenDemo ? 'outlined' : 'contained'} onClick={onOpenTwinInspector} startIcon={<ViewInArOutlined />} endIcon={<ArrowForwardOutlined />}
               title="Inspect the causal chain behind every modelled value">
               Twin Inspector
             </Button>

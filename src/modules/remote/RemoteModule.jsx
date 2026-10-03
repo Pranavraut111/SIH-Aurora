@@ -26,6 +26,7 @@ import SectionCard from '../../ui/SectionCard';
 import { ErrorState, LoadingBlock } from '../../ui/States';
 import { StatusChip } from '../../ui/Status';
 import WriteButton from '../../ui/WriteButton';
+import { SandboxNotice, SandboxTag } from '../../ui/Sandbox';
 import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
@@ -88,7 +89,9 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
     setBusy(command);
     try {
       const d = await apiPost('/remote/dispatch', { stationId: activeStation, subsystem, command, parameters: {}, issuedBy: getOperatorName() });
-      toast({ text: `${label(command)}: ${d?.status ?? 'queued (simulated)'}. Recorded only; nothing was sent to equipment.` });
+      toast({ text: d?.sandbox
+        ? `${label(command)}: recorded in your sandbox (simulated). Only you see it; nothing was sent to equipment.`
+        : `${label(command)}: ${d?.status ?? 'queued (simulated)'}. Recorded only; nothing was sent to equipment.` });
       await load().catch((e) => console.error('[Remote] refresh failed', e));
     } catch (err) {
       console.error('[Remote] dispatch failed', err);
@@ -126,6 +129,7 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
         Simulated dispatch. A request is recorded as “queued (simulated)” and later “acknowledged (simulated)” by the backend.
         Nothing is sent to station equipment and the twin is not changed.
       </Alert>
+      <SandboxNotice>Commands you request and alerts you acknowledge here are recorded for you only.</SandboxNotice>
       {state.error && <ErrorState sx={{ mb: 4 }}>The command log could not be loaded because {describeFailure(state.error)}. Retrying automatically.</ErrorState>}
 
       <Typography variant="h2" sx={hidden}>Summary</Typography>
@@ -185,7 +189,7 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
                     </Typography>
                     <Box sx={{ mt: 2 }}>
                       {a.acknowledged ? (
-                        <Typography variant="body2" sx={{ color: 'text.secondary' }}>Acknowledged by {a.acknowledgedBy}</Typography>
+                        <Typography variant="body2" sx={{ color: 'text.secondary' }}>Acknowledged by {a.acknowledgedBy} <SandboxTag show={a.sandbox} sx={{ ml: 1 }} /></Typography>
                       ) : canAcknowledge ? (
                         <WriteButton size="small" variant="outlined" onClick={() => acknowledge(a)} disabled={ackBusy === a.id}>
                           {ackBusy === a.id ? 'Acknowledging…' : 'Acknowledge'}
@@ -199,7 +203,7 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
               </Stack>
             )}
             {!canWrite && activeAlerts.length > 0 && (
-              <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 3 }}>Sign in as operator to acknowledge.</Typography>
+              <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 3 }}>Use Team sign-in (⋮ menu) to acknowledge.</Typography>
             )}
           </SectionCard>
         </Grid>
@@ -221,7 +225,7 @@ export default function RemoteModule({ activeStation = 'maitri', activeAlerts = 
                       <TableCell sx={{ pl: 0, typography: 'mono', fontSize: 12, whiteSpace: 'nowrap' }}>{formatDateTimeIST(c.created_at).replace(' IST', '')}</TableCell>
                       <TableCell>{label(c.command)}<Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>{c.subsystem}</Typography></TableCell>
                       <TableCell><SimulatedChip status={c.status} /></TableCell>
-                      <TableCell>{c.issued_by}</TableCell>
+                      <TableCell>{c.issued_by} <SandboxTag show={c.sandbox} sx={{ ml: 1 }} /></TableCell>
                       <TableCell sx={{ pr: 0, typography: 'mono', fontSize: 12, color: 'text.secondary' }}>{c.id}</TableCell>
                     </TableRow>
                   ))}

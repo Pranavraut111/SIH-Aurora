@@ -29,6 +29,7 @@ import SectionCard from '../../ui/SectionCard';
 import { EmptyState, ErrorState, LoadingBlock } from '../../ui/States';
 import { StatusChip } from '../../ui/Status';
 import WriteButton from '../../ui/WriteButton';
+import { SandboxNotice, SandboxTag } from '../../ui/Sandbox';
 import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
@@ -72,11 +73,13 @@ function EditDialog({ item, stationId, onClose, onSaved }) {
     setBusy(true);
     setError(null);
     try {
-      await apiPost('/logistics/update', {
+      const res = await apiPost('/logistics/update', {
         stationId, itemId: item.id, current: cur, dailyConsumption: Number(daily), updatedBy: name.trim(),
       });
       persistOperatorName(name);
-      onSaved(`Saved ${item.name}. The change is in the audit log.`);
+      onSaved(res?.sandbox
+        ? `Saved ${item.name} in your sandbox. Only you see it; the station's real ledger is unchanged.`
+        : `Saved ${item.name}. The change is in the audit log.`);
     } catch (err) {
       console.error('[Logistics] update failed', err);
       setError(`Not saved: ${describeApiError(err)}`);
@@ -162,6 +165,8 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
         provenance={<ProvenanceChip kind="OPERATOR-ENTERED" subject="Inventory" detail="Not telemetry. The physics model keeps its own stock estimates under Infrastructure → Logistics Store." />}
       />
 
+      <SandboxNotice>Your ledger edits change only what you see, never the station's real ledger.</SandboxNotice>
+
       {state.error && (
         <ErrorState sx={{ mb: 4 }} onRetry={reload}>
           The ledger could not be loaded because {describeFailure(state.error)}.{ready ? ' Showing the last values received.' : ''}
@@ -243,7 +248,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
               {items.map((i) => (
                 <TableRow key={i.id} data-testid={`ledger-row-${i.id}`}>
                   <TableCell sx={{ pl: 0, minWidth: 220 }}>
-                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{i.name}</Typography>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{i.name} <SandboxTag show={i.sandbox} sx={{ ml: 1 }} /></Typography>
                     <Typography variant="caption" sx={{ color: 'text.secondary' }}>{i.category}</Typography>
                     <StockBar item={i} />
                   </TableCell>
@@ -271,7 +276,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
               <Box component="li" key={i.id} data-testid={`ledger-row-${i.id}`} sx={{ p: 4, borderRadius: '10px', bgcolor: 'aurora.surfaceRaised' }}>
                 <Stack direction="row" sx={{ alignItems: 'flex-start', gap: 2 }}>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{i.name}</Typography>
+                    <Typography sx={{ fontWeight: 600, fontSize: 14 }}>{i.name} <SandboxTag show={i.sandbox} sx={{ ml: 1 }} /></Typography>
                     <Typography variant="caption" sx={{ color: 'text.secondary' }}>{i.category}</Typography>
                   </Box>
                   {i.isLow ? <StatusChip status="warning" label="Reorder" /> : <StatusChip status="normal" label="OK" />}
@@ -283,7 +288,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
                 <StockBar item={i} />
                 <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>Use {formatValue(i.dailyUse, `${i.unit}/day`, i.dailyUse < 10 ? 1 : 0)} · reorder at {formatValue(i.reorderAt, i.unit)}</Typography>
-                  <WriteButton size="small" startIcon={<EditOutlined />} onClick={() => setEditing(i)} aria-label={`Update ${i.name}`}>Update</WriteButton>
+                  <WriteButton size="small" startIcon={<EditOutlined />} onClick={() => setEditing(i)} aria-label={`Update ${i.name}`} data-testid={`ledger-edit-${i.id}`}>Update</WriteButton>
                 </Stack>
               </Box>
             ))}
@@ -308,7 +313,7 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
                       <TableCell>{names[h.itemId] || h.itemId}</TableCell>
                       <TableCell>{h.field.replace(/_/g, ' ')}</TableCell>
                       <TableCell sx={{ fontFeatureSettings: '"tnum" 1' }}>{h.oldValue} → {h.newValue}</TableCell>
-                      <TableCell sx={{ pr: 0 }}>{h.updatedBy}</TableCell>
+                      <TableCell sx={{ pr: 0 }}>{h.updatedBy} <SandboxTag show={h.sandbox} sx={{ ml: 1 }} /></TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

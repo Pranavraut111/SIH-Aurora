@@ -204,6 +204,9 @@ def test_history_returns_published_points_oldest_first(client):
 
     for _ in range(3):
         ub.tick_station("maitri")
+        # History keeps one point per snapshot timestamp (ms); two ticks in the same
+        # millisecond would leave the published value ahead of the series.
+        time.sleep(0.003)
     body = _ok(client, "/api/history?stationId=maitri&keys=generator.gen_power,lab.env_temp&minutes=30")
     assert body["stationId"] == "maitri"
     assert body["tickIntervalSec"] > 0 and body["maxWindowMinutes"] > 0

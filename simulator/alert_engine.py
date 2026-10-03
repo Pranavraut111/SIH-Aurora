@@ -72,14 +72,16 @@ def effective_thresholds(station_id: str, overrides: list[dict] | None = None) -
     return th
 
 
-def validate_threshold_update(station_id: str, updates: dict[str, dict]) -> list[str]:
+def validate_threshold_update(station_id: str, updates: dict[str, dict], base=None) -> list[str]:
     """updates: {sensor: {direction: {level: value}}}. Returns a list of errors (empty = OK).
-    station_id may be '*' (all stations): every station is checked."""
+    station_id may be '*' (all stations): every station is checked. `base(sid)` gives the
+    thresholds the update applies to (default: the shared effective thresholds; a visitor
+    sandbox passes its own view, so the same rules check the same merged result)."""
     errors = []
     stations = station_config.station_ids() if station_id == "*" else (station_id,)
     for sid in stations:
         sensors = station_config.sensors(sid)
-        merged = effective_thresholds(sid)
+        merged = (base or effective_thresholds)(sid)
         for sensor, dirs in updates.items():
             if sensor not in sensors:
                 errors.append(f"unknown sensor '{sensor}'")
@@ -203,7 +205,7 @@ class AlertEngine:
     # ── lifecycle steps (lock held) ──
     def _raise(self, conn, sid, sensor, meta, level, direction, threshold, value, ts_ms) -> dict:
         alert_id = f"ALT-{sid}-{sensor}-{ts_ms}"
-        msg = _message(meta, level, direction, threshold, value)
+        msg = alert_message(meta, level, direction, threshold, value)
         conn.execute(
             "INSERT INTO station_alerts (id, station_id, timestamp, severity, subsystem, parameter, observed_value, "
             "threshold_or_model, reason, recommended_action, status, threshold_value, direction, unit, "
@@ -231,7 +233,7 @@ class AlertEngine:
             a["lowerTicks"] = 0
         if new_level != a["level"] or direction != a["direction"]:
             a.update(level=new_level, direction=direction, threshold=threshold,
-                     message=_message(meta, new_level, direction, threshold, value))
+                     message=alert_message(meta, new_level, direction, threshold, value))
             if LEVEL_RANK[new_level] > LEVEL_RANK[a["peak"]]:
                 a["peak"] = new_level
             conn.execute(
@@ -285,7 +287,7 @@ class AlertEngine:
         return [dict(r) for r in rows]
 
 
-def _message(meta: dict, level: str, direction: str, threshold: float, value: float) -> str:
+def alert_message(meta: dict, level: str, direction: str, threshold: float, value: float) -> str:
     rel = "below" if direction == "low" else "above"
     return (f"{meta['name']} {round(float(value), 2)} {meta['unit']} is {rel} the {level} threshold "
             f"({threshold} {meta['unit']}).")

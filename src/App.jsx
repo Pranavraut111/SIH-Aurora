@@ -23,7 +23,9 @@ import { useDatabase } from './hooks/useDatabase';
 import { useAdminToken } from './hooks/useAdminToken';
 import { useToast } from './ui/feedbackContext';
 import { TourContext } from './tour/tourContext';
-import { PAGE_TOURS, markTourSeen, readTourParam, tourSeen } from './tour/tourPrefs';
+import { PAGE_TOURS, markTourSeen, readTourParam } from './tour/tourPrefs';
+import { STORY_META, markWelcomeSeen, readStoryParam, welcomeSeen } from './tour/storyMeta';
+import { apiPost } from './services/api';
 import { trackModuleView, trackBuildingView, trackConnectionToggle, trackStationSwitch } from './services/analyticsService';
 import './App.css';
 
@@ -35,6 +37,9 @@ const OverviewHUD = lazy(() => import('./components/OverviewHUD'));
 const AlertCentre = lazy(() => import('./overlays/AlertCentre'));
 const LinkDrawer = lazy(() => import('./overlays/LinkDrawer'));
 const DemoControlDrawer = lazy(() => import('./overlays/DemoControlDrawer'));
+const DemoBanner = lazy(() => import('./shell/DemoBanner'));
+const WelcomeDialog = lazy(() => import('./judge/WelcomeDialog'));
+const AboutDialog = lazy(() => import('./judge/AboutDialog'));
 const EventsDrawer = lazy(() => import('./overlays/EventsDrawer'));
 const CommandPalette = lazy(() => import('./shell/CommandPalette'));
 const ShortcutsDialog = lazy(() => import('./shell/ShortcutsDialog'));
@@ -79,7 +84,7 @@ export default function App() {
   const openLink = useCallback(() => show('link'), [show]);
   const { mode, systemMode, setMode } = useColorScheme();
   const scheme = (mode === 'system' ? systemMode : mode) || 'dark';
-  const { loggedIn, writeProtected, logout } = useAdminToken();
+  const { loggedIn, writeProtected, logout, judge, canWriteShared } = useAdminToken();
   const [signInOpen, setSignInOpen] = useState(false);
   const toast = useToast();
 
@@ -106,7 +111,8 @@ export default function App() {
   const dependencyAlerts = stationData.dependencyAlerts || [];
   const eventTimeline = stationData.eventTimeline || [];
   const updatedAt = telemetryBadge === 'connecting' ? null : stationData.timestamp;
-  const demoActive = Boolean(stationData.provenance?.activeScenario);
+  const demoActive = Boolean(stationData.provenance?.activeScenario || stationData.publicDemo?.[activeStation]);
+  const anyDemoRunning = Object.keys(stationData.publicDemo || {}).length > 0;
 
   // ── Product tour ──────────────────────────────────────────
   // driver.js loads on first start. The run context reads live values through refs,
@@ -115,7 +121,10 @@ export default function App() {
   const tourParam = useState(readTourParam)[0];
   const tourStop = useRef(null);
   const live = useRef({});
-  useEffect(() => { live.current = { activeModule, isDesktop, isPhone, scheme, writeProtected }; });
+  useEffect(() => { live.current = { activeModule, isDesktop, isPhone, scheme, writeProtected, judge, stationData, activeStation }; });
+  // The guided story being played: which one, whether it joined another visitor's
+  // scenario, and whether it started one itself (which it then resets).
+  const storyRun = useRef(null);
   const startTour = useCallback((kind = 'main') => {
     if (tourStop.current) return;
     // Focus goes back here when the tour ends (captured now: the opener may be a menu
@@ -127,22 +136,39 @@ export default function App() {
     if (kind === 'main') markTourSeen('started');
     setTourActive(true);
     tourStop.current = () => {};
-    import('./tour/runTour').then(({ runTour }) => {
+    const story = kind.startsWith('story:') ? kind.slice(6) : null;
+    Promise.all([import('./tour/runTour'), story ? import('./tour/storyRuntime') : null]).then(([{ runTour }, runtime]) => {
       const l = live.current;
       tourStop.current = runTour(kind, {
         drawerNav: !l.isDesktop,
         isPhone: l.isPhone,
         scheme: l.scheme,
         writeProtected: l.writeProtected,
+        judge: l.judge,
         stations: STATION_IDS.map((sid) => stationMeta(sid).name),
         returnFocus: opener,
         getModule: () => live.current.activeModule,
         goTo: (id) => { setActiveModule(id); setSelectedBuilding(null); },
+        getStation: () => live.current.activeStation,
+        setStation: (sid) => { trackStationSwitch(live.current.activeStation, sid); setActiveStation(sid); },
         setNavOpen: setMobileNavOpen,
+        story: runtime ? runtime.storyHelpers(story, {
+          live: () => live.current, run: () => storyRun.current, setSelectedBuilding, closeAll: () => setOpen(null),
+        }) : undefined,
+        onStoryError: (err) => {
+          toast({ severity: 'info', text: err?.storyMessage || 'The story stopped: a step could not be shown. Try again, or pick another story.' });
+          if (err?.storyMessage) show('stories');
+        },
         onEnd: (outcome) => {
           tourStop.current = null;
           setTourActive(false);
           if (kind === 'main') markTourSeen(outcome);
+          // A story that started a scenario and was left early resets it (the last step already did otherwise).
+          const run = storyRun.current;
+          if (run?.injected && outcome !== 'completed') {
+            apiPost(`/sim/reset?stationId=${STORY_META[run.id].station}`).catch((err) => console.warn('[story] reset on exit failed', err));
+          }
+          storyRun.current = null;
         },
       });
     }).catch((err) => {
@@ -151,18 +177,46 @@ export default function App() {
       setTourActive(false);
       toast({ severity: 'error', text: 'The tour could not load. Check the connection and try again from Help.' });
     });
-  }, [toast]);
+  }, [toast, show]);
   useEffect(() => () => tourStop.current?.(), []);
 
-  // Auto-start once: first visit (or ?tour=start), after the first telemetry snapshot,
-  // when nothing else is open. ?tour=off never starts it.
+  // ── Guided stories (judge mode) ───────────────────────────
+  // Scenario stories share their station's public demo slot (storyRuntime.js decides).
+  const canRunScenarios = Boolean(judge.publicDemo || canWriteShared);
+  const startStory = useCallback((id) => {
+    if (!STORY_META[id] || tourStop.current) return;
+    import('./tour/storyRuntime').then(({ storyAvailability }) => {
+      const a = storyAvailability(live.current.stationData, canRunScenarios)[id];
+      if (!a.ok) { show('stories'); toast({ severity: 'info', text: a.note }); return; }
+      storyRun.current = { id, joined: Boolean(a.joins), injected: false };
+      setOpen(null);
+      startTour(`story:${id}`);
+    }).catch((err) => {
+      console.error('[story] could not load', err);
+      toast({ severity: 'error', text: 'The story could not load. Check the connection and try again from Help.' });
+    });
+  }, [canRunScenarios, show, toast, startTour]);
+
+  // First visit: the welcome card (its "Take the tour" starts the tour). ?tour=start
+  // starts the tour, ?story= a story, ?tour=off shows neither. After the first telemetry.
+  const storyParam = useState(readStoryParam)[0];
   const autoStarted = useRef(false);
   useEffect(() => {
     if (autoStarted.current || updatedAt == null || open || tourParam === 'off') return undefined;
-    if (tourParam !== 'start' && tourSeen()) { autoStarted.current = true; return undefined; }
-    const id = setTimeout(() => { autoStarted.current = true; startTour('main'); }, 700);
+    const id = setTimeout(() => {
+      autoStarted.current = true;
+      if (tourParam === 'start') startTour('main');
+      else if (storyParam) { markWelcomeSeen('story-link'); startStory(storyParam); }
+      else if (!welcomeSeen()) show('welcome');
+    }, 700);
     return () => clearTimeout(id);
-  }, [updatedAt, open, tourParam, startTour]);
+  }, [updatedAt, open, tourParam, storyParam, startTour, startStory, show]);
+
+  const chooseWelcome = useCallback((choice) => {
+    markWelcomeSeen(choice);
+    setOpen(null);
+    if (choice === 'tour') startTour('main');
+  }, [startTour]);
   const pageTour = PAGE_TOURS[activeModule] ? activeModule : null;
   const tourValue = useMemo(() => ({ start: startTour, active: tourActive }), [startTour, tourActive]);
 
@@ -212,6 +266,18 @@ export default function App() {
     return toggleConnection();
   }, [toggleConnection, isConnected]);
 
+  // "Share this view": the URL already carries ?module=&station= (useUrlState).
+  const shareView = useCallback(async () => {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({ text: 'Link copied: it opens this page and station.' });
+    } catch (err) {
+      console.warn('[share] clipboard unavailable', err);
+      toast({ text: `Copy this link: ${url}` });
+    }
+  }, [toast]);
+
   const handleAlertClick = useCallback((buildingId) => {
     setSelectedBuilding(buildingId);
   }, []);
@@ -234,6 +300,9 @@ export default function App() {
       ? [{ id: 'signout', group: 'Settings', label: 'Sign out', keywords: 'logout operator token', run: () => { logout(); toast({ severity: 'info', text: 'Signed out. Aurora is read-only again.' }); } }]
       : [{ id: 'signin', group: 'Settings', label: 'Sign in as operator', keywords: 'login token write', run: () => setSignInOpen(true) }]),
     { id: 'tour', group: 'Help', label: 'Start tour', keywords: 'guide introduction walkthrough help', run: () => startTour('main') },
+    { id: 'stories', group: 'Help', label: 'Play a guided story', keywords: 'scenario blizzard generator fuel demo story', run: () => show('stories') },
+    { id: 'welcome', group: 'Help', label: 'Show the welcome card', keywords: 'welcome introduction start', run: () => show('welcome') },
+    { id: 'about', group: 'Help', label: 'About Aurora', keywords: 'about team problem statement provenance github', run: () => show('about') },
     ...(pageTour ? [{ id: 'page-tour', group: 'Help', label: `Tour this page (${PAGE_TOURS[pageTour]})`, keywords: 'guide help', run: () => startTour(pageTour) }] : []),
     { id: 'help', group: 'Help', label: 'Keyboard shortcuts', keys: ['?'], run: () => show('help') },
   ], [handleModuleChange, handleStationChange, openAlerts, openLink, show, scheme, setMode, writeProtected, loggedIn, logout, toast, startTour, pageTour]);
@@ -375,7 +444,20 @@ export default function App() {
         signInOpen={signInOpen}
         onSignInOpenChange={setSignInOpen}
         demoActive={demoActive}
+        onShare={shareView}
+        onOpenAbout={() => show('about')}
+        onOpenWelcome={() => show('welcome')}
+        onOpenStories={() => show('stories')}
       />
+
+      <div className="demo-banner-slot">
+        {anyDemoRunning && (
+          <Suspense fallback={null}>
+            <DemoBanner publicDemo={stationData.publicDemo} receivedAt={stationData.receivedAt} activeStation={activeStation}
+              onOpenDemo={() => show('demo')} onStationChange={handleStationChange} />
+          </Suspense>
+        )}
+      </div>
 
       <div className="app-layout-body">
         <SideNav
@@ -430,6 +512,7 @@ export default function App() {
                     replay={stationData.replay}
                     onOverlayBand={setHudBand}
                     onOpenTwinInspector={() => setShowTwinInspector(true)}
+                    onOpenDemo={() => show('demo')}
                   />
                 </Suspense>
               </ErrorBoundary>
@@ -479,8 +562,16 @@ export default function App() {
           <LinkDrawer open={open === 'link'} onClose={close} isConnected={isConnected} onToggleConnection={handleToggleConnection}
             offlineQueueSize={stationData.offlineQueueSize || 0} telemetryBadge={telemetryBadge} provenance={stationData.provenance} />
         )}
+        {(mounted.welcome || mounted.stories) && (
+          <WelcomeDialog open={open === 'welcome' || open === 'stories'} view={open === 'stories' ? 'stories' : 'welcome'}
+            onView={(v) => show(v)} onClose={(why) => { if (open === 'welcome') markWelcomeSeen(why); close(); }}
+            onChoose={chooseWelcome} onPlayStory={(id) => { markWelcomeSeen('story'); startStory(id); }}
+            onAbout={() => show('about')} stationData={stationData} canRunScenarios={canRunScenarios} />
+        )}
+        {mounted.about && <AboutDialog open={open === 'about'} onClose={close} />}
         {mounted.events && <EventsDrawer open={open === 'events'} onClose={close} events={eventTimeline} />}
-        {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation} />}
+        {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation}
+          publicDemo={stationData.publicDemo} receivedAt={stationData.receivedAt} />}
         {mounted.palette && <CommandPalette open={open === 'palette'} onClose={close} commands={commands} />}
         {mounted.help && <ShortcutsDialog open={open === 'help'} onClose={close} onStartTour={() => startTour('main')} />}
       </Suspense>

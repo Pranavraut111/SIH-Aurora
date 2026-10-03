@@ -1,9 +1,9 @@
 """ADMIN_TOKEN write protection: every state-changing route needs X-Admin-Token, reads
 and the WebSocket stay public, and an unset token keeps local development working.
 
-The two POSTs that change nothing (/api/simulation/whatif and the explain routes) are
+The POSTs that change nothing (/api/simulation/whatif and the explain routes) are
 deliberately public — they are reads that need a request body, and they are rate-limited
-in nginx instead.
+in nginx instead. So is the visit counter, which only increments aggregate counts.
 """
 
 import asyncio
@@ -54,6 +54,7 @@ READS = [
 PUBLIC_POSTS = [
     ("/api/simulation/whatif", {"stationId": "maitri", "scenarioId": "blizzard"}),
     ("/api/aurora-explain", {"stationId": "maitri", "question": "status"}),
+    ("/api/visit", {"entry": "main"}),        # only a counter (visits.py); nothing personal stored
 ]
 
 
@@ -202,18 +203,22 @@ def test_acknowledge_is_rejected_without_a_token(protected):
 
 # ── The session probe the UI logs in with ───────────────────────────────────
 def test_session_reports_protection_on_and_a_valid_token(protected):
+    def core(body):
+        return {k: body[k] for k in ("writeProtected", "authenticated")}
     body = protected.get("/api/admin/session").json()
-    assert body == {"writeProtected": True, "authenticated": False}
+    assert core(body) == {"writeProtected": True, "authenticated": False}
+    assert body["sandbox"] is False and body["publicDemo"] is False   # judge mode is opt-in
 
     ok = protected.get("/api/admin/session", headers={"X-Admin-Token": TOKEN}).json()
-    assert ok == {"writeProtected": True, "authenticated": True}
+    assert core(ok) == {"writeProtected": True, "authenticated": True}
 
     bad = protected.get("/api/admin/session", headers={"X-Admin-Token": WRONG}).json()
-    assert bad == {"writeProtected": True, "authenticated": False}
+    assert core(bad) == {"writeProtected": True, "authenticated": False}
 
 
 def test_session_reports_no_protection_when_the_token_is_unset(unprotected):
-    assert unprotected.get("/api/admin/session").json() == {
+    body = unprotected.get("/api/admin/session").json()
+    assert {k: body[k] for k in ("writeProtected", "authenticated")} == {
         "writeProtected": False, "authenticated": True}
 
 

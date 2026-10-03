@@ -263,14 +263,14 @@ export default function TwinInspectorDialog({ activeStation, isOpen, onClose, re
               </Stack>
               <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 1 }}>{speed}× = {formatNumber(speed / 60, 1)} simulated hours per real minute</Typography>
               <Box sx={{ mt: 3 }}>
-                <WriteButton variant="contained" disabled={busy} onClick={() => switchMode({ mode: 'reanalysis', date: replayDate, speed }, 'Switching to ERA5 replay')}>
+                <WriteButton team variant="contained" disabled={busy} onClick={() => switchMode({ mode: 'reanalysis', date: replayDate, speed }, 'Switching to ERA5 replay')}>
                   Start replay
                 </WriteButton>
               </Box>
             </Step>
             <Step title="Developer test mode">
               <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>Random-walk weather and equipment instead of the ERA5 replay. Every value is then labelled Simulated.</Typography>
-              <WriteButton variant="outlined" disabled={busy} onClick={() => switchMode({ mode: 'simulation' }, 'Switching to test mode')}>Switch to test mode</WriteButton>
+              <WriteButton team variant="outlined" disabled={busy} onClick={() => switchMode({ mode: 'simulation' }, 'Switching to test mode')}>Switch to test mode</WriteButton>
             </Step>
           </Stack>
         )}

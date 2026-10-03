@@ -6,9 +6,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   canWrite,
+  canWriteShared,
   clearToken,
+  getJudgeMode,
   getToken,
   getWriteProtection,
+  inSandbox,
+  setJudgeMode,
   setToken,
   setWriteProtected,
   subscribe,
@@ -20,6 +24,10 @@ function snapshot() {
     loggedIn: getToken() !== null,
     writeProtected: getWriteProtection(),
     canWrite: canWrite(),
+    canWriteShared: canWriteShared(),
+    sandbox: inSandbox(),
+    publicDemo: getJudgeMode().publicDemo,
+    judge: getJudgeMode(),
   };
 }
 
@@ -27,6 +35,7 @@ function snapshot() {
 async function probeSession(token) {
   const res = await apiGet('/admin/session', token ? { headers: { 'X-Admin-Token': token } } : undefined);
   setWriteProtected(res.writeProtected);
+  setJudgeMode(res);
   return res;
 }
 
@@ -85,7 +94,8 @@ export function useAdminToken() {
 
   // Ready-made tooltip for write controls: null when writing is allowed, so callers can
   // write `title={writeBlockedTitle || 'Normal tooltip'}`.
-  const writeBlockedTitle = state.canWrite ? null : 'Operator login required';
+  const writeBlockedTitle = state.canWrite ? null : 'Team sign-in required';
+  const sharedBlockedTitle = state.canWriteShared ? null : 'Team sign-in required: this changes the shared station';
 
-  return { ...state, writeBlockedTitle, login, logout };
+  return { ...state, writeBlockedTitle, sharedBlockedTitle, login, logout };
 }

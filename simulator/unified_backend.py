@@ -48,6 +48,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Import digital twin engines
 sys.path.insert(0, str(Path(__file__).parent))
+import judge_mode
+from judge_mode import DEMO, SANDBOX
+from visits import VISITS
+
 import alert_engine
 import config as app_config
 import db
@@ -138,6 +142,170 @@ def require_admin(x_admin_token: str | None = Header(None, alias="X-Admin-Token"
         )
 
 
+def client_ip(request: Request) -> str:
+    """The visitor's address. nginx sets X-Real-IP (its real_ip module trusts only the
+    internal proxy hop), so this is the client, not Caddy or the Docker gateway."""
+    return ((request.headers.get("x-real-ip") or (request.client.host if request.client else "")) or "unknown")[:64]
+
+
+def write_scope(x_admin_token: str | None = Header(None, alias="X-Admin-Token")) -> str:
+    """Where a write goes. 'shared': the real shared state (a valid ADMIN_TOKEN, or no
+    protection configured). 'sandbox': an anonymous visitor in judge mode
+    (VISITOR_SANDBOX), whose write is validated like a real one and kept private.
+    A presented but wrong token is always 401."""
+    if x_admin_token:
+        require_admin(x_admin_token)
+        return "shared"
+    if app_config.VISITOR_SANDBOX:
+        return "sandbox"
+    require_admin(None)
+    return "shared"
+
+
+def demo_actor(x_admin_token: str | None = Header(None, alias="X-Admin-Token")) -> str:
+    """'team' (token, or an unprotected local stack) or 'visitor' (PUBLIC_DEMO rules)."""
+    if x_admin_token:
+        require_admin(x_admin_token)
+        return "team"
+    if app_config.PUBLIC_DEMO:
+        return "visitor"
+    require_admin(None)
+    return "team"
+
+
+def sandbox_session(request: Request) -> str | None:
+    """This visitor's live sandbox session id (from the httpOnly cookie), or None."""
+    if not app_config.VISITOR_SANDBOX:
+        return None
+    return SANDBOX.valid(request.cookies.get(judge_mode.COOKIE_NAME))
+
+
+def sandbox_for_write(request: Request, response: Response) -> str:
+    """The session a sandbox write goes to: the visitor's, or a new one (cookie set on
+    this response). 503 when the sandbox is full, 429 past the per-session write rate."""
+    sid = sandbox_session(request)
+    if sid is None:
+        try:
+            sid, _expires = SANDBOX.create()
+        except judge_mode.SandboxFull as exc:
+            raise HTTPException(status_code=503, detail=(
+                "The visitor sandbox is full right now; please try again in a few minutes.")) from exc
+        response.set_cookie(judge_mode.COOKIE_NAME, sid, max_age=app_config.SANDBOX_TTL_S, httponly=True,
+                            samesite="lax", secure=app_config.APP_ENV == "production", path="/")
+        response.headers["X-Sandbox-Created"] = "1"
+    try:
+        SANDBOX.check_rate(sid)
+    except judge_mode.SandboxRateLimited as exc:
+        raise HTTPException(status_code=429, detail=(
+            f"Too many sandbox changes in a minute; try again in {exc.retry_after_s} s."),
+            headers={"Retry-After": str(exc.retry_after_s)}) from exc
+    return sid
+
+
+# ── Sandbox overlays: the visitor's private changes on top of the shared state ──
+
+def overlay_alerts(alerts: list[dict], acks: dict) -> list[dict]:
+    """Open alerts with this visitor's sandbox acknowledgements applied (copies)."""
+    if not acks:
+        return alerts
+    out = []
+    for a in alerts:
+        ack = acks.get(str(a.get("id")))
+        if ack and not a.get("acknowledged"):
+            a = {**a, "status": "acknowledged", "acknowledged": True, "acknowledgedBy": ack["by"],
+                 "acknowledgedAt": ack["at"], "sandbox": True}
+        out.append(a)
+    return out
+
+
+def sandbox_alert_view(snap: dict, session: str, overrides: list[dict]) -> dict:
+    """The snapshot as a visitor with their own thresholds sees it (a new dict; `snap` is
+    never changed). Every sensor the visitor re-set is checked against their thresholds on
+    the same shared readings: the shared alert for it is replaced by the visitor's own
+    (or by none). Building states, the dependency cascade and the overall health are then
+    recomputed from that list. Read-only and private: the shared alerts, the database and
+    every other visitor are untouched, and nothing is persisted but a start time per
+    alert in memory (bounded by the sandbox session cap)."""
+    sid = snap["stationId"]
+    mine = {o["sensor"] for o in overrides}
+    th = sandbox_thresholds(session, sid)
+    catalog = station_config.sensors(sid)
+    names = station_config.building_names(sid)
+    ts = snap.get("timestamp") or judge_mode.now_ms()
+    active = [a for a in snap.get("activeAlerts") or [] if a.get("sensor") not in mine]
+    for sensor in sorted(mine):
+        meta = catalog.get(sensor)
+        value = (snap.get("sensors") or {}).get(meta["building"], {}).get(sensor) if meta else None
+        if value is None or sensor not in th:
+            continue
+        level, direction, threshold = alert_engine.classify(float(value), th[sensor])
+        since = SANDBOX.alert_since(session, sid, sensor, None if level == "normal" else level, ts)
+        if since is None:
+            continue
+        message = alert_engine.alert_message(meta, level, direction, threshold, value) + " (your sandbox threshold)"
+        active.append({
+            "id": f"SBX-{sid}-{sensor}-{since}", "buildingId": meta["building"],
+            "buildingName": names.get(meta["building"], meta["building"]), "level": level, "peakLevel": level,
+            "sensor": sensor, "value": value, "unit": meta["unit"], "threshold": threshold, "direction": direction,
+            "message": message, "timestamp": since, "status": "active", "acknowledged": False,
+            "acknowledgedBy": None, "acknowledgedAt": None, "clearing": False,
+            "triggeredSensors": [{"name": sensor, "value": value, "unit": meta["unit"]}],
+            "sandbox": True, "sandboxThreshold": True,
+        })
+    rank = alert_engine.LEVEL_RANK
+    active.sort(key=lambda a: (-rank.get(a.get("level"), 0), a.get("timestamp") or 0))
+    levels = {b: "normal" for b in names}
+    for a in active:
+        b = a.get("buildingId")
+        if rank.get(a.get("level"), 0) > rank[levels.get(b, "normal")]:
+            levels[b] = a["level"]
+    dependency = analyze_dependency_cascade(levels, sid)
+    if any(a["level"] == "critical" for a in active) or any(d["severity"] == "critical" for d in dependency):
+        health = "critical"
+    elif active or dependency:
+        health = "warning"
+    else:
+        health = "healthy"
+    return {**snap, "activeAlerts": active, "alerts": levels, "dependencyAlerts": dependency,
+            "aiHealth": health, "sandboxThresholds": sorted(mine)}
+
+
+def overlay_snapshot(snap: dict, session: str | None) -> dict:
+    """The snapshot with this visitor's sandbox applied: their own thresholds re-evaluated
+    (sandbox_alert_view), then their acknowledgements. No sandbox → `snap` itself."""
+    if not session:
+        return snap
+    overrides = sandbox_threshold_overrides(session, snap.get("stationId"))
+    if overrides:
+        snap = sandbox_alert_view(snap, session, overrides)
+    acks = SANDBOX.get(session, "ack")
+    if not acks:
+        return snap
+    return {**snap, "activeAlerts": overlay_alerts(snap.get("activeAlerts") or [], acks)}
+
+
+def sandbox_threshold_overrides(session: str | None, sid: str) -> list[dict]:
+    """The session's threshold overrides that apply to `sid`, in the shared override format."""
+    out = []
+    for key, v in SANDBOX.get(session, "threshold").items():
+        scope, sensor, direction, level = key.split("|")
+        if scope in ("*", sid):
+            out.append({"stationId": scope, "sensor": sensor, "direction": direction, "level": level,
+                        "value": v["value"], "updatedAt": v["at"], "updatedBy": v["by"], "sandbox": True})
+    return out
+
+
+def sandbox_thresholds(session: str | None, sid: str) -> dict:
+    """Shared effective thresholds, then this visitor's sandbox overrides ('*' then station)."""
+    th = alert_engine.effective_thresholds(sid)
+    ov = sandbox_threshold_overrides(session, sid)
+    for scope in ("*", sid):
+        for o in ov:
+            if o["stationId"] == scope and o["sensor"] in th and o["direction"] in th[o["sensor"]]:
+                th[o["sensor"]][o["direction"]][o["level"]] = o["value"]
+    return th
+
+
 # ═══════════════════════════════════════════════════════════════
 #  WebSocket Connection Manager (per-station subscriptions)
 # ═══════════════════════════════════════════════════════════════
@@ -146,21 +314,25 @@ class ConnectionManager:
     """All methods run on the event loop, so the dict needs no lock."""
 
     def __init__(self):
-        self._conns: dict[WebSocket, str | None] = {}
+        # websocket → (station filter, sandbox session id or None)
+        self._conns: dict[WebSocket, tuple[str | None, str | None]] = {}
 
-    async def connect(self, websocket: WebSocket, station_filter: str | None):
+    async def connect(self, websocket: WebSocket, station_filter: str | None, session: str | None = None):
         await websocket.accept()
-        self._conns[websocket] = station_filter
+        self._conns[websocket] = (station_filter, session)
 
     def disconnect(self, websocket: WebSocket):
         self._conns.pop(websocket, None)
 
     async def broadcast(self, sid: str, message: dict):
-        for ws, station_filter in list(self._conns.items()):
+        for ws, (station_filter, session) in list(self._conns.items()):
             if station_filter is not None and station_filter != sid:
                 continue
             try:
-                await ws.send_json(message)
+                # A visitor with a sandbox sees their own acknowledgements; everyone else
+                # gets the shared snapshot unchanged.
+                msg = overlay_snapshot(message, SANDBOX.valid(session)) if session else message
+                await ws.send_json(msg)
             except Exception as exc:
                 log.info("WS send failed (%s); dropping client", exc)
                 self.disconnect(ws)
@@ -405,8 +577,18 @@ def tick_station(sid: str) -> dict:
     fallback = advance_fallback(sid)
     store.set_fallback(sid, fallback)
     snap = select_snapshot(sid)
+    # A scenario the simulator no longer runs (expired, or reset elsewhere) is not "running".
+    rec = DEMO.get(sid)
+    if (rec and snap.get("dataSource") == "simulator" and not (snap.get("provenance") or {}).get("activeScenario")
+            and judge_mode.now_ms() - rec["startedAt"] > 8000):
+        DEMO.clear(sid)
+    # Every visitor sees every running demo scenario (the banner), whichever station they view.
+    snap["publicDemo"] = DEMO.status()
     store.publish(sid, snap)          # also appends to the rolling history served by /api/history
     return snap
+
+
+_ticks = 0
 
 
 async def run_tick():
@@ -416,6 +598,22 @@ async def run_tick():
             await manager.broadcast(sid, snap)
         except Exception:
             log.exception("Tick failed for station %s", sid)
+    for sid in DEMO.due():
+        try:
+            await asyncio.to_thread(_sim_request, "POST", "/reset",
+                                    params={"station": sid, "source": "public-demo-auto"})
+            log.info("Public demo on %s ended automatically", sid)
+        except Exception:
+            log.exception("Public demo auto-reset failed for %s; will retry", sid)
+            continue
+        DEMO.clear(sid)
+    global _ticks
+    _ticks += 1
+    if app_config.VISITOR_SANDBOX and _ticks % 30 == 0:
+        try:
+            await asyncio.to_thread(SANDBOX.cleanup)
+        except Exception:
+            log.exception("Sandbox cleanup failed")
     try:
         promoted = await asyncio.to_thread(promote_remote_commands)
         if promoted:
@@ -476,7 +674,9 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
 app.add_middleware(
     CORSMiddleware,
     allow_origins=app_config.ALLOWED_ORIGINS,
-    allow_credentials=False,
+    # The visitor-sandbox session is a cookie (judge mode). Origins are an explicit
+    # allow-list (never '*'), which credentialed CORS requires.
+    allow_credentials=True,
     allow_methods=["GET", "POST"],
     # X-Admin-Token is needed for the operator login. In Docker everything is same-origin
     # behind nginx so no preflight happens, but local dev is Vite:5173 -> backend:8080,
@@ -506,13 +706,16 @@ async def websocket_endpoint(websocket: WebSocket):
             log.warning("WS rejected: unknown stationId %r", raw)
             await websocket.close(code=1008)
             return
-    await manager.connect(websocket, station_filter)
+    session = None
+    if app_config.VISITOR_SANDBOX:
+        session = SANDBOX.valid(websocket.cookies.get(judge_mode.COOKIE_NAME))
+    await manager.connect(websocket, station_filter, session)
     try:
         # Initial snapshot(s) from the published cache — no computation.
         for sid in ([station_filter] if station_filter else STATIONS):
             snap = store.get_published(sid)
             if snap is not None:
-                await websocket.send_json(snap)
+                await websocket.send_json(overlay_snapshot(snap, session))
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
@@ -561,8 +764,8 @@ def get_latest_sensors(sid: str = Depends(station_param)):
 
 
 @app.get("/api/station/{station_id}/state")
-def get_station_state(station_id: str):
-    return published_snapshot(require_station(station_id))
+def get_station_state(station_id: str, request: Request):
+    return overlay_snapshot(published_snapshot(require_station(station_id)), sandbox_session(request))
 
 
 _SERIES_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}\.[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -897,15 +1100,17 @@ class WhatIfRequest(BaseModel):
     scenarioId: Literal[WHATIF_SCENARIOS]
     intensity: float = Field(1.0, ge=0.5, le=2.0, allow_inf_nan=False)   # multiplier
 
-def _ledger_items(sid: str) -> dict:
-    """The operator-entered logistics ledger for one station, by item id."""
+def _ledger_items(sid: str, session: str | None = None) -> dict:
+    """The operator-entered logistics ledger for one station, by item id, as this visitor
+    sees it (their sandbox ledger edits applied, judge mode)."""
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM logistics_inventory WHERE station_id = ?", (sid,)).fetchall()
-    return {r["id"]: _inventory_item(r) for r in rows}
+    ledger = SANDBOX.get(session, "ledger")
+    return {r["id"]: _inventory_item(_sandbox_ledger_row(r, ledger)[0]) for r in rows}
 
 
 @app.post("/api/simulation/whatif")
-def run_what_if_simulation(req: WhatIfRequest):
+def run_what_if_simulation(req: WhatIfRequest, request: Request):
     """Rule-based what-if: FIXED scenario deltas applied to the published snapshot.
     This is not the physics model: the coefficients below are assumptions, returned in
     `assumptions`, and every consequence line states only what is computed here (or read
@@ -1001,7 +1206,7 @@ def run_what_if_simulation(req: WhatIfRequest):
         sim_gen["gen_fuel_rate"] += extra_burn
         assumptions += [f"unmetered loss {extra_burn:.1f} L/h (16 × intensity)"]
         impacts.append(f"Fuel loss +{extra_burn:.1f} L/h on top of the generator's {gen['gen_fuel_rate']:.1f} L/h.")
-        fuel = _ledger_items(station_id).get(f"{station_id}-fuel")
+        fuel = _ledger_items(station_id, sandbox_session(request)).get(f"{station_id}-fuel")
         if fuel and fuel["unit"] == "L" and gen["gen_fuel_rate"] > 0:
             before = fuel["current"] / (gen["gen_fuel_rate"] * 24)
             after = fuel["current"] / ((gen["gen_fuel_rate"] + extra_burn) * 24)
@@ -1031,7 +1236,7 @@ def run_what_if_simulation(req: WhatIfRequest):
         days_delay = int(60 * k)
         assumptions += [f"resupply delayed {days_delay} days (60 × intensity)",
                         "consumption stays at the ledger's daily use"]
-        items = _ledger_items(station_id).values()
+        items = _ledger_items(station_id, sandbox_session(request)).values()
         short = [i for i in items if i["daysRemaining"] is not None and i["daysRemaining"] < days_delay]
         impacts.append(f"Resupply delayed by {days_delay} days.")
         if short:
@@ -1105,10 +1310,28 @@ class AcknowledgeRequest(BaseModel):
     acknowledgedBy: OperatorName
 
 
-@app.post("/api/alerts/{alert_id}/acknowledge", dependencies=[Depends(require_admin)])
-def acknowledge_alert(alert_id: str, req: AcknowledgeRequest):
+@app.post("/api/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: str, req: AcknowledgeRequest, request: Request, response: Response,
+                      scope: str = Depends(write_scope)):
     if len(alert_id) > 120:
         raise HTTPException(status_code=422, detail=["alert id too long"])
+    if scope == "sandbox":
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM station_alerts WHERE id = ?", (alert_id,)).fetchone()
+        if row is None:
+            # One of this visitor's own-threshold alerts, if it is open in their view now.
+            row = _open_sandbox_alert(alert_id, sandbox_session(request))
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Unknown alert '{alert_id}'")
+        session = sandbox_for_write(request, response)
+        already = row["acknowledged_at"] is not None or alert_id in SANDBOX.get(session, "ack")
+        if not already:
+            SANDBOX.put(session, "ack", alert_id, {"by": req.acknowledgedBy, "at": judge_mode.now_ms()})
+        ack = SANDBOX.get(session, "ack").get(alert_id) or {}
+        return {"status": "success", "alertId": alert_id, "acknowledged": True, "sandbox": True,
+                "acknowledgedBy": row["acknowledged_by"] or ack.get("by"),
+                "acknowledgedAt": row["acknowledged_at"] or ack.get("at"),
+                "alertStatus": "acknowledged", "alreadyAcknowledged": already}
     try:
         row = ALERTS.acknowledge(alert_id, req.acknowledgedBy)
     except AlertNotFound as exc:
@@ -1118,9 +1341,40 @@ def acknowledge_alert(alert_id: str, req: AcknowledgeRequest):
             "alertStatus": row["status"], "alreadyAcknowledged": row["alreadyAcknowledged"]}
 
 
+def _sandbox_view_alerts(sid: str, session: str | None) -> list[dict]:
+    """This visitor's own-threshold alerts open at `sid` now (none without a sandbox)."""
+    if not session:
+        return []
+    return [a for a in overlay_snapshot(published_snapshot(sid), session)["activeAlerts"] if a.get("sandboxThreshold")]
+
+
+def _open_sandbox_alert(alert_id: str, session: str | None) -> dict | None:
+    """An open own-threshold alert of this visitor, as an acknowledgeable row, or None."""
+    if not session or not alert_id.startswith("SBX-"):
+        return None
+    for sid in STATIONS:
+        if alert_id.startswith(f"SBX-{sid}-"):
+            for a in _sandbox_view_alerts(sid, session):
+                if a["id"] == alert_id:
+                    return {"acknowledged_by": None, "acknowledged_at": None}
+    return None
+
+
 @app.get("/api/alerts/history")
-def get_alert_history(sid: str = Depends(station_param), limit: int = Query(100, ge=1, le=500)):
-    rows = ALERTS.history(sid, limit)
+def get_alert_history(request: Request, sid: str = Depends(station_param), limit: int = Query(100, ge=1, le=500)):
+    session = sandbox_session(request)
+    # The visitor's own-threshold alerts (open now) come first, in the history row shape.
+    rows = [{"id": a["id"], "parameter": a["sensor"], "subsystem": a["buildingId"], "severity": a["level"],
+             "peak_severity": a["peakLevel"], "direction": a["direction"], "threshold_value": a["threshold"],
+             "unit": a["unit"], "observed_value": a["value"], "reason": a["message"], "status": "active",
+             "timestamp": a["timestamp"], "resolved_at": None, "acknowledged_by": None, "acknowledged_at": None,
+             "_sandbox": True} for a in _sandbox_view_alerts(sid, session)]
+    rows = (rows + ALERTS.history(sid, limit))[:limit]
+    acks = SANDBOX.get(session, "ack")
+    if acks:
+        rows = [{**r, "acknowledged_by": acks[r["id"]]["by"], "acknowledged_at": acks[r["id"]]["at"],
+                 "status": "acknowledged" if r["status"] == "active" else r["status"], "_sandbox": True}
+                if r["id"] in acks and r["acknowledged_at"] is None else r for r in rows]
     names = station_config.building_names(sid)
     return {"stationId": sid, "alerts": [{
         "id": r["id"], "sensor": r["parameter"], "buildingId": r["subsystem"],
@@ -1129,7 +1383,7 @@ def get_alert_history(sid: str = Depends(station_param), limit: int = Query(100,
         "threshold": r["threshold_value"], "unit": r["unit"], "value": r["observed_value"],
         "message": r["reason"], "status": r["status"], "raisedAt": r["timestamp"],
         "resolvedAt": r["resolved_at"], "acknowledgedBy": r["acknowledged_by"],
-        "acknowledgedAt": r["acknowledged_at"]} for r in rows]}
+        "acknowledgedAt": r["acknowledged_at"], "sandbox": bool(r.get("_sandbox"))} for r in rows]}
 
 # ═══════════════════════════════════════════════════════════════
 #  Logistics & Operational Inventory APIs
@@ -1155,11 +1409,25 @@ def _inventory_item(r) -> dict:
     }
 
 
+def _sandbox_ledger_row(row, ledger: dict):
+    """The inventory row as this visitor's sandbox sees it (dict), or the row itself."""
+    v = ledger.get(f"{row['station_id']}|{row['id']}")
+    if not v:
+        return row, False
+    return {**dict(row), "current": v["current"], "daily_consumption": v["dailyConsumption"],
+            "last_updated": v["at"], "updated_by": v["by"]}, True
+
+
 @app.get("/api/logistics")
-def get_logistics(sid: str = Depends(station_param)):
+def get_logistics(request: Request, sid: str = Depends(station_param)):
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM logistics_inventory WHERE station_id = ? ORDER BY id", (sid,)).fetchall()
-    return {"stationId": sid, "items": [_inventory_item(r) for r in rows]}
+    ledger = SANDBOX.get(sandbox_session(request), "ledger")
+    items = []
+    for r in rows:
+        row, sandboxed = _sandbox_ledger_row(r, ledger)
+        items.append({**_inventory_item(row), "sandbox": sandboxed})
+    return {"stationId": sid, "items": items}
 
 
 class InventoryUpdateRequest(BaseModel):
@@ -1171,10 +1439,37 @@ class InventoryUpdateRequest(BaseModel):
     updatedBy: OperatorName
 
 
-@app.post("/api/logistics/update", dependencies=[Depends(require_admin)])
-def update_inventory_item(req: InventoryUpdateRequest):
+@app.post("/api/logistics/update")
+def update_inventory_item(req: InventoryUpdateRequest, request: Request, response: Response,
+                          scope: str = Depends(write_scope)):
     sid = require_station(req.stationId)
     now_ts = int(time.time() * 1000)
+    if scope == "sandbox":
+        with db.connect() as conn:
+            shared = conn.execute("SELECT * FROM logistics_inventory WHERE id = ? AND station_id = ?",
+                                  (req.itemId, sid)).fetchone()
+        if shared is None:
+            raise HTTPException(status_code=404, detail=f"Unknown inventory item '{req.itemId}' for station '{sid}'")
+        if req.current > shared["max_capacity"]:
+            raise HTTPException(status_code=422, detail=[
+                f"current ({req.current}) exceeds max capacity "
+                f"({shared['max_capacity']} {shared['unit']}) of {req.itemId}"])
+        session = sandbox_for_write(request, response)
+        row, _ = _sandbox_ledger_row(shared, SANDBOX.get(session, "ledger"))
+        daily = req.dailyConsumption if req.dailyConsumption is not None else row["daily_consumption"]
+        changes = [("current", row["current"], req.current)]
+        if req.dailyConsumption is not None:
+            changes.append(("daily_consumption", row["daily_consumption"], req.dailyConsumption))
+        changes = [(f, old, new) for f, old, new in changes if float(old) != float(new)]
+        SANDBOX.put(session, "ledger", f"{sid}|{req.itemId}",
+                    {"current": req.current, "dailyConsumption": daily, "at": now_ts, "by": req.updatedBy})
+        for i, (f, old, new) in enumerate(changes):
+            SANDBOX.put(session, "ledger_audit", f"{sid}|{now_ts}|{uuid.uuid4().hex[:8]}{i}",
+                        {"itemId": req.itemId, "field": f, "old": str(old), "new": str(new),
+                         "by": req.updatedBy, "at": now_ts})
+        updated, _ = _sandbox_ledger_row(shared, SANDBOX.get(session, "ledger"))
+        return {"status": "success", "sandbox": True, "item": {**_inventory_item(updated), "sandbox": True},
+                "changes": len(changes)}
     with db.connect() as conn:
         row = conn.execute("SELECT * FROM logistics_inventory WHERE id = ? AND station_id = ?",
                            (req.itemId, sid)).fetchone()
@@ -1203,7 +1498,7 @@ def update_inventory_item(req: InventoryUpdateRequest):
 
 
 @app.get("/api/logistics/history")
-def get_logistics_history(sid: str = Depends(station_param),
+def get_logistics_history(request: Request, sid: str = Depends(station_param),
                           itemId: str | None = Query(None, max_length=64),
                           limit: int = Query(100, ge=1, le=500)):
     with db.connect() as conn:
@@ -1216,9 +1511,17 @@ def get_logistics_history(sid: str = Depends(station_param),
             rows = conn.execute(
                 "SELECT * FROM logistics_audit WHERE station_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
                 (sid, limit)).fetchall()
-    return {"stationId": sid, "history": [
+    history = [
         {"id": r["id"], "itemId": r["item_id"], "field": r["field"], "oldValue": r["old_value"],
-         "newValue": r["new_value"], "updatedBy": r["updated_by"], "updatedAt": r["updated_at"]} for r in rows]}
+         "newValue": r["new_value"], "updatedBy": r["updated_by"], "updatedAt": r["updated_at"], "sandbox": False}
+        for r in rows]
+    mine = [{"id": f"sandbox-{k}", "itemId": v["itemId"], "field": v["field"], "oldValue": v["old"],
+             "newValue": v["new"], "updatedBy": v["by"], "updatedAt": v["at"], "sandbox": True}
+            for k, v in SANDBOX.get(sandbox_session(request), "ledger_audit").items()
+            if k.startswith(f"{sid}|") and (not itemId or v["itemId"] == itemId)]
+    if mine:
+        history = sorted(mine + history, key=lambda h: h["updatedAt"], reverse=True)[:limit]
+    return {"stationId": sid, "history": history}
 
 # ═══════════════════════════════════════════════════════════════
 #  Remote Command & Control APIs (SIMULATED dispatch — no station link)
@@ -1237,8 +1540,9 @@ class DispatchCommandRequest(BaseModel):
     issuedBy: OperatorName
 
 
-@app.post("/api/remote/dispatch", dependencies=[Depends(require_admin)])
-def dispatch_remote_command(req: DispatchCommandRequest):
+@app.post("/api/remote/dispatch")
+def dispatch_remote_command(req: DispatchCommandRequest, request: Request, response: Response,
+                            scope: str = Depends(write_scope)):
     sid = require_station(req.stationId)
     catalog = station_config.remote_command_catalog()
     if req.subsystem not in catalog:
@@ -1249,6 +1553,14 @@ def dispatch_remote_command(req: DispatchCommandRequest):
             f"unknown command '{req.command}' for {req.subsystem}. Known: {', '.join(catalog[req.subsystem])}"])
     now_ts = int(time.time() * 1000)
     cmd_id = f"CMD-{now_ts}-{sid[:3].upper()}-{uuid.uuid4().hex[:6]}"
+    if scope == "sandbox":
+        session = sandbox_for_write(request, response)
+        SANDBOX.put(session, "command", cmd_id, {
+            "station_id": sid, "subsystem": req.subsystem, "command": req.command,
+            "parameters": req.parameters or {}, "created_at": now_ts, "issued_by": req.issuedBy})
+        return {"status": CMD_QUEUED, "simulated": True, "sandbox": True, "commandId": cmd_id,
+                "message": (f"Simulated dispatch in your sandbox: '{req.command}' for {sid} {req.subsystem} "
+                            "was recorded privately. No real actuation link exists.")}
     with db.connect() as conn:
         conn.execute("""
             INSERT INTO remote_commands
@@ -1290,21 +1602,40 @@ def _command_out(r) -> dict:
     return d
 
 
+def _sandbox_command_out(cmd_id: str, v: dict) -> dict:
+    """A sandbox command in the shared row shape, its lifecycle derived from the clock."""
+    acked_at = v["created_at"] + int(app_config.REMOTE_ACK_DELAY_S * 1000)
+    acked = judge_mode.now_ms() >= acked_at
+    lifecycle = [{"state": CMD_QUEUED, "at": v["created_at"]}]
+    if acked:
+        lifecycle.append({"state": CMD_ACKNOWLEDGED, "at": acked_at})
+    return {"id": cmd_id, "station_id": v["station_id"], "subsystem": v["subsystem"], "command": v["command"],
+            "parameters": json.dumps(v["parameters"]), "status": CMD_ACKNOWLEDGED if acked else CMD_QUEUED,
+            "created_at": v["created_at"], "dispatched_at": None, "acknowledged_at": acked_at if acked else None,
+            "issued_by": v["issued_by"],
+            "response_log": "SIMULATED dispatch in a visitor sandbox: recorded privately, nothing executed.",
+            "lifecycle": lifecycle, "simulated": True, "sandbox": True}
+
+
 @app.get("/api/remote/commands")
-def get_remote_commands(sid: str = Depends(station_param), limit: int = Query(50, ge=1, le=200)):
+def get_remote_commands(request: Request, sid: str = Depends(station_param), limit: int = Query(50, ge=1, le=200)):
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM remote_commands WHERE station_id = ? ORDER BY created_at DESC LIMIT ?",
                             (sid, limit)).fetchall()
-    return {"stationId": sid, "commands": [_command_out(r) for r in rows],
-            "catalog": station_config.remote_command_catalog()}
+    commands = [{**_command_out(r), "sandbox": False} for r in rows]
+    mine = [_sandbox_command_out(k, v) for k, v in SANDBOX.get(sandbox_session(request), "command").items()
+            if v["station_id"] == sid]
+    if mine:
+        commands = sorted(mine + commands, key=lambda c: c["created_at"], reverse=True)[:limit]
+    return {"stationId": sid, "commands": commands, "catalog": station_config.remote_command_catalog()}
 
 # ═══════════════════════════════════════════════════════════════
 #  Alert Management APIs
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/alerts")
-def get_alerts(sid: str = Depends(station_param)):
-    snap = published_snapshot(sid)   # read-only
+def get_alerts(request: Request, sid: str = Depends(station_param)):
+    snap = overlay_snapshot(published_snapshot(sid), sandbox_session(request))   # read-only
     return {
         "stationId": sid,
         "activeAlerts": snap["activeAlerts"],
@@ -1328,16 +1659,61 @@ def admin_session(x_admin_token: str | None = Header(None, alias="X-Admin-Token"
     wrong on the operator's first real write.
     """
     expected = app_config.ADMIN_TOKEN
+    judge = {"sandbox": app_config.VISITOR_SANDBOX, "publicDemo": app_config.PUBLIC_DEMO,
+             "sandboxTtlS": app_config.SANDBOX_TTL_S, "publicDemoDurationS": app_config.PUBLIC_DEMO_DURATION_S}
     if not expected:
-        return {"writeProtected": False, "authenticated": True}
+        return {"writeProtected": False, "authenticated": True, **judge}
     ok = bool(x_admin_token) and secrets.compare_digest(x_admin_token, expected)
-    return {"writeProtected": True, "authenticated": ok}
+    return {"writeProtected": True, "authenticated": ok, **judge}
+
+
+class VisitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entry: str = Field("main", max_length=64)
+
+
+@app.post("/api/visit")
+def record_visit(req: VisitRequest, request: Request,
+                 x_admin_token: str | None = Header(None, alias="X-Admin-Token")):
+    """Count a page open (visits.py: aggregate counts, no cookie, nothing personal stored).
+    Public by nature, like the explain routes: it changes only a counter, and nginx's
+    /api rate limit applies. The team (a valid token) is not counted."""
+    if x_admin_token and app_config.ADMIN_TOKEN and secrets.compare_digest(x_admin_token, app_config.ADMIN_TOKEN):
+        return {"counted": False}
+    out = VISITS.record(client_ip(request), request.headers.get("user-agent", "")[:300], req.entry)
+    return {"counted": out["counted"]}
+
+
+@app.get("/api/admin/visits", dependencies=[Depends(require_admin)])
+def get_visits(days: int = Query(14, ge=1, le=90)):
+    """Visit counts for the team (Administration → Visits)."""
+    return VISITS.summary(days)
+
+
+@app.get("/api/sandbox")
+def sandbox_status(request: Request):
+    """This visitor's sandbox: whether it exists, when it expires, what it holds. Never creates one."""
+    session = sandbox_session(request)
+    return {"enabled": app_config.VISITOR_SANDBOX, "active": session is not None,
+            "expiresAt": SANDBOX.expires_at(session) if session else None,
+            "ttlS": app_config.SANDBOX_TTL_S, "changes": SANDBOX.counts(session)}
+
+
+@app.post("/api/sandbox/reset")
+def sandbox_reset(request: Request, response: Response):
+    """Forget this visitor's sandbox (only theirs: the id comes from their own cookie)."""
+    session = sandbox_session(request)
+    removed = SANDBOX.reset(session) if session else 0
+    response.delete_cookie(judge_mode.COOKIE_NAME, path="/")
+    return {"status": "reset", "removed": removed}
 
 
 @app.get("/api/admin/config")
-def get_admin_config(sid: str = Depends(station_param)):
+def get_admin_config(request: Request, sid: str = Depends(station_param)):
     sensors = station_config.sensors(sid)
     overrides = alert_engine.load_overrides(sid)
+    session = sandbox_session(request)
+    sandbox_ov = sandbox_threshold_overrides(session, sid)
     return {
         "system": {
             "name": "AURORA Antarctic Digital Twin Platform",
@@ -1359,9 +1735,13 @@ def get_admin_config(sid: str = Depends(station_param)):
         ],
         "stationId": sid,
         # Effective thresholds used by the alert engine for this station.
-        "thresholds": alert_engine.effective_thresholds(sid, overrides),
+        "thresholds": (sandbox_thresholds(session, sid) if sandbox_ov
+                       else alert_engine.effective_thresholds(sid, overrides)),
         "thresholdDefaults": station_config.default_thresholds(sid),
-        "thresholdOverrides": overrides,
+        "thresholdOverrides": overrides + sandbox_ov,
+        # This visitor's private overrides (judge mode): their own alert view uses them
+        # (sandbox_alert_view); the shared alerts and every other visitor keep the shared ones.
+        "sandboxOverrides": sandbox_ov,
         "thresholdRules": {k: {"name": v["name"], "building": v["building"], "unit": v["unit"],
                                "min": v["thresholdRange"][0], "max": v["thresholdRange"][1], "basis": v["basis"]}
                            for k, v in sensors.items()},
@@ -1393,8 +1773,9 @@ def _scope(raw: str) -> str:
     return "*" if raw.strip() == "*" else require_station(raw)
 
 
-@app.post("/api/admin/config", dependencies=[Depends(require_admin)])
-def update_admin_config(req: ConfigUpdateRequest):
+@app.post("/api/admin/config")
+def update_admin_config(req: ConfigUpdateRequest, request: Request, response: Response,
+                        scope_kind: str = Depends(write_scope)):
     scope = _scope(req.stationId)
     updates = {
         sensor: {d: {lvl: v for lvl, v in levels.model_dump().items() if v is not None}
@@ -1405,6 +1786,24 @@ def update_admin_config(req: ConfigUpdateRequest):
     updates = {k: v for k, v in updates.items() if v}
     if not updates:
         raise HTTPException(status_code=422, detail=["no threshold values given"])
+    if scope_kind == "sandbox":
+        session = sandbox_session(request)
+        errors = alert_engine.validate_threshold_update(scope, updates, base=lambda s: sandbox_thresholds(session, s))
+        if errors:
+            raise HTTPException(status_code=422, detail=errors)
+        session = sandbox_for_write(request, response)
+        ts = judge_mode.now_ms()
+        n = 0
+        for sensor, dirs in updates.items():
+            for direction, levels in dirs.items():
+                for level, value in levels.items():
+                    SANDBOX.put(session, "threshold", f"{scope}|{sensor}|{direction}|{level}",
+                                {"value": float(value), "by": req.updatedBy, "at": ts})
+                    n += 1
+        shown = STATIONS[0] if scope == "*" else scope
+        return {"status": "saved", "sandbox": True, "stationId": scope, "valuesSaved": n, "updatedAt": ts,
+                "thresholds": sandbox_thresholds(session, shown), "thresholdsUsedByAlerts": True,
+                "alertsScope": "sandbox"}
     errors = alert_engine.validate_threshold_update(scope, updates)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
@@ -1422,11 +1821,17 @@ class ThresholdResetRequest(BaseModel):
     updatedBy: OperatorName
 
 
-@app.post("/api/admin/config/reset", dependencies=[Depends(require_admin)])
-def reset_admin_thresholds(req: ThresholdResetRequest):
+@app.post("/api/admin/config/reset")
+def reset_admin_thresholds(req: ThresholdResetRequest, request: Request, response: Response,
+                           scope_kind: str = Depends(write_scope)):
     scope = _scope(req.stationId)
     if req.sensor is not None and req.sensor not in station_config.sensors(STATIONS[0] if scope == "*" else scope):
         raise HTTPException(status_code=404, detail=f"Unknown sensor '{req.sensor}'")
+    if scope_kind == "sandbox":
+        session = sandbox_for_write(request, response)
+        removed = SANDBOX.delete(session, "threshold", f"{scope}|{req.sensor}|" if req.sensor else f"{scope}|")
+        SANDBOX.forget_alerts(session, None if scope == "*" else scope)
+        return {"status": "reset", "sandbox": True, "stationId": scope, "sensor": req.sensor, "removed": removed}
     removed = alert_engine.reset_overrides(scope, req.sensor)
     log.info("Alert threshold overrides reset by %s for %s/%s: %d removed", req.updatedBy, scope, req.sensor, removed)
     return {"status": "reset", "stationId": scope, "sensor": req.sensor, "removed": removed}
@@ -1493,16 +1898,62 @@ def sim_scenarios(sid: str = Depends(station_param)):
     return _sim_request("GET", "/scenarios", params={"station": sid})
 
 
-@app.post("/api/sim/inject/{scenario_id}", dependencies=[Depends(require_admin)])
-def sim_inject(scenario_id: str, sid: str = Depends(station_param)):
+def _demo_error(status: int, exc: judge_mode.DemoBusy):
+    return HTTPException(status_code=status, detail={"message": exc.message, "retryAfterS": exc.retry_after_s},
+                         headers={"Retry-After": str(exc.retry_after_s)})
+
+
+@app.post("/api/sim/inject/{scenario_id}")
+def sim_inject(scenario_id: str, request: Request, sid: str = Depends(station_param),
+               actor: str = Depends(demo_actor)):
+    """Team: any scenario, any time. Visitor (PUBLIC_DEMO): only the predefined demo
+    scenarios, one per station at a time, PUBLIC_DEMO_DURATION_S long, then auto-reset,
+    and one start per PUBLIC_DEMO_COOLDOWN_S per IP."""
     if not re.fullmatch(r"[a-z0-9_]{1,40}", scenario_id):
         raise HTTPException(status_code=422, detail=["invalid scenario id"])
-    return _sim_request("POST", f"/inject/{scenario_id}", params={"station": sid})
+    if actor == "visitor":
+        if scenario_id not in judge_mode.PUBLIC_SCENARIOS:
+            raise HTTPException(status_code=403, detail="Only the predefined demo scenarios can be started publicly.")
+        name = scenario_id.replace("_", " ")
+        ip = client_ip(request)
+        duration = app_config.PUBLIC_DEMO_DURATION_S
+        try:
+            DEMO.start(sid, scenario_id, name, started_by="visitor", duration_s=duration, ip=ip,
+                       station_name=station_config.meta_value(sid, "name"))
+        except judge_mode.DemoCooldown as exc:
+            raise _demo_error(429, exc) from exc
+        except judge_mode.DemoBusy as exc:
+            raise _demo_error(409, exc) from exc
+        try:
+            res = _sim_request("POST", f"/inject/{scenario_id}",
+                               params={"station": sid, "duration": duration, "source": "public-demo"})
+        except HTTPException:
+            DEMO.forget_start(sid, ip)
+            raise
+        rec = DEMO.set_name(sid, res.get("name", name))
+        log.info("Public demo %s started on %s by a visitor", scenario_id, sid)
+        return {**res, "publicDemo": rec}
+    res = _sim_request("POST", f"/inject/{scenario_id}", params={"station": sid})
+    rec = DEMO.start(sid, scenario_id, res.get("name", scenario_id), started_by="team",
+                     duration_s=float(res.get("duration") or 30))
+    return {**res, "publicDemo": rec}
 
 
-@app.post("/api/sim/reset", dependencies=[Depends(require_admin)])
-def sim_reset(sid: str = Depends(station_param)):
-    return _sim_request("POST", "/reset", params={"station": sid})
+@app.post("/api/sim/reset")
+def sim_reset(sid: str = Depends(station_param), actor: str = Depends(demo_actor)):
+    """Team: always. Visitor: only a running public demo scenario."""
+    if actor == "visitor":
+        rec = DEMO.get(sid)
+        if not rec:
+            return {"status": "idle", "station": sid, "message": "No demo scenario is running."}
+        if rec["startedBy"] != "visitor":
+            raise HTTPException(status_code=403,
+                                detail="This scenario was started by the Aurora team; it ends by itself.")
+        res = _sim_request("POST", "/reset", params={"station": sid, "source": "public-demo"})
+    else:
+        res = _sim_request("POST", "/reset", params={"station": sid})
+    DEMO.clear(sid)
+    return res
 
 
 class ModeRequest(BaseModel):
@@ -1538,6 +1989,18 @@ class ExplainRequest(BaseModel):
 
 _LLM_FAILURE_PREFIXES = ("LLM explanation", "Decision engine has not")
 
+# Several judges asking the same thing at the same moment get one LLM answer: the cache
+# key is the request plus the station's alert state, so a changed situation is re-asked.
+_explain_cache: dict[tuple, tuple[float, dict]] = {}
+_explain_lock = threading.Lock()
+
+
+def _explain_key(sid: str, req: "ExplainRequest") -> tuple:
+    snap = store.get_published(sid) or {}
+    alerts = tuple(sorted((str(a.get("id")), a.get("level")) for a in snap.get("activeAlerts") or []))
+    scenario = (snap.get("provenance") or {}).get("activeScenario")
+    return (sid, req.question, " ".join(req.freeText.lower().split()), alerts, scenario)
+
 
 @app.post("/api/aurora-explain")
 @app.post("/api/explain")
@@ -1548,12 +2011,23 @@ def get_ai_explanation(req: ExplainRequest):
     summary of the current decision JSON labelled 'offline summary'."""
     sid = require_station(req.stationId or req.station or "maitri")
     reason = None
+    key = _explain_key(sid, req)
+    now = time.time()
+    with _explain_lock:
+        for k in [k for k, (t, _) in _explain_cache.items() if now - t > app_config.EXPLAIN_CACHE_S]:
+            _explain_cache.pop(k, None)
+        hit = _explain_cache.get(key)
+    if hit:
+        return {**hit[1], "cached": True, "cachedAgeS": round(now - hit[0])}
     try:
         res = _sim_request("POST", "/api/aurora-explain", timeout=EXPLAIN_TIMEOUT_S,
                            json_body={"station": sid, "question": req.question, "freeText": req.freeText})
         text = str(res.get("explanation", ""))
         if res.get("llmAvailable") and not text.startswith(_LLM_FAILURE_PREFIXES):
-            return {**res, "station": sid, "mode": "llm", "llmAvailable": True}
+            out = {**res, "station": sid, "mode": "llm", "llmAvailable": True}
+            with _explain_lock:
+                _explain_cache[key] = (time.time(), out)
+            return out
         reason = text or "LLM unavailable"
     except HTTPException as exc:
         reason = str(exc.detail)

@@ -69,7 +69,9 @@
 - `ADMIN_TOKEN` set → every **state-changing** route needs `X-Admin-Token`, enforced by the
   one `require_admin` dependency in `unified_backend.py`. Add it to any new POST/PUT/DELETE.
 - Reads and `/ws/station` stay public. The only unprotected POSTs are the ones that change
-  nothing — `/api/simulation/whatif` and the explain routes — which nginx rate-limits instead.
+  nothing — `/api/simulation/whatif` and the explain routes — which nginx rate-limits instead,
+  and the visit beacon `POST /api/visit` (aggregate counts only, `simulator/visits.py`; reading
+  them, `GET /api/admin/visits`, needs the token).
 - `simulator.py` authenticates its `/api/sensors/batch` POSTs with the same token.
 - The frontend keeps the token in **memory only** (`src/services/adminToken.js`); never
   localStorage. `GET /api/admin/session` tells the UI whether protection is on and whether a

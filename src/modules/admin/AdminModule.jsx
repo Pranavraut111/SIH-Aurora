@@ -12,7 +12,7 @@
    - Station configuration: station_config.json with source and confidence.
    Every write asks for confirmation and reports through a toast.
    ═══════════════════════════════════════════════════════════════ */
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import {
   Alert, Box, Card, Chip, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, TextField, Typography,
 } from '@mui/material';
@@ -30,6 +30,7 @@ import ScrollX from '../../ui/ScrollX';
 import SectionCard from '../../ui/SectionCard';
 import { ErrorState, LoadingBlock } from '../../ui/States';
 import WriteButton from '../../ui/WriteButton';
+import { SandboxNotice, SandboxTag } from '../../ui/Sandbox';
 import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
 
@@ -39,6 +40,9 @@ const TABS = [
   { id: 'access', label: 'Access' },
   { id: 'config', label: 'Station configuration' },
 ];
+// The team's visit counts: a separate chunk, loaded only when the tab is opened.
+const VisitsPanel = lazy(() => import('./VisitsPanel'));
+const VISITS_TAB = { id: 'visits', label: 'Visits' };
 const LEVELS = [['low', 'warning'], ['low', 'critical'], ['high', 'warning'], ['high', 'critical']];
 
 function DataSources({ stationNames, onIngest, busy, system }) {
@@ -58,7 +62,7 @@ function DataSources({ stationNames, onIngest, busy, system }) {
           </Box>
           <Stack direction="row" sx={{ gap: 2, flexWrap: 'wrap' }}>
             {STATION_IDS.map((sid) => (
-              <WriteButton key={sid} variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} disabled={busy}
+              <WriteButton team key={sid} variant="outlined" size="small" startIcon={<CloudDownloadOutlined />} disabled={busy}
                 onClick={() => onIngest(sid)} data-testid={`admin-ingest-${sid}`}>
                 Ingest {stationNames[sid]}
               </WriteButton>
@@ -94,7 +98,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
   const meta = MODULES.admin;
   const confirm = useConfirm();
   const toast = useToast();
-  const { writeProtected, canWrite } = useAdminToken();
+  const { writeProtected, canWrite, canWriteShared, sandbox } = useAdminToken();
   const [tab, setTab] = useState('sources');
   const [state, setState] = useState({ station: null, config: null, error: null });
   const [attempt, setAttempt] = useState(0);
@@ -118,7 +122,10 @@ export default function AdminModule({ activeStation = 'maitri' }) {
   const effective = cfg?.stationId === activeStation ? cfg.thresholds : null;
   const valueOf = (s, dir, lvl) => edits[s]?.[dir]?.[lvl] ?? String(effective?.[s]?.[dir]?.[lvl] ?? '');
   const setEdit = (s, dir, lvl, v) => setEdits((p) => ({ ...p, [s]: { ...p[s], [dir]: { ...p[s]?.[dir], [lvl]: v } } }));
-  const isOverridden = (s) => (cfg?.thresholdOverrides || []).some((o) => o.sensor === s && o.stationId === activeStation);
+  const isOverridden = (s) => (cfg?.thresholdOverrides || []).some((o) => o.sensor === s && o.stationId === activeStation && !o.sandbox);
+  const inMySandbox = (s) => (cfg?.sandboxOverrides || []).some((o) => o.sensor === s);
+  // A visitor's Reset removes only their own sandbox values; the team's resets the shared override.
+  const canReset = (s) => (sandbox ? inMySandbox(s) : isOverridden(s));
   const nameOk = OPERATOR_NAME_RE.test(name.trim());
   const stationNames = Object.fromEntries(STATION_IDS.map((sid) => [sid, stationMeta(sid).name]));
 
@@ -160,7 +167,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
     if (!changeCount) return;
     const ok = await confirm({
       title: `Save ${changeCount} threshold value${changeCount > 1 ? 's' : ''}?`,
-      body: `The alert engine uses them for ${stationMeta(activeStation).name} from the next tick. Recorded as ${name.trim()}.`,
+      body: sandbox
+        ? `Your alerts for ${stationMeta(activeStation).name} use them straight away. Only you see them, and they reset after an hour.`
+        : `The alert engine uses them for ${stationMeta(activeStation).name} from the next tick. Recorded as ${name.trim()}.`,
       confirmLabel: 'Save thresholds',
     });
     if (!ok) return;
@@ -168,7 +177,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
     try {
       const res = await apiPost('/admin/config', { stationId: activeStation, thresholds: changes, updatedBy: name.trim() });
       persistOperatorName(name);
-      toast({ text: `Saved ${res.valuesSaved} value(s). The alert engine uses them from the next tick.` });
+      toast({ text: res.sandbox
+        ? `Saved ${res.valuesSaved} value(s) in your sandbox. Your alerts now use them; other visitors still see the station's own thresholds.`
+        : `Saved ${res.valuesSaved} value(s). The alert engine uses them from the next tick.` });
       reload();
     } catch (err) {
       console.error('[Admin] save thresholds failed', err);
@@ -195,28 +206,33 @@ export default function AdminModule({ activeStation = 'maitri' }) {
     }
   }
 
+  // Visits is for the team only (the read needs the token); visitors never see the tab.
+  const tabs = canWriteShared ? [...TABS, VISITS_TAB] : TABS;
+  const shownTab = tabs.some((t) => t.id === tab) ? tab : 'sources';
+
   return (
     <Box data-testid="admin-module">
       <PageHeader section={sectionLabel(meta.section)} title={meta.title} description={meta.description} tourId="admin" />
       <SectionCard title="System" subtitle={`Settings for ${stationMeta(activeStation).fullName} unless a tab says otherwise`} testId="admin-card">
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile aria-label="Administration" sx={{ mb: 4 }}>
-          {TABS.map((t) => <Tab key={t.id} value={t.id} label={t.label} data-testid={`admin-tab-${t.id}`} />)}
+        <Tabs value={shownTab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile aria-label="Administration" sx={{ mb: 4 }}>
+          {tabs.map((t) => <Tab key={t.id} value={t.id} label={t.label} data-testid={`admin-tab-${t.id}`} />)}
         </Tabs>
         {state.error && <ErrorState sx={{ mb: 3 }} onRetry={reload}>Configuration unavailable because {describeFailure(state.error)}.</ErrorState>}
 
-        <Box role="tabpanel" aria-label={TABS.find((t) => t.id === tab).label}>
-          {tab === 'sources' && <DataSources stationNames={stationNames} onIngest={ingest} busy={busy} system={cfg?.system} />}
+        <Box role="tabpanel" aria-label={tabs.find((t) => t.id === shownTab).label}>
+          {shownTab === 'sources' && <DataSources stationNames={stationNames} onIngest={ingest} busy={busy} system={cfg?.system} />}
 
-          {tab === 'thresholds' && (
+          {shownTab === 'thresholds' && (
             !cfg ? (state.error ? null : <LoadingBlock lines={8} />) : (
               <Box component="form" onSubmit={save} data-testid="thresholds-form" noValidate>
                 <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>
                   Defaults come from station_config.json; saved values are per-station overrides in SQLite. An alert clears after
                   {' '}{cfg.alertResolveTicks} consecutive normal ticks.
                 </Typography>
+                <SandboxNotice>Change a threshold and your own alerts follow it straight away, on every page. Other visitors keep seeing the station&apos;s own thresholds.</SandboxNotice>
                 {!canWrite && (
                   <Alert severity="info" sx={{ mb: 3 }} data-testid="thresholds-readonly">
-                    Read-only: sign in as operator to edit thresholds.
+                    Read-only: use Team sign-in (⋮ menu) to edit thresholds.
                   </Alert>
                 )}
                 <ScrollX label="Alert thresholds, scrollable">
@@ -236,6 +252,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                           <TableCell sx={{ pl: 0, minWidth: 200 }} title={rule.basis}>
                             {rule.name}
                             {isOverridden(s) && <Chip size="small" label="Override" sx={{ ml: 1 }} />}
+                            <SandboxTag show={inMySandbox(s)} sx={{ ml: 1 }} />
                             <Typography variant="caption" component="div" sx={{ color: 'text.secondary', typography: 'mono', fontSize: 11 }}>{s} · {rule.building}</Typography>
                           </TableCell>
                           <TableCell sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>{rule.unit} ({rule.min}–{rule.max})</TableCell>
@@ -250,7 +267,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
                             </TableCell>
                           ))}
                           <TableCell sx={{ pr: 0 }}>
-                            {isOverridden(s) && <WriteButton size="small" onClick={() => reset(s, rule.name)} data-testid={`admin-reset-${s}`}>Reset</WriteButton>}
+                            {canReset(s) && <WriteButton size="small" onClick={() => reset(s, rule.name)} data-testid={`admin-reset-${s}`}>Reset</WriteButton>}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -273,7 +290,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
             )
           )}
 
-          {tab === 'access' && (
+          {shownTab === 'access' && (
             <Stack sx={{ gap: 4 }}>
               <Alert severity="info">
                 {writeProtected === true
@@ -307,7 +324,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
             </Stack>
           )}
 
-          {tab === 'config' && (
+          {shownTab === 'visits' && <Suspense fallback={<LoadingBlock lines={6} />}><VisitsPanel /></Suspense>}
+
+          {shownTab === 'config' && (
             <Stack sx={{ gap: 4 }}>
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                 From simulator/station_config.json (also served at /api/config/stations), with the source and confidence of each value.
