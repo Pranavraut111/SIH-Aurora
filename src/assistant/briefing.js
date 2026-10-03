@@ -39,7 +39,9 @@ export function updateText(ev, book) {
   const inc = ev.incident;
   const station = stationMeta(inc.station).name;
   const bits = [];
-  if (ev.risk) {
+  if (ev.confirmed && !ev.risk) {
+    bits.push(`The decision engine now confirms the risk at ${station} is ${inc.engineRisk}.`);
+  } else if (ev.risk) {
     bits.push(ev.from ? `Risk at ${station} ${ev.type === 'escalate' ? 'escalated' : 'changed'} from ${ev.from} to ${ev.risk}.`
       : `The decision engine rates the risk ${ev.risk}.`);
   } else if (ev.type === 'escalate') {

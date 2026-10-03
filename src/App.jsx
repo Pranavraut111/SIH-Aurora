@@ -22,7 +22,7 @@ import { useStationData } from './hooks/useStationData';
 import { useDatabase } from './hooks/useDatabase';
 import { useAdminToken } from './hooks/useAdminToken';
 import { useToast } from './ui/feedbackContext';
-import { openAssistant, setAssistant, useAssistant } from './assistant/bus';
+import { askAurora, openAssistant, setAssistant, useAssistant } from './assistant/bus';
 import { TourContext } from './tour/tourContext';
 import { PAGE_TOURS, markTourSeen, readTourParam } from './tour/tourPrefs';
 import { STORY_META, markWelcomeSeen, readStoryParam, welcomeSeen } from './tour/storyMeta';
@@ -223,6 +223,7 @@ export default function App() {
     markWelcomeSeen(choice);
     setOpen(null);
     if (choice === 'tour') startTour('main');
+    if (choice === 'aurora') openAssistant();
   }, [startTour]);
   const pageTour = PAGE_TOURS[activeModule] ? activeModule : null;
   const tourValue = useMemo(() => ({ start: startTour, active: tourActive }), [startTour, tourActive]);
@@ -329,6 +330,7 @@ export default function App() {
     ...STATION_IDS.map((sid) => ({
       id: `station-${sid}`, group: 'Station', label: `Switch to ${stationMeta(sid).name}`, keywords: stationMeta(sid).region, run: () => handleStationChange(sid),
     })),
+    { id: 'aurora', group: 'Aurora', label: 'Ask Aurora (the assistant)', keys: ['V'], keywords: 'assistant voice talk speak chat question mic incident help', run: () => openAssistant() },
     { id: 'alerts', group: 'Panels', label: 'Open the alert centre', keywords: 'alarms acknowledge history', run: openAlerts },
     { id: 'link', group: 'Panels', label: 'Satellite link details', keywords: 'connection source telemetry link loss', run: openLink },
     { id: 'events', group: 'Panels', label: 'Open the event log', keywords: 'timeline', run: () => show('events') },
@@ -620,7 +622,7 @@ export default function App() {
         {mounted.events && <EventsDrawer open={open === 'events'} onClose={close} events={eventTimeline} />}
         {mounted.demo && <DemoControlDrawer open={open === 'demo'} onClose={close} activeStation={activeStation}
           publicDemo={stationData.publicDemo} receivedAt={stationData.receivedAt} />}
-        {mounted.palette && <CommandPalette open={open === 'palette'} onClose={close} commands={commands} />}
+        {mounted.palette && <CommandPalette open={open === 'palette'} onClose={close} commands={commands} onAsk={askAurora} />}
         {mounted.help && <ShortcutsDialog open={open === 'help'} onClose={close} onStartTour={() => startTour('main')} />}
       </Suspense>
 

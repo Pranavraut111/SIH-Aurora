@@ -908,6 +908,16 @@ def forecast_status():
         })
 
 
+@control_app.route("/api/decision/evaluate", methods=["POST"])
+def decision_evaluate():
+    """Re-evaluate this station's decision on the next tick (debounced). Used by the assistant
+    when an incident opens, so the risk it reports catches up with the alerts quickly."""
+    station_id = flask_request.args.get("station", "maitri")
+    sim = _get_station(station_id)
+    sim._decision_scheduler.request("assistant_incident")
+    return jsonify({"queued": True, "station": station_id})
+
+
 @control_app.route("/api/decision", methods=["GET"])
 def decision_status():
     """Phase 5: Decision engine output with audit trail."""

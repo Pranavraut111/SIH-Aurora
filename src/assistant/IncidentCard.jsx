@@ -31,7 +31,7 @@ function Section({ title, children, testId }) {
 
 export default function IncidentCard({
   incident: inc, book, compact = false, queued = 0, queue = [], ctx, alerts = [], nextStepLabel,
-  onOpen, onSnooze, onToggleStep, onControl, onShowChain, onFocus, snoozedUntil, now = 0,
+  onOpen, onShowMe, onSnooze, onToggleStep, onControl, onShowChain, onFocus, snoozedUntil, now = 0,
 }) {
   const [showCauses, setShowCauses] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
@@ -52,10 +52,11 @@ export default function IncidentCard({
           <IconButton size="small" aria-label="Snooze this incident for 5 minutes" onClick={onSnooze}><CloseOutlined fontSize="small" /></IconButton>
         </Stack>
         <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
-          {inc.risk ? `Decision engine risk: ${inc.risk}. ` : ''}{nextStepLabel ? `Next: ${nextStepLabel}` : ''}
+          {inc.risk ? `Risk: ${inc.risk}. ` : ''}{nextStepLabel ? `Next: ${nextStepLabel}` : ''}
         </Typography>
         <Stack direction="row" sx={{ gap: 2, mt: 3, alignItems: 'center' }}>
-          <Button variant="contained" size="small" onClick={onOpen} data-testid="incident-float-open">Open checklist</Button>
+          {onShowMe && <Button variant="contained" size="small" onClick={onShowMe} data-testid="incident-float-show">Show me</Button>}
+          <Button variant={onShowMe ? 'text' : 'contained'} size="small" onClick={onOpen} data-testid="incident-float-open">Checklist</Button>
           {queued > 0 && <Typography variant="caption" sx={{ color: 'text.secondary' }}>+{queued} more incident{queued > 1 ? 's' : ''}</Typography>}
         </Stack>
       </Card>
@@ -125,7 +126,11 @@ export default function IncidentCard({
           <Section title="Current risk" testId="incident-risk">
             <Stack direction="row" sx={{ gap: 2, alignItems: 'center' }}>
               {inc.risk ? <StatusChip status={RISK_STATUS[inc.risk] || 'warning'} label={cap(inc.risk)} /> : <Typography variant="body2">Not assessed yet</Typography>}
-              <Typography variant="caption" sx={{ color: 'text.secondary', flex: 1 }}>Decision engine (rule-based risk matrix)</Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', flex: 1 }} data-testid="incident-risk-source">
+                {inc.engineConfirmed || !inc.baselineRisk
+                  ? 'Decision engine (rule-based risk matrix)'
+                  : `Baseline for this failure type; the decision engine (rule-based) currently rates it ${inc.engineRisk || 'not yet'}`}
+              </Typography>
               <Button size="small" onClick={() => setShowWhy((v) => !v)} aria-expanded={showWhy} sx={{ minWidth: 0 }}>Why it matters</Button>
             </Stack>
             <Collapse in={showWhy} unmountOnExit>

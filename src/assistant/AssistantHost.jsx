@@ -23,7 +23,7 @@ import { MODULES } from '../shell/navigation';
 import { STORY_META } from '../tour/storyMeta';
 import { useConfirm } from '../ui/feedbackContext';
 import { describeFailure } from '../lib/failure';
-import { getAssistant, setAssistant, useAssistant } from './bus';
+import { getAssistant, noteOwnScenario, setAssistant, useAssistant } from './bus';
 import { buildingName, demoLabel, describeAction, downstream, InvalidAction, listText, storyLabel, validateAction, whatIfLabel } from './actions';
 import { parseIntent } from './intents';
 import { emptyState, observationFrom, observe, queue } from './incidents';
@@ -38,7 +38,6 @@ const AssistantPanel = lazy(() => import('./AssistantPanel'));
 const CONTEXT_POLL_MS = 10000;
 const SPOKEN_UPDATE_GAP_MS = 20000;
 const SNOOZE_MS = 5 * 60 * 1000;
-const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
 let nextId = 1;
 const uid = () => `e${nextId++}`;
 
@@ -223,6 +222,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         const station = a.args.station || l.activeStation;
         if (!canRunScenarios) throw Object.assign(new Error('not allowed'), { userMessage: 'Demo scenarios need the team sign-in on this server.' });
         await apiPost(`/sim/inject/${a.args.id}?stationId=${station}`);
+        noteOwnScenario(station, a.args.id);
         if (station !== l.activeStation) controls.setStation(station);
         return { say: `Started the ${demoLabel(a.args.id).toLowerCase()} demo at ${stationMeta(station).name}. It is simulated and resets itself in about 2 minutes.` };
       }
@@ -274,14 +274,12 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   }, [askConfirm, execute]);
 
   const undo = useCallback((entryId, chipId) => {
-    setEntries((list) => list.map((e) => {
-      if (e.id !== entryId) return e;
-      return { ...e, chips: e.chips.map((c) => {
-        if (c.id !== chipId || !c.undo || c.undone) return c;
-        try { c.undo(); } catch (err) { console.warn('[Aurora] undo failed', err); }
-        return { ...c, undone: true };
-      }) };
-    }));
+    // Run the undo here, never inside a state updater: it changes the app's own state.
+    const chip = live.current.entries?.find((e) => e.id === entryId)?.chips?.find((c) => c.id === chipId);
+    if (!chip?.undo || chip.undone) return;
+    try { chip.undo(); } catch (err) { console.warn('[Aurora] undo failed', err); }
+    setEntries((list) => list.map((e) => (e.id !== entryId ? e
+      : { ...e, chips: e.chips.map((c) => (c.id === chipId ? { ...c, undone: true } : c)) })));
   }, []);
 
   // ── Incidents ──
@@ -337,6 +335,15 @@ export default function AssistantHost({ stationData, activeStation, activeModule
     };
   }, [controls]);
 
+  /** The visitor's own incident: a demo scenario this browser started (≤ 10 min ago) or
+   *  their own sandbox alerts. Everything else is someone else's or shared. */
+  const isOwn = useCallback((i) => {
+    if (i.sandbox) return true;
+    const book = bookOf(i);
+    return getAssistant().own.some((o) => o.station === i.station && Date.now() - o.at < 10 * 60 * 1000
+      && (o.scenario === i.scenario || (book && book.match.scenarios.includes(o.scenario))));
+  }, [bookOf]);
+
   const handleIncidentEvents = useCallback(async (events) => {
     for (const ev of events) {
       const i = ev.incident;
@@ -344,39 +351,38 @@ export default function AssistantHost({ stationData, activeStation, activeModule
       if (!book) continue;
       const l = live.current;
       if (ev.type === 'new') {
-        const announce = !i.atLoad && l.gesture && !l.tourActive && (l.snoozed[i.key] || 0) < Date.now();
+        // Ask the decision engine for its view now (it can lag the alerts), then re-read it.
+        // Until it catches up the incident states the playbook's baseline risk (incidents.js).
+        apiPost(`/assistant/evaluate?stationId=${i.station}`, undefined, { timeoutMs: 5000 })
+          .catch((err) => console.warn('[Aurora] decision re-evaluation request failed', err));
+        [2500, 6000].forEach((ms) => setTimeout(() => { refreshCtx(i.station).catch((err) => console.warn('[Aurora] context refresh failed', err)); }, ms));
+        const live0 = !i.atLoad && l.gesture && !l.tourActive && (l.snoozed[i.key] || 0) < Date.now();
+        // Only the visitor's own incidents (their demo scenario, their sandbox) open the panel,
+        // navigate and speak by themselves; others show the floating card with "Show me".
+        const own = isOwn(i);
+        const takeOver = live0 && own;
+        const speakIt = live0 && (own || l.prefs.announceAll);
         let chips = [];
         let navigatedTo = null;
-        let fresh = i;
-        if (announce) {
+        if (takeOver) {
           setFocusKey((k) => k || i.key);
           setAssistant({ open: true });
-          // The decision engine's risk for this moment, not the last poll's.
-          try {
-            const c = await Promise.race([refreshCtx(i.station), sleep(1500).then(() => null)]);
-            const risk = c?.decision?.available ? c.decision.risk?.level : null;
-            if (risk) {
-              fresh = { ...i, risk };
-              setInc((s) => ({ ...s, incidents: { ...s.incidents, [i.key]: { ...s.incidents[i.key], risk, peakRisk: risk } } }));
-            }
-          } catch (err) {
-            console.warn('[Aurora] context refresh for the briefing failed', err);
-          }
           if (l.prefs.autoNavigate) {
-            const nav = autoNavigate(fresh, book);
+            const nav = autoNavigate(i, book);
             chips = [{ id: uid(), label: nav.label, undo: nav.undo }];
             navigatedTo = MODULES[book.page]?.label || null;
           }
         }
-        const text = briefingText(fresh, book, { navigatedTo });
-        add({ role: 'aurora', kind: 'incident', incidentKey: i.key, text, chips, quiet: !announce });
-        if (announce) { lastSpoken.current[i.key] = Date.now(); say(text); }
+        const text = briefingText(i, book, { navigatedTo });
+        add({ role: 'aurora', kind: 'incident', incidentKey: i.key, text, chips, quiet: !takeOver,
+          note: own ? null : 'Started by someone else or from shared data: shown, not opened for you.' });
+        if (speakIt) { lastSpoken.current[i.key] = Date.now(); say(text); }
       } else if (ev.type === 'update' || ev.type === 'escalate') {
         if (i.dismissed) continue;
         const text = updateText(ev, book);
         if (!text) continue;
         add({ role: 'aurora', kind: 'update', incidentKey: i.key, text });
-        if (l.gesture && !l.tourActive) speakIncident(i.key, text, { urgent: ev.type === 'escalate' });
+        if (l.gesture && !l.tourActive && (isOwn(i) || l.prefs.announceAll)) speakIncident(i.key, text, { urgent: ev.type === 'escalate' });
         if (incidentNav.current[i.key] && ev.added?.length) {
           setAssistant((s) => (s.highlight?.incident === i.key ? { highlight: { ...s.highlight, ids: [...new Set([...s.highlight.ids, ...ev.added])] } } : {}));
         }
@@ -385,12 +391,12 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         delete pendingUpdate.current[i.key];
         const sum = resolvedSummary(i, book);
         add({ role: 'aurora', kind: 'summary', incidentKey: i.key, text: sum.text, summary: sum });
-        if (!i.dismissed && l.gesture && !l.tourActive) say(sum.text);
+        if (!i.dismissed && l.gesture && !l.tourActive && (isOwn(i) || l.prefs.announceAll)) say(sum.text);
         if (getAssistant().highlight?.incident === i.key) setAssistant({ highlight: null });
         setFocusKey((k) => k || i.key);
       }
     }
-  }, [add, autoNavigate, bookOf, refreshCtx, say, speakIncident]);
+  }, [add, autoNavigate, bookOf, isOwn, refreshCtx, say, speakIncident]);
 
   // Observe the active station on every snapshot (and every context poll).
   const obsKey = JSON.stringify([activeStation, (stationData.activeAlerts || []).map((a) => [a.id, a.level]),
@@ -502,6 +508,13 @@ export default function AssistantHost({ stationData, activeStation, activeModule
     }
   }, [add, hush, incidentControl, runActions, say, setPrefs]);
   useEffect(() => { live.current.entries = entries; });
+  // "Ask Aurora: …" from the command palette.
+  const ask = useAssistant((s) => s.ask);
+  useEffect(() => {
+    if (!ask?.text) return;
+    setAssistant({ ask: null });
+    handle(ask.text, 'text');
+  }, [ask, handle]);
 
   const runSuggestion = useCallback(async (entryId, action) => {
     setEntries((list) => list.map((e) => (e.id === entryId ? { ...e, suggestions: e.suggestions.filter((s) => s !== action) } : e)));
@@ -600,6 +613,13 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         <IncidentCard compact incident={floatIncident} book={bookOf(floatIncident)} isPhone={isPhone}
           queued={queued.length - 1}
           onOpen={() => { setFocusKey(floatIncident.key); setAssistant({ open: true }); }}
+          onShowMe={() => {
+            const b = bookOf(floatIncident);
+            setFocusKey(floatIncident.key);
+            setAssistant({ open: true });
+            const nav = autoNavigate(floatIncident, b);
+            add({ role: 'aurora', text: `${nav.label}.`, chips: [{ id: uid(), label: nav.label, undo: nav.undo }] });
+          }}
           onSnooze={() => incidentControl('snooze', floatIncident.key)}
           nextStepLabel={nextStep(floatIncident, bookOf(floatIncident))?.step.do} />
       )}

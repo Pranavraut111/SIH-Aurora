@@ -169,9 +169,10 @@ GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
 # explain routes return the offline summary instead — honest, and it bounds the bill.
 # Sized for Groq's free tier on openai/gpt-oss-120b (30 req/min, 1,000 req/day, 8,000
 # tokens/min, 200,000 tokens/day): one explanation is about 1–1.5k tokens, so the daily
-# token budget (~130 calls) is the binding limit, not the request count.
+# token budget is the binding limit, not the request count: the assistant's explanation
+# prompt is ~1.8k tokens, so 100 calls a day stays inside 200k tokens.
 GROQ_MAX_CALLS_PER_HOUR = _get_int("GROQ_MAX_CALLS_PER_HOUR", 40)
-GROQ_MAX_CALLS_PER_DAY = _get_int("GROQ_MAX_CALLS_PER_DAY", 120)
+GROQ_MAX_CALLS_PER_DAY = _get_int("GROQ_MAX_CALLS_PER_DAY", 100)
 # Identical explanation requests (same station, question, text and alert state) within
 # this many seconds reuse the previous LLM answer instead of spending another call.
 EXPLAIN_CACHE_S = _get_int("EXPLAIN_CACHE_S", 120)

@@ -50,6 +50,7 @@ function Message({ e, onUndo, onSuggestion, stationId }) {
         {mine && e.via === 'voice' && <Typography component="span" variant="caption" sx={{ display: 'block', opacity: 0.8 }}>Said</Typography>}
         {e.text}
         {e.resolved && <Typography component="span" variant="caption" sx={{ display: 'block', mt: 0.5, fontWeight: 600 }}>{e.resolved}</Typography>}
+        {e.note && <Typography component="span" variant="caption" sx={{ display: 'block', mt: 0.5, color: 'text.secondary' }}>{e.note}</Typography>}
       </Box>
       {!mine && (e.notice || e.mode === 'llm' || e.grounding?.ok === false) && (
         <Typography variant="caption" sx={{ color: 'text.secondary' }} data-testid="msg-mode">
@@ -153,6 +154,8 @@ export default function AssistantPanel({
           <Stack sx={{ py: 2, gap: 0.5 }} data-testid="assistant-settings-panel">
             <FormControlLabel control={<Switch size="small" checked={prefs.voice} onChange={(e) => setPrefs({ voice: e.target.checked })} />} label="Speak replies" />
             <FormControlLabel control={<Switch size="small" checked={prefs.autoNavigate} onChange={(e) => setPrefs({ autoNavigate: e.target.checked })} />} label="Open pages automatically" />
+            <FormControlLabel control={<Switch size="small" checked={prefs.announceAll} onChange={(e) => setPrefs({ announceAll: e.target.checked })} data-testid="assistant-announce-all" />}
+              label="Announce all incidents (not only the ones you start)" />
             <FormControlLabel control={<Switch size="small" checked={prefs.conversation} disabled={!voiceIn} onChange={(e) => setPrefs({ conversation: e.target.checked })} />}
               label="Conversation mode (keep listening)" />
             <Stack direction="row" sx={{ alignItems: 'center', gap: 3, pr: 2 }}>

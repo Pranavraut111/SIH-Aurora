@@ -14,6 +14,11 @@
    (alert buildings + the backend's cascade chains) and follows the risk; it is
    resolved once its trigger has been absent for RESOLVE_AFTER observations.
 
+   Risk: max(the playbook's baselineRisk, the decision engine's level). The engine can
+   lag the alerts by a tick or two, so an incident never states less than the baseline
+   for its failure type; once the engine reaches the baseline the incident is marked
+   `engineConfirmed` (an update says so), and a higher engine rating escalates it.
+
    Events: new | update | escalate | resolved. Incidents already present on the
    first observation of a station are flagged `atLoad` (shown, never announced).
    ═══════════════════════════════════════════════════════════════ */
@@ -21,6 +26,13 @@
 export const RESOLVE_AFTER = 2;
 const SEVERITY_RANK = { critical: 2, warning: 1 };
 export const RISK_RANK = { nominal: 0, low: 1, moderate: 2, high: 3, critical: 4 };
+const rank = (r) => (r == null ? -1 : RISK_RANK[r] ?? -1);
+
+/** The risk an incident may state: never below its playbook's baseline for the failure type,
+ *  raised by the decision engine when the engine rates it higher. */
+export function effectiveRisk(baseline, engine) {
+  return rank(engine) > rank(baseline) ? engine : (baseline || engine || null);
+}
 
 export const emptyState = () => ({ incidents: {}, seen: {} });
 
@@ -94,7 +106,7 @@ export function observe(state, obs, books, now) {
   const incidents = { ...state.incidents };
   const first = !state.seen[obs.station];
   const groups = triggers(obs, books);
-  const risk = obs.risk || null;
+  const engine = obs.risk || null;
 
   Object.entries(groups).forEach(([pid, g]) => {
     const key = `${obs.station}:${pid}`;
@@ -102,10 +114,13 @@ export function observe(state, obs, books, now) {
     const affected = [...new Set([...sources, ...cascadeAffected(obs.cascades, sources)])];
     const cur = incidents[key];
     if (!cur || cur.status === 'resolved') {
+      const baseline = books.find((b) => b.id === pid)?.baselineRisk || null;
+      const risk = effectiveRisk(baseline, engine);
       const inc = {
         id: `${key}:${now}`, key, station: obs.station, playbookId: pid, kind: g.kind, severity: g.severity,
         status: 'active', startedAt: now, atLoad: first, alertIds: g.alerts.map((a) => a.id),
         sources: [...sources], affected, everAffected: affected, risk, peakRisk: risk,
+        baselineRisk: baseline, engineRisk: engine, engineConfirmed: rank(engine) >= rank(baseline) && engine != null,
         sandbox: g.alerts.length > 0 && g.alerts.every((a) => a.sandboxThreshold || a.sandbox),
         scenario: obs.scenario || null, done: [], clear: 0, updatedAt: now,
       };
@@ -115,18 +130,23 @@ export function observe(state, obs, books, now) {
     }
     const added = affected.filter((b) => !cur.everAffected.includes(b));
     const escalated = (SEVERITY_RANK[g.severity] || 0) > (SEVERITY_RANK[cur.severity] || 0);
-    const riskUp = risk && (RISK_RANK[risk] ?? -1) > (RISK_RANK[cur.risk] ?? -1);
-    const riskChanged = risk && risk !== cur.risk;
+    const eng = engine || cur.engineRisk;
+    const risk = effectiveRisk(cur.baselineRisk, eng);
+    const riskUp = rank(risk) > rank(cur.risk);
+    const riskChanged = risk !== cur.risk;
+    const confirmed = !cur.engineConfirmed && eng != null && rank(eng) >= rank(cur.baselineRisk);
     const next = {
       ...cur, severity: escalated ? g.severity : cur.severity, sources: [...sources], affected,
       everAffected: [...cur.everAffected, ...added], alertIds: [...new Set([...cur.alertIds, ...g.alerts.map((a) => a.id)])],
-      risk: risk || cur.risk, clear: 0,
-      peakRisk: riskUp && (RISK_RANK[risk] ?? -1) > (RISK_RANK[cur.peakRisk] ?? -1) ? risk : cur.peakRisk,
+      risk, engineRisk: eng, engineConfirmed: cur.engineConfirmed || confirmed, clear: 0,
+      peakRisk: rank(risk) > rank(cur.peakRisk) ? risk : cur.peakRisk,
     };
-    if (added.length || escalated || riskChanged) next.updatedAt = now;
+    if (added.length || escalated || riskChanged || confirmed) next.updatedAt = now;
     incidents[key] = next;
-    if (escalated || (riskUp && cur.risk != null)) events.push({ type: 'escalate', incident: next, added, risk: riskUp ? risk : null, from: cur.risk });
-    else if (added.length || riskChanged) events.push({ type: 'update', incident: next, added, risk: riskChanged ? risk : null, from: cur.risk });
+    if (escalated || (riskUp && cur.risk != null)) events.push({ type: 'escalate', incident: next, added, risk: riskUp ? risk : null, from: cur.risk, confirmed });
+    else if (added.length || riskChanged || confirmed) {
+      events.push({ type: 'update', incident: next, added, risk: riskChanged ? risk : null, from: cur.risk, confirmed });
+    }
   });
 
   Object.values(incidents).forEach((inc) => {

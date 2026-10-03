@@ -91,7 +91,17 @@ def test_every_playbook_is_complete_and_marked_as_an_example():
         assert 4 <= len(p["steps"]) <= 6, p["id"]
         assert all(s["do"].endswith(".") and s["say"] and s["say"][0].islower() for s in p["steps"]), p["id"]
         assert p["page"] in modules
+        assert p["baselineRisk"] in ("nominal", "low", "moderate", "high", "critical")
         assert p["focus"] is None or p["focus"] in buildings
+
+
+def test_failure_playbooks_have_a_serious_risk_floor():
+    rank = {"nominal": 0, "low": 1, "moderate": 2, "high": 3, "critical": 4}
+    assert rank[assistant.playbook("generator_failure")["baselineRisk"]] >= rank["high"]
+    for pid in ("heating_failure", "blizzard", "co2_spike"):
+        assert rank[assistant.playbook(pid)["baselineRisk"]] >= rank["high"], pid
+    for pid in ("water_crisis", "link_loss", "low_fuel"):
+        assert rank[assistant.playbook(pid)["baselineRisk"]] >= rank["moderate"], pid
 
 
 @pytest.mark.parametrize("scenario", assistant.catalogue()["demoScenarios"])
@@ -179,6 +189,8 @@ def test_tool_schemas_cover_every_action_and_answer_question():
     ("Any alerts?", "alerts", "maitri", None),
     ("What's the CO2 in the living quarters?", "sensor", "maitri", "livingQuarters"),
     ("why is heating zone b in warning", "why_building", "maitri", "heatingB"),
+    ("how windy is it", "weather", "maitri", None),
+    ("is it freezing outside at Bharati?", "weather", "bharati", None),
     ("sing me a song", "unknown", "maitri", None),
 ])
 def test_understand(text, topic, station, building):
@@ -409,3 +421,13 @@ def test_assistant_routes_need_no_token_and_change_nothing(client, monkeypatch):
     monkeypatch.setattr(ub.app_config, "ADMIN_TOKEN", "secret")
     assert c.post("/api/assistant/chat", json={"stationId": "maitri", "text": "fuel?"}).status_code == 200
     assert c.get("/api/assistant/context?stationId=maitri").status_code == 200
+
+
+def test_evaluate_route_asks_the_simulator_and_degrades(client, monkeypatch):
+    c, ub = client
+    assert c.post("/api/assistant/evaluate?stationId=bharati").json()["queued"] is False   # simulator down
+    seen = []
+    monkeypatch.setattr(ub, "_sim_request", lambda m, p, **k: seen.append((m, p, k.get("params"))) or {"queued": True})
+    assert c.post("/api/assistant/evaluate?stationId=bharati").json() == {"queued": True}
+    assert seen == [("POST", "/api/decision/evaluate", {"station": "bharati"})]
+    assert c.post("/api/assistant/evaluate?stationId=vostok").status_code == 404

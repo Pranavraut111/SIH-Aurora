@@ -2255,6 +2255,17 @@ def assistant_status():
             "models": {"router": st.get("routerModel"), "explain": st.get("explainModel")}}
 
 
+@app.post("/api/assistant/evaluate")
+def assistant_evaluate(sid: str = Depends(station_param)):
+    """Ask the decision engine to re-evaluate this station on its next tick (debounced to one
+    evaluation per 2 s). Changes no shared state: it only refreshes a computed assessment,
+    so like the explain routes it needs no token."""
+    try:
+        return _sim_request("POST", "/api/decision/evaluate", params={"station": sid})
+    except HTTPException as exc:
+        return {"queued": False, "station": sid, "reason": str(exc.detail)}
+
+
 @app.get("/api/assistant/playbooks")
 def assistant_playbooks():
     """Incident playbooks: example procedures, not official NCPOR procedures."""

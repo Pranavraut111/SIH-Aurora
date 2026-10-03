@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "disclaimer": "Example procedure, not an official NCPOR procedure.",
-  "description": "Aurora's incident playbooks: one per failure type the twin can show (the public demo scenarios and the main alert and anomaly types). Read by simulator/assistant.py and served at GET /api/assistant/playbooks. Each one is a conservative EXAMPLE written for the demo: safety first, verify before acting, keep the station leader and the mainland informed. Typical causes are typical, never a diagnosis. Matching: an active demo scenario id wins; otherwise the playbook whose alert sensors match the incident's alerts (first in this file's order); otherwise its anomaly causes; otherwise 'anomaly'. Each step has `do` (the checklist text) and `say` (a short phrase for the spoken briefing).",
+  "description": "Aurora's incident playbooks: one per failure type the twin can show (the public demo scenarios and the main alert and anomaly types). Read by simulator/assistant.py and served at GET /api/assistant/playbooks. Each one is a conservative EXAMPLE written for the demo: safety first, verify before acting, keep the station leader and the mainland informed. Typical causes are typical, never a diagnosis. Matching: an active demo scenario id wins; otherwise the playbook whose alert sensors match the incident's alerts (first in this file's order); otherwise its anomaly causes; otherwise 'anomaly'. Each step has `do` (the checklist text) and `say` (a short phrase for the spoken briefing). `baselineRisk` is the floor for this failure type (decision-engine scale nominal < low < moderate < high < critical): a briefing never states a lower risk, even while the engine has not caught up.",
   "playbooks": [
     {
       "id": "generator_failure",
@@ -32,6 +32,7 @@
       ],
       "affectedHint": "Everything downstream of the Generator Shed in the dependency graph: both heating zones, water treatment, the comms tower, living quarters and the research lab.",
       "riskRationale": "Loss of power removes heating within hours at Antarctic temperatures; frozen water lines and loss of communications follow. The time to restore power is the main driver of risk.",
+      "baselineRisk": "high",
       "steps": [
         {
           "do": "Verify that backup power has taken over: standby generator running or UPS carrying the critical loads.",
@@ -85,6 +86,7 @@
       ],
       "affectedHint": "The buildings the heating zone serves in the dependency graph (living quarters for zone A, the research lab for zone B).",
       "riskRationale": "Indoor temperature falls quickly when the outside is far below freezing; crew safety and frozen pipes are the main risks. Risk rises with the outside cold and the time without heat.",
+      "baselineRisk": "high",
       "steps": [
         {
           "do": "Check the indoor temperature in the affected buildings and move crew to a heated area if it keeps falling.",
@@ -133,6 +135,7 @@
       ],
       "affectedHint": "The buildings the water treatment plant supplies in the dependency graph (living quarters and the research lab).",
       "riskRationale": "Drinking and sanitation water are essential; water outside its quality range must not be drunk until it has been checked again.",
+      "baselineRisk": "moderate",
       "steps": [
         {
           "do": "Restrict drinking water use until the water quality has been checked by hand.",
@@ -181,6 +184,7 @@
       ],
       "affectedHint": "The living quarters, and the crew inside it.",
       "riskRationale": "High CO₂ causes headaches and poor judgement; very high levels are dangerous. A combustion source can also mean carbon monoxide, which this twin does not measure.",
+      "baselineRisk": "high",
       "steps": [
         {
           "do": "Move people out of the affected rooms if anyone has a headache or dizziness, or the level keeps rising.",
@@ -227,6 +231,7 @@
       ],
       "affectedHint": "Outdoor operations, the comms tower (satellite link) and the heating load, which rises with wind and cold.",
       "riskRationale": "Outdoor movement becomes dangerous in high wind and low visibility; external equipment can be damaged; communications may be lost.",
+      "baselineRisk": "high",
       "steps": [
         {
           "do": "Stop outdoor work and account for everyone: confirm all personnel are inside.",
@@ -275,6 +280,7 @@
       ],
       "affectedHint": "The comms tower and every data stream to the mainland; on-site systems keep running.",
       "riskRationale": "Without the link the station cannot ask for help or report status. Risk grows with the outage length and with any other incident running at the same time.",
+      "baselineRisk": "moderate",
       "steps": [
         {
           "do": "Switch to the backup communication channel (HF radio or a secondary satellite terminal).",
@@ -322,6 +328,7 @@
       ],
       "affectedHint": "The generator and everything it powers, over the coming days.",
       "riskRationale": "Fuel is the station's only primary energy source; running out stops power and heating. The days of autonomy left decide how urgent this is.",
+      "baselineRisk": "moderate",
       "steps": [
         {
           "do": "Verify the fuel stock with a manual dip of the tanks.",
@@ -363,6 +370,7 @@
       ],
       "affectedHint": "The buildings of the sensors that deviate most from the physics prediction.",
       "riskRationale": "An unexplained deviation is a reason to check, not proof of a fault. The detector compares against synthetic prototype signatures, not a validated diagnosis.",
+      "baselineRisk": "low",
       "steps": [
         {
           "do": "Read the anomaly evidence: which sensors deviate from the physics prediction, and by how much.",

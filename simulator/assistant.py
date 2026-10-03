@@ -359,7 +359,8 @@ _TOPIC_RULES = [
     ("fuel", r"\bfuel\b|\bdiesel\b|\bautonomy\b"),
     ("alerts", r"\balerts?\b|\balarms?\b|\bwhat'?s wrong|\bany (?:problems|issues)|\bwarnings?\b|\bcritical\b"),
     ("forecast", r"\bforecast|\bpredict|\btomorrow\b|\bnext (?:hour|day)|\btrend"),
-    ("weather", r"\bweather\b|\bwind\b|\bcold\b|\bstorm\b|\bblizzard\b|\boutside\b"),
+    ("weather", r"\bweather\b|\bwind(?:y|s)?\b|\bblowing\b|\bcold(?:er)?\b|\bfreezing\b|\bstorm(?:y)?\b|\bblizzard\b|"
+                r"\boutside\b|\btemperature outside\b|\bsnow(?:ing)?\b"),
     ("generator", r"\bgenerator\b|\bpower\b|\brpm\b|\bengine\b|\bload\b"),
     ("status", r"\bstatus\b|\bhow is\b|\bhow are\b|\boverview\b|\bsituation\b|\bsummary\b|\bsummar"),
 ]

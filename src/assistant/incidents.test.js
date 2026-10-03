@@ -64,9 +64,22 @@ describe('incident lifecycle', () => {
     expect(events[2][0]).toMatchObject({ type: 'update', added: ['livingQuarters'] });
   });
 
-  it('a rising risk is an escalation', () => {
-    const { events } = run([{}, { alerts: [genAlert], risk: 'moderate' }, { alerts: [genAlert], risk: 'high' }]);
-    expect(events[2][0]).toMatchObject({ type: 'escalate', risk: 'high', from: 'moderate' });
+  it('the risk never drops below the playbook baseline while the engine lags', () => {
+    const { events } = run([{}, { alerts: [genAlert], risk: 'low' }, { alerts: [genAlert], risk: 'nominal' }]);
+    expect(events[1][0].incident).toMatchObject({ risk: 'high', baselineRisk: 'high', engineRisk: 'low', engineConfirmed: false });
+    expect(events[2]).toEqual([]);                       // the engine sinking further changes nothing said
+  });
+
+  it('says so once the engine catches up with the baseline', () => {
+    const { events } = run([{}, { alerts: [genAlert], risk: 'low' }, { alerts: [genAlert], risk: 'high' }]);
+    expect(events[2][0]).toMatchObject({ type: 'update', confirmed: true, risk: null });
+    expect(events[2][0].incident).toMatchObject({ risk: 'high', engineConfirmed: true });
+    expect(updateText(events[2][0], book('generator_failure'))).toBe('The decision engine now confirms the risk at Bharati is high.');
+  });
+
+  it('an engine rating above the baseline escalates', () => {
+    const { events } = run([{}, { alerts: [genAlert], risk: 'high' }, { alerts: [genAlert], risk: 'critical' }]);
+    expect(events[2][0]).toMatchObject({ type: 'escalate', risk: 'critical', from: 'high' });
   });
 
   it('resolves after the trigger has been gone for two observations', () => {
@@ -106,6 +119,19 @@ describe('observationFrom', () => {
       scenario: 'generator_failure', linkUp: false, risk: 'high', anomaly: { serious: true, causes: ['x'], buildings: ['generator'] },
     });
     expect(observationFrom('maitri', sd, ctx).risk).toBeNull();      // context of another station is ignored
+  });
+});
+
+describe('risk floor in briefings', () => {
+  it.each([['low'], ['nominal'], [null], ['moderate']])('a generator failure is never briefed below High (engine: %s)', (engine) => {
+    const { events } = run([{}, { alerts: [genAlert], risk: engine }]);
+    const text = briefingText(events[1][0].incident, book('generator_failure'));
+    expect(text).toContain('Risk is high.');
+    expect(text).not.toMatch(/Risk is (low|nominal|moderate)/);
+  });
+  it('every playbook has a baseline and failure types start at least at moderate', () => {
+    books.forEach((b) => expect(['nominal', 'low', 'moderate', 'high', 'critical']).toContain(b.baselineRisk));
+    ['generator_failure', 'heating_failure', 'co2_spike', 'blizzard'].forEach((id) => expect(book(id).baselineRisk).toBe('high'));
   });
 });
 
