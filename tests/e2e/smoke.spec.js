@@ -907,7 +907,9 @@ test('stories: the picker explains when another scenario is running, and Share t
   await waitForFreeStation(request, 'maitri');
   const b = await secondVisitor(browser);
   try {
-    // Another visitor runs a different scenario at Maitri.
+    // Another visitor runs a different scenario at Maitri. On a live deployment one IP may
+    // start a scenario per minute, and the previous test may have just started one.
+    if (IS_REMOTE) await page.waitForTimeout(61_000);
     const started = await b.page.request.post(`${API}/api/sim/inject/co2_spike?stationId=maitri`);
     expect(started.ok(), await started.text()).toBeTruthy();
     await page.goto('/?station=maitri');
