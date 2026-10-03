@@ -99,7 +99,7 @@ export default function DemoControlDrawer({ open, onClose, activeStation, public
   async function reset() {
     const ok = await confirm({
       title: visitor ? `End “${scenarioLabel(running)}” at ${name}?` : `Clear injected scenarios on ${name}?`,
-      body: 'Removes the overrides; readings return to the model on the next ticks.', confirmLabel: visitor ? 'End scenario' : 'Reset',
+      body: 'Ends the simulated fault; the readings return to normal within a minute.', confirmLabel: visitor ? 'End scenario' : 'Reset',
     });
     if (!ok) return;
     setBusy('reset');

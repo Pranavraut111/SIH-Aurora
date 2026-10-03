@@ -54,18 +54,18 @@ export default function WelcomeDialog({ open, view = 'welcome', onView, onClose,
         {!stories ? (
           <>
             <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
-              Smart India Hackathon · problem statement 26060 (Ministry of Earth Sciences / NCPOR)
+              Smart India Hackathon · Problem statement 26060 · Ministry of Earth Sciences / NCPOR
             </Typography>
             <Typography sx={{ fontSize: 16, fontWeight: 600, mb: 2 }}>
-              Running India&apos;s Antarctic research stations, Maitri and Bharati, efficiently from thousands of kilometres away.
+              Keeping watch over India&apos;s Antarctic research stations, Maitri and Bharati, from thousands of kilometres away.
             </Typography>
             <Typography variant="body2" sx={{ mb: 2 }}>
-              Aurora is a digital twin of both stations. A physics model of power, heating, water and communications runs on real
-              reanalysis weather; an alert engine, an anomaly detector and a decision engine watch it, and explain what they see in plain language.
+              Aurora is a digital twin: a live computer model of both stations. It simulates their power, heating, water and communications
+              under each station&apos;s real weather, raises an alert when something goes out of range, and explains in plain words what to do.
             </Typography>
             <Typography variant="body2" sx={{ color: 'text.secondary', mb: 4 }}>
-              <strong>Real vs simulated:</strong> the weather is ERA5 reanalysis replayed for each station; equipment readings are model-derived;
-              demo faults are simulated. Every value is labelled with where it comes from.{' '}
+              <strong>Real vs simulated:</strong> the weather is real past weather for each station (ERA5 records), replayed hour by hour.
+              The equipment readings come from our model, and the faults you can trigger are simulated. Every value is labelled with its source.{' '}
               <Link component="button" type="button" onClick={onAbout} data-testid="welcome-provenance-link" sx={{ verticalAlign: 'baseline' }}>How we label data</Link>
             </Typography>
             <Stack sx={{ gap: 2 }}>
@@ -73,9 +73,9 @@ export default function WelcomeDialog({ open, view = 'welcome', onView, onClose,
                 text="A guided two-minute story: a blizzard at Maitri, a generator failure at Bharati, or running low on fuel."
                 onClick={() => onView('stories')} />
               <Choice icon={<TourOutlined />} title="Take the tour" testId="welcome-tour"
-                text="Twelve short steps through the interface." onClick={() => onChoose('tour')} />
+                text="A quick walk through each part of the screen, in 12 short steps." onClick={() => onChoose('tour')} />
               <Choice icon={<ExploreOutlined />} title="Explore on my own" testId="welcome-explore"
-                text="Everything is open to try. Changes you make are private to you and reset after an hour." onClick={() => onChoose('explore')} />
+                text="Everything is open to try. Your changes are private to you and reset after an hour." onClick={() => onChoose('explore')} />
             </Stack>
             <Typography variant="caption" component="p" sx={{ color: 'text.secondary', mt: 3, mb: 0 }}>
               You can reopen this card, the stories and the tour from Help (?) at any time.

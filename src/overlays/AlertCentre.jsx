@@ -31,6 +31,7 @@ function AlertItem({ a, now, onOpen, action }) {
         <Stack direction="row" sx={{ gap: 2, alignItems: 'center' }}>
           <StatusChip status={levelStatus(a.level)} />
           <Typography sx={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{a.buildingName || a.buildingId}</Typography>
+          <SandboxTag show={a.sandboxThreshold} label="Your threshold" />
           <Typography variant="caption" sx={{ color: 'text.secondary' }}>{formatRelative(a.timestamp, now)}</Typography>
         </Stack>
         <Typography variant="body2" sx={{ mt: 1.5 }}>{a.message}</Typography>

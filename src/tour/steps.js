@@ -22,7 +22,7 @@ export const MAIN_TOUR = [
   {
     targets: [t('status-strip')],
     title: 'Where the numbers come from',
-    body: ({ isPhone }) => `The data source, right now: the live simulator, the backend's physics fallback, or a browser-only demo when the backend is unreachable. Every value on every page is labelled with its provenance too.${isPhone ? ' Tap the dot for its name.' : ''}`,
+    body: ({ isPhone }) => `Where the numbers come from right now: the live simulator, the server's own backup model, or a browser-only demo if the server is unreachable. Every value on every page also carries a label saying where it comes from.${isPhone ? ' Tap the dot for its name.' : ''}`,
   },
   {
     targets: [t('alert-centre')],
@@ -42,7 +42,7 @@ export const MAIN_TOUR = [
     targets: [t('overview')],
     page: 'overview',
     title: 'The station twin',
-    body: 'A schematic 3D view of the station: the sun and blowing snow follow the replay clock and the wind; a building in alert is tinted and ringed in its status colour. Select a building, or use the Buildings list, for its live readings. Antarctica (or A) shows both stations on the continent. The cards summarise weather, power, fuel and supplies.',
+    body: 'A simplified 3D view of the station. The sun follows the station\'s simulated time of day, the blowing snow follows the wind, and a building with an alert turns the alert\'s colour. Select a building for its readings; Antarctica (or the A key) shows both stations on the map.',
   },
   {
     targets: [t('nav-monitor')],
@@ -66,13 +66,13 @@ export const MAIN_TOUR = [
     targets: [t('nav-ai')],
     nav: true,
     title: 'AI diagnostics',
-    body: 'Anomaly detection on the residuals between readings and the physics model, the rule-based decision engine, and forecasts. Each result says which model produced it.',
+    body: 'A machine-learning detector that spots readings far from what our model expects, a rule-based decision engine, and forecasts. Each result says which method produced it.',
   },
   {
     targets: [t('nav-twinInspector')],
     nav: true,
     title: 'Twin inspector',
-    body: 'How each number is derived: the causal chain from weather to load to fuel, with the assumptions behind it.',
+    body: 'How each number is worked out, step by step from the weather to the power needed to the fuel burnt, with the assumptions behind it.',
   },
   {
     targets: [t('demo-control'), '[data-testid="topbar-more"]'],
@@ -92,12 +92,12 @@ const PAGE_TOUR_STEPS = {
     {
       targets: ['[data-testid="weather-kpis"]'],
       title: 'Live weather',
-      body: 'The current surface weather from the telemetry snapshot, with the recent trend. Its provenance chip in the header says whether it is a reanalysis replay or a station observation.',
+      body: 'The current weather at the station, with the recent trend. The label in the header says whether it is replayed past weather (ERA5) or a real station observation.',
     },
     {
       targets: ['[data-testid="weather-analysis"]'],
       title: 'Stored observations',
-      body: 'A different source from the cards above: NCPOR AWS and ERA5 rows stored in the station database. These charts do not move with the live replay.',
+      body: 'A different source from the cards above: weather records stored in our database (NCPOR weather station and ERA5). These charts do not move with the live view.',
     },
     {
       targets: ['[data-testid="weather-analysis"] [role="tablist"]'],
@@ -131,7 +131,7 @@ const PAGE_TOUR_STEPS = {
     {
       targets: ['[data-testid="whatif-scenarios"] [role="group"]'],
       title: '1. Pick a hazard',
-      body: 'Each hazard is a rule set applied to the current snapshot.',
+      body: 'Each hazard is a set of rules applied to the station\'s current readings.',
     },
     {
       targets: ['[data-testid="whatif-intensity"]'],
@@ -141,7 +141,7 @@ const PAGE_TOUR_STEPS = {
     {
       targets: ['[data-testid="whatif-run"]'],
       title: '3. Run it',
-      body: 'Running reads the snapshot and changes nothing, so it needs no sign-in.',
+      body: 'Running it only reads the current readings and changes nothing, so it needs no sign-in.',
     },
     {
       targets: ['[data-testid="whatif-result"]', '[data-testid="whatif-placeholder"]'],
@@ -154,7 +154,7 @@ const PAGE_TOUR_STEPS = {
       targets: ['[data-testid="admin-tab-thresholds"]'],
       click: '[data-testid="admin-tab-thresholds"]',
       title: 'Alert thresholds',
-      body: 'The limits the alert engine checks every sensor against, on every tick.',
+      body: 'The limits every reading is checked against, every two seconds.',
     },
     {
       targets: ['[data-testid="thresholds-form"] thead'],
@@ -164,7 +164,9 @@ const PAGE_TOUR_STEPS = {
     {
       targets: ['[data-testid="admin-save"]'],
       title: 'What saving does',
-      body: 'Saving needs operator sign-in, asks for confirmation and records your name. The alert engine uses the new limits from its next tick; an alert clears after a run of normal ticks.',
+      body: ({ judge }) => (judge?.sandbox
+        ? 'Saving asks for confirmation. Your own alerts use the new limits straight away; other visitors keep the station\'s limits.'
+        : 'Saving needs operator sign-in, asks for confirmation and records your name. Alerts use the new limits within two seconds and clear after a few normal readings.'),
     },
   ],
 };

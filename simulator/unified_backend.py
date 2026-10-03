@@ -50,6 +50,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 sys.path.insert(0, str(Path(__file__).parent))
 import judge_mode
 from judge_mode import DEMO, SANDBOX
+from visits import VISITS
 
 import alert_engine
 import config as app_config
@@ -217,9 +218,66 @@ def overlay_alerts(alerts: list[dict], acks: dict) -> list[dict]:
     return out
 
 
+def sandbox_alert_view(snap: dict, session: str, overrides: list[dict]) -> dict:
+    """The snapshot as a visitor with their own thresholds sees it (a new dict; `snap` is
+    never changed). Every sensor the visitor re-set is checked against their thresholds on
+    the same shared readings: the shared alert for it is replaced by the visitor's own
+    (or by none). Building states, the dependency cascade and the overall health are then
+    recomputed from that list. Read-only and private: the shared alerts, the database and
+    every other visitor are untouched, and nothing is persisted but a start time per
+    alert in memory (bounded by the sandbox session cap)."""
+    sid = snap["stationId"]
+    mine = {o["sensor"] for o in overrides}
+    th = sandbox_thresholds(session, sid)
+    catalog = station_config.sensors(sid)
+    names = station_config.building_names(sid)
+    ts = snap.get("timestamp") or judge_mode.now_ms()
+    active = [a for a in snap.get("activeAlerts") or [] if a.get("sensor") not in mine]
+    for sensor in sorted(mine):
+        meta = catalog.get(sensor)
+        value = (snap.get("sensors") or {}).get(meta["building"], {}).get(sensor) if meta else None
+        if value is None or sensor not in th:
+            continue
+        level, direction, threshold = alert_engine.classify(float(value), th[sensor])
+        since = SANDBOX.alert_since(session, sid, sensor, None if level == "normal" else level, ts)
+        if since is None:
+            continue
+        message = alert_engine.alert_message(meta, level, direction, threshold, value) + " (your sandbox threshold)"
+        active.append({
+            "id": f"SBX-{sid}-{sensor}-{since}", "buildingId": meta["building"],
+            "buildingName": names.get(meta["building"], meta["building"]), "level": level, "peakLevel": level,
+            "sensor": sensor, "value": value, "unit": meta["unit"], "threshold": threshold, "direction": direction,
+            "message": message, "timestamp": since, "status": "active", "acknowledged": False,
+            "acknowledgedBy": None, "acknowledgedAt": None, "clearing": False,
+            "triggeredSensors": [{"name": sensor, "value": value, "unit": meta["unit"]}],
+            "sandbox": True, "sandboxThreshold": True,
+        })
+    rank = alert_engine.LEVEL_RANK
+    active.sort(key=lambda a: (-rank.get(a.get("level"), 0), a.get("timestamp") or 0))
+    levels = {b: "normal" for b in names}
+    for a in active:
+        b = a.get("buildingId")
+        if rank.get(a.get("level"), 0) > rank[levels.get(b, "normal")]:
+            levels[b] = a["level"]
+    dependency = analyze_dependency_cascade(levels, sid)
+    if any(a["level"] == "critical" for a in active) or any(d["severity"] == "critical" for d in dependency):
+        health = "critical"
+    elif active or dependency:
+        health = "warning"
+    else:
+        health = "healthy"
+    return {**snap, "activeAlerts": active, "alerts": levels, "dependencyAlerts": dependency,
+            "aiHealth": health, "sandboxThresholds": sorted(mine)}
+
+
 def overlay_snapshot(snap: dict, session: str | None) -> dict:
+    """The snapshot with this visitor's sandbox applied: their own thresholds re-evaluated
+    (sandbox_alert_view), then their acknowledgements. No sandbox → `snap` itself."""
     if not session:
         return snap
+    overrides = sandbox_threshold_overrides(session, snap.get("stationId"))
+    if overrides:
+        snap = sandbox_alert_view(snap, session, overrides)
     acks = SANDBOX.get(session, "ack")
     if not acks:
         return snap
@@ -1261,6 +1319,9 @@ def acknowledge_alert(alert_id: str, req: AcknowledgeRequest, request: Request, 
         with db.connect() as conn:
             row = conn.execute("SELECT * FROM station_alerts WHERE id = ?", (alert_id,)).fetchone()
         if row is None:
+            # One of this visitor's own-threshold alerts, if it is open in their view now.
+            row = _open_sandbox_alert(alert_id, sandbox_session(request))
+        if row is None:
             raise HTTPException(status_code=404, detail=f"Unknown alert '{alert_id}'")
         session = sandbox_for_write(request, response)
         already = row["acknowledged_at"] is not None or alert_id in SANDBOX.get(session, "ack")
@@ -1280,10 +1341,36 @@ def acknowledge_alert(alert_id: str, req: AcknowledgeRequest, request: Request, 
             "alertStatus": row["status"], "alreadyAcknowledged": row["alreadyAcknowledged"]}
 
 
+def _sandbox_view_alerts(sid: str, session: str | None) -> list[dict]:
+    """This visitor's own-threshold alerts open at `sid` now (none without a sandbox)."""
+    if not session:
+        return []
+    return [a for a in overlay_snapshot(published_snapshot(sid), session)["activeAlerts"] if a.get("sandboxThreshold")]
+
+
+def _open_sandbox_alert(alert_id: str, session: str | None) -> dict | None:
+    """An open own-threshold alert of this visitor, as an acknowledgeable row, or None."""
+    if not session or not alert_id.startswith("SBX-"):
+        return None
+    for sid in STATIONS:
+        if alert_id.startswith(f"SBX-{sid}-"):
+            for a in _sandbox_view_alerts(sid, session):
+                if a["id"] == alert_id:
+                    return {"acknowledged_by": None, "acknowledged_at": None}
+    return None
+
+
 @app.get("/api/alerts/history")
 def get_alert_history(request: Request, sid: str = Depends(station_param), limit: int = Query(100, ge=1, le=500)):
-    rows = ALERTS.history(sid, limit)
-    acks = SANDBOX.get(sandbox_session(request), "ack")
+    session = sandbox_session(request)
+    # The visitor's own-threshold alerts (open now) come first, in the history row shape.
+    rows = [{"id": a["id"], "parameter": a["sensor"], "subsystem": a["buildingId"], "severity": a["level"],
+             "peak_severity": a["peakLevel"], "direction": a["direction"], "threshold_value": a["threshold"],
+             "unit": a["unit"], "observed_value": a["value"], "reason": a["message"], "status": "active",
+             "timestamp": a["timestamp"], "resolved_at": None, "acknowledged_by": None, "acknowledged_at": None,
+             "_sandbox": True} for a in _sandbox_view_alerts(sid, session)]
+    rows = (rows + ALERTS.history(sid, limit))[:limit]
+    acks = SANDBOX.get(session, "ack")
     if acks:
         rows = [{**r, "acknowledged_by": acks[r["id"]]["by"], "acknowledged_at": acks[r["id"]]["at"],
                  "status": "acknowledged" if r["status"] == "active" else r["status"], "_sandbox": True}
@@ -1580,6 +1667,29 @@ def admin_session(x_admin_token: str | None = Header(None, alias="X-Admin-Token"
     return {"writeProtected": True, "authenticated": ok, **judge}
 
 
+class VisitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entry: str = Field("main", max_length=64)
+
+
+@app.post("/api/visit")
+def record_visit(req: VisitRequest, request: Request,
+                 x_admin_token: str | None = Header(None, alias="X-Admin-Token")):
+    """Count a page open (visits.py: aggregate counts, no cookie, nothing personal stored).
+    Public by nature, like the explain routes: it changes only a counter, and nginx's
+    /api rate limit applies. The team (a valid token) is not counted."""
+    if x_admin_token and app_config.ADMIN_TOKEN and secrets.compare_digest(x_admin_token, app_config.ADMIN_TOKEN):
+        return {"counted": False}
+    out = VISITS.record(client_ip(request), request.headers.get("user-agent", "")[:300], req.entry)
+    return {"counted": out["counted"]}
+
+
+@app.get("/api/admin/visits", dependencies=[Depends(require_admin)])
+def get_visits(days: int = Query(14, ge=1, le=90)):
+    """Visit counts for the team (Administration → Visits)."""
+    return VISITS.summary(days)
+
+
 @app.get("/api/sandbox")
 def sandbox_status(request: Request):
     """This visitor's sandbox: whether it exists, when it expires, what it holds. Never creates one."""
@@ -1629,7 +1739,8 @@ def get_admin_config(request: Request, sid: str = Depends(station_param)):
                        else alert_engine.effective_thresholds(sid, overrides)),
         "thresholdDefaults": station_config.default_thresholds(sid),
         "thresholdOverrides": overrides + sandbox_ov,
-        # This visitor's private overrides (judge mode). Live alerts keep using the shared thresholds.
+        # This visitor's private overrides (judge mode): their own alert view uses them
+        # (sandbox_alert_view); the shared alerts and every other visitor keep the shared ones.
         "sandboxOverrides": sandbox_ov,
         "thresholdRules": {k: {"name": v["name"], "building": v["building"], "unit": v["unit"],
                                "min": v["thresholdRange"][0], "max": v["thresholdRange"][1], "basis": v["basis"]}
@@ -1691,7 +1802,8 @@ def update_admin_config(req: ConfigUpdateRequest, request: Request, response: Re
                     n += 1
         shown = STATIONS[0] if scope == "*" else scope
         return {"status": "saved", "sandbox": True, "stationId": scope, "valuesSaved": n, "updatedAt": ts,
-                "thresholds": sandbox_thresholds(session, shown), "thresholdsUsedByAlerts": False}
+                "thresholds": sandbox_thresholds(session, shown), "thresholdsUsedByAlerts": True,
+                "alertsScope": "sandbox"}
     errors = alert_engine.validate_threshold_update(scope, updates)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
@@ -1718,6 +1830,7 @@ def reset_admin_thresholds(req: ThresholdResetRequest, request: Request, respons
     if scope_kind == "sandbox":
         session = sandbox_for_write(request, response)
         removed = SANDBOX.delete(session, "threshold", f"{scope}|{req.sensor}|" if req.sensor else f"{scope}|")
+        SANDBOX.forget_alerts(session, None if scope == "*" else scope)
         return {"status": "reset", "sandbox": True, "stationId": scope, "sensor": req.sensor, "removed": removed}
     removed = alert_engine.reset_overrides(scope, req.sensor)
     log.info("Alert threshold overrides reset by %s for %s/%s: %d removed", req.updatedBy, scope, req.sensor, removed)

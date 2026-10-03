@@ -41,9 +41,9 @@ function joinUrl(base, path) {
 
 /**
  * @param {string} url absolute URL (use the apiGet/apiPost helpers for base handling)
- * @param {{method?: string, body?: any, timeoutMs?: number, headers?: object}} opts
+ * @param {{method?: string, body?: any, timeoutMs?: number, headers?: object, quiet?: boolean}} opts
  */
-export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_TIMEOUT_MS, headers = {} } = {}) {
+export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_TIMEOUT_MS, headers = {}, quiet = false } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   // credentials: the visitor-sandbox session is an httpOnly cookie (judge mode). Same-origin
@@ -89,7 +89,8 @@ export async function request(url, { method = 'GET', body, timeoutMs = DEFAULT_T
     if (res.status === 401) clearToken();
     throw new ApiError(`HTTP ${res.status} from ${method} ${url}`, { kind: 'http', status: res.status, url, body: data });
   }
-  if (method !== 'GET') announceChange(data);
+  // quiet: a POST that changes nothing the panels show (the visit counter).
+  if (method !== 'GET' && !quiet) announceChange(data);
   return data;
 }
 

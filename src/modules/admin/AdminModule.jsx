@@ -12,7 +12,7 @@
    - Station configuration: station_config.json with source and confidence.
    Every write asks for confirmation and reports through a toast.
    ═══════════════════════════════════════════════════════════════ */
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import {
   Alert, Box, Card, Chip, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, TextField, Typography,
 } from '@mui/material';
@@ -40,6 +40,9 @@ const TABS = [
   { id: 'access', label: 'Access' },
   { id: 'config', label: 'Station configuration' },
 ];
+// The team's visit counts: a separate chunk, loaded only when the tab is opened.
+const VisitsPanel = lazy(() => import('./VisitsPanel'));
+const VISITS_TAB = { id: 'visits', label: 'Visits' };
 const LEVELS = [['low', 'warning'], ['low', 'critical'], ['high', 'warning'], ['high', 'critical']];
 
 function DataSources({ stationNames, onIngest, busy, system }) {
@@ -95,7 +98,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
   const meta = MODULES.admin;
   const confirm = useConfirm();
   const toast = useToast();
-  const { writeProtected, canWrite, sandbox } = useAdminToken();
+  const { writeProtected, canWrite, canWriteShared, sandbox } = useAdminToken();
   const [tab, setTab] = useState('sources');
   const [state, setState] = useState({ station: null, config: null, error: null });
   const [attempt, setAttempt] = useState(0);
@@ -164,7 +167,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
     if (!changeCount) return;
     const ok = await confirm({
       title: `Save ${changeCount} threshold value${changeCount > 1 ? 's' : ''}?`,
-      body: `The alert engine uses them for ${stationMeta(activeStation).name} from the next tick. Recorded as ${name.trim()}.`,
+      body: sandbox
+        ? `Your alerts for ${stationMeta(activeStation).name} use them straight away. Only you see them, and they reset after an hour.`
+        : `The alert engine uses them for ${stationMeta(activeStation).name} from the next tick. Recorded as ${name.trim()}.`,
       confirmLabel: 'Save thresholds',
     });
     if (!ok) return;
@@ -173,7 +178,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
       const res = await apiPost('/admin/config', { stationId: activeStation, thresholds: changes, updatedBy: name.trim() });
       persistOperatorName(name);
       toast({ text: res.sandbox
-        ? `Saved ${res.valuesSaved} value(s) in your sandbox. Only you see them; live alerts keep using the shared thresholds.`
+        ? `Saved ${res.valuesSaved} value(s) in your sandbox. Your alerts now use them; other visitors still see the station's own thresholds.`
         : `Saved ${res.valuesSaved} value(s). The alert engine uses them from the next tick.` });
       reload();
     } catch (err) {
@@ -201,26 +206,30 @@ export default function AdminModule({ activeStation = 'maitri' }) {
     }
   }
 
+  // Visits is for the team only (the read needs the token); visitors never see the tab.
+  const tabs = canWriteShared ? [...TABS, VISITS_TAB] : TABS;
+  const shownTab = tabs.some((t) => t.id === tab) ? tab : 'sources';
+
   return (
     <Box data-testid="admin-module">
       <PageHeader section={sectionLabel(meta.section)} title={meta.title} description={meta.description} tourId="admin" />
       <SectionCard title="System" subtitle={`Settings for ${stationMeta(activeStation).fullName} unless a tab says otherwise`} testId="admin-card">
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile aria-label="Administration" sx={{ mb: 4 }}>
-          {TABS.map((t) => <Tab key={t.id} value={t.id} label={t.label} data-testid={`admin-tab-${t.id}`} />)}
+        <Tabs value={shownTab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile aria-label="Administration" sx={{ mb: 4 }}>
+          {tabs.map((t) => <Tab key={t.id} value={t.id} label={t.label} data-testid={`admin-tab-${t.id}`} />)}
         </Tabs>
         {state.error && <ErrorState sx={{ mb: 3 }} onRetry={reload}>Configuration unavailable because {describeFailure(state.error)}.</ErrorState>}
 
-        <Box role="tabpanel" aria-label={TABS.find((t) => t.id === tab).label}>
-          {tab === 'sources' && <DataSources stationNames={stationNames} onIngest={ingest} busy={busy} system={cfg?.system} />}
+        <Box role="tabpanel" aria-label={tabs.find((t) => t.id === shownTab).label}>
+          {shownTab === 'sources' && <DataSources stationNames={stationNames} onIngest={ingest} busy={busy} system={cfg?.system} />}
 
-          {tab === 'thresholds' && (
+          {shownTab === 'thresholds' && (
             !cfg ? (state.error ? null : <LoadingBlock lines={8} />) : (
               <Box component="form" onSubmit={save} data-testid="thresholds-form" noValidate>
                 <Typography variant="body2" sx={{ color: 'text.secondary', mb: 3 }}>
                   Defaults come from station_config.json; saved values are per-station overrides in SQLite. An alert clears after
                   {' '}{cfg.alertResolveTicks} consecutive normal ticks.
                 </Typography>
-                <SandboxNotice>Your threshold changes are checked like real ones and kept for you only; the live alerts keep using the station&apos;s shared thresholds.</SandboxNotice>
+                <SandboxNotice>Change a threshold and your own alerts follow it straight away, on every page. Other visitors keep seeing the station&apos;s own thresholds.</SandboxNotice>
                 {!canWrite && (
                   <Alert severity="info" sx={{ mb: 3 }} data-testid="thresholds-readonly">
                     Read-only: use Team sign-in (⋮ menu) to edit thresholds.
@@ -281,7 +290,7 @@ export default function AdminModule({ activeStation = 'maitri' }) {
             )
           )}
 
-          {tab === 'access' && (
+          {shownTab === 'access' && (
             <Stack sx={{ gap: 4 }}>
               <Alert severity="info">
                 {writeProtected === true
@@ -315,7 +324,9 @@ export default function AdminModule({ activeStation = 'maitri' }) {
             </Stack>
           )}
 
-          {tab === 'config' && (
+          {shownTab === 'visits' && <Suspense fallback={<LoadingBlock lines={6} />}><VisitsPanel /></Suspense>}
+
+          {shownTab === 'config' && (
             <Stack sx={{ gap: 4 }}>
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                 From simulator/station_config.json (also served at /api/config/stations), with the source and confidence of each value.

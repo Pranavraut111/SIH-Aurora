@@ -232,6 +232,81 @@ wc -l ~/.ssh/authorized_keys.bak ~/.ssh/authorized_keys   # exactly one line few
 The portal's **Help → Reset password → Reset SSH public key** also appends a key without
 removing the others, which helps if everyone is locked out.
 
+## Judge mode (unattended judging)
+
+Judges open the site from the PPT on their own, at any time. `.env` on the VM sets
+`VISITOR_SANDBOX=true` and `PUBLIC_DEMO=true` (both default to false):
+
+- **Visitor sandbox:** an anonymous visitor's threshold changes, ledger edits,
+  acknowledgements and remote commands are kept in their own private one-hour session
+  (an httpOnly cookie). Their pages, alerts and live stream show their changes, and their
+  thresholds re-evaluate their own alerts. Nobody else sees any of it.
+- **Public demo:** anyone may run the five Demo Control scenarios, one per station at a
+  time. Each lasts 2 minutes and then resets, with a 60 s cooldown per visitor, and every
+  visitor sees a banner while one runs.
+- **Team only:** simulator mode, replay, NCPOR ingest and the shared state need the
+  `ADMIN_TOKEN`, via Team sign-in in the ⋮ menu.
+
+### Nightly reset (03:00 IST)
+
+[`deploy/azure/nightly-reset.sh`](../deploy/azure/nightly-reset.sh) ends any running
+scenario, removes expired sandboxes, and restores the shared thresholds and logistics
+ledger to the recorded baseline ([`simulator/judge_baseline.json`](../simulator/judge_baseline.json)).
+It runs half an hour after the backup. Visit counts are kept.
+
+```bash
+cat /etc/cron.d/aurora-nightly-reset          # 0 3 * * * azureuser /opt/aurora/deploy/azure/nightly-reset.sh
+tail /opt/aurora/logs/nightly-reset.log       # one line per run: ok {...} or FAILED ...
+/opt/aurora/deploy/azure/nightly-reset.sh     # run it now (safe at any time)
+```
+
+The VM clock is `Asia/Kolkata` (`timedatectl`), so the cron times are IST.
+
+### Restart on failure and on reboot
+
+- **What happens:** every service has `restart: unless-stopped`, and Docker (`docker`,
+  `containerd`) is enabled at boot. A crashed or killed container is restarted within
+  seconds, and after a VM reboot the whole stack comes back by itself, in 1–2 minutes
+  including Caddy's certificate.
+- **How to check:** `systemctl is-enabled docker containerd` should print `enabled`
+  twice, and `docker compose ps` should show `Up … (healthy)`.
+- **What it does not cover:** a process that hangs but stays alive. Its health check
+  turns `unhealthy`, but Docker does not restart unhealthy containers. The uptime monitor
+  below catches that. Fix it with `docker compose restart backend` (or the service named
+  in `docker compose ps`).
+- **Stopped by hand:** a container stopped with `docker compose stop` stays stopped
+  until `docker compose up -d`.
+
+### External uptime monitor (free, ~5 minutes to set up)
+
+[UptimeRobot](https://uptimerobot.com)'s free plan checks every 5 minutes and emails you
+(or pushes to its app) when the site goes down and when it recovers.
+
+1. Sign up at uptimerobot.com (free plan) and confirm your email.
+2. **Add New Monitor** → type **Keyword**.
+3. URL: `https://aurora-sih.centralindia.cloudapp.azure.com/api/health`
+4. Keyword: `"status":"ok"`, alert when the keyword **does not exist**. A plain HTTP
+   monitor would miss a degraded database, because `/api/health` still answers 200 then.
+5. Friendly name `Aurora live`, interval 5 minutes, then tick your email under
+   **Alert contacts** and save.
+6. Optional: add a second monitor of type **HTTP(s)** on
+   `https://aurora-sih.centralindia.cloudapp.azure.com/` (the UI itself, served by nginx).
+7. Optional: install the UptimeRobot app on your phone for push alerts.
+
+The monitor only calls `/api/health`, so it never shows up in the visit counts.
+
+### Visit counts
+
+Administration → **Visits** (shown after Team sign-in) lists visitors and visits per day,
+today by hour, and which link was used (main page, each story, a page).
+
+- **Stored:** only aggregate counts per IST hour, in the `visit_counts` table, kept 90 days.
+- **Never stored:** IP addresses, user agents or any cookie or identifier. Visitors are
+  told apart by a hash with a daily random salt that is kept only in memory.
+- **Not counted:** the team (signed in), crawlers, link previews and headless browsers.
+- **Restarts:** a restart forgets the day's salt, so someone who visits both before and
+  after a restart is counted twice that day.
+
 ## Firewall
 
 Two layers, and both must allow a port: the Azure network security group (portal → VM →

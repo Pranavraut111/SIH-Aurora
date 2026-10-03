@@ -739,6 +739,60 @@ test('judge mode: two visitors\' sandboxes are isolated, and the shared state is
   expect(failedRequests, 'failed requests in the sandbox').toEqual([]);
 });
 
+test('judge mode: a visitor\'s own threshold drives their own alerts only', async ({ page, browser, request }) => {
+  test.skip(!(await judgeMode(request)).sandbox, 'VISITOR_SANDBOX is off on this stack');
+  const { consoleErrors, failedRequests } = watchForProblems(page);
+  // Any sensor with a high threshold whose reading leaves room for a warning below it.
+  const state = await (await request.get(`${API}/api/station/maitri/state`)).json();
+  const cfg = await (await request.get(`${API}/api/admin/config?stationId=maitri`)).json();
+  const pick = Object.entries(cfg.thresholdRules).map(([sensor, rule]) => {
+    const value = state.sensors?.[rule.building]?.[sensor];
+    const high = cfg.thresholds[sensor]?.high;
+    if (!high || typeof value !== 'number') return null;
+    const warning = Math.max(rule.min, Math.floor(value) - 1);
+    const ok = warning < value && (high.critical == null || warning < high.critical) && !(high.warning <= value);
+    return ok ? { sensor, warning: String(warning) } : null;
+  }).find(Boolean);
+  test.skip(!pick, 'no sensor currently leaves room for a test threshold below its reading');
+  const { sensor, warning } = pick;
+
+  // Visitor A lowers the coolant warning below the current reading, in their sandbox.
+  await page.goto('/?module=admin&station=maitri');
+  await page.getByTestId('admin-tab-thresholds').click();
+  await page.locator(`[data-threshold="${sensor}.high.warning"]`).fill(warning);
+  await page.getByLabel('Your name (recorded with the change)').fill('E2E judge');
+  await page.getByTestId('admin-save').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText('Only you see them');
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('toast')).toContainText('Your alerts now use them');
+
+  // A's alert centre has their own alert, tagged; B's and the shared alerts do not.
+  const ownAlert = (p) => p.getByTestId('alert-card').filter({ has: p.getByText('Your threshold') });
+  await page.getByTestId('alerts-pill').click();
+  await expect(ownAlert(page)).toHaveCount(1, { timeout: 15_000 });
+  await expect(ownAlert(page)).toContainText('your sandbox threshold');
+  const b = await secondVisitor(browser);
+  try {
+    await b.page.goto('/?station=maitri');
+    await b.page.getByTestId('alerts-pill').click();
+    await expect(b.page.getByTestId('alert-drawer')).toBeVisible();
+    await expect(ownAlert(b.page)).toHaveCount(0);
+  } finally {
+    await b.context.close();
+  }
+  const shared = await (await request.get(`${API}/api/alerts?stationId=maitri`)).json();
+  expect(shared.activeAlerts.filter((a) => String(a.id).startsWith('SBX-'))).toEqual([]);
+
+  // Resetting the sandbox puts A back on the station's thresholds.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('alert-drawer')).toBeHidden();
+  await page.getByTestId('thresholds-form').getByTestId('sandbox-reset').click();
+  await page.getByTestId('confirm-ok').click();
+  await expect(page.getByTestId('toast')).toContainText('sandbox was reset');
+  expect(consoleErrors, 'console errors').toEqual([]);
+  expect(failedRequests, 'failed requests').toEqual([]);
+});
+
 test('judge mode: anyone can run a demo scenario, every visitor sees the banner, and it can be ended', async ({ page, browser, request }) => {
   test.skip(!(await judgeMode(request)).publicDemo, 'PUBLIC_DEMO is off on this stack');
   const { consoleErrors, failedRequests } = watchForProblems(page);
@@ -852,7 +906,7 @@ test('stories: the picker explains when another scenario is running, and Share t
   // About Aurora opens from the ⋮ menu.
   await page.getByTestId('topbar-more').click();
   await page.getByTestId('menu-about').click();
-  await expect(page.getByTestId('about-dialog')).toContainText('Data provenance');
+  await expect(page.getByTestId('about-dialog')).toContainText('Where the data comes from (provenance)');
   await expect(page.getByTestId('about-dialog')).toContainText('github.com/Saeesh-Vele/SIH2026A');
 });
 

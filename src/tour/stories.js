@@ -22,7 +22,7 @@ export const STORIES = {
   blizzard: {
     id: 'blizzard',
     title: 'Blizzard hits Maitri',
-    summary: 'A storm hits the inland station: the weather turns, alerts fire, the AI flags it and recommends what to do.',
+    summary: 'A storm hits the inland station: the weather turns, alerts go off, and the AI spots it and suggests what to do.',
     station: 'maitri',
     scenario: 'blizzard',
     minutes: 2,
@@ -30,51 +30,53 @@ export const STORIES = {
       {
         page: 'overview', station: 'maitri', targets: [tour('overview')],
         title: 'Blizzard hits Maitri',
-        body: 'Maitri sits in the Schirmacher Oasis, about 100 km inland in Dronning Maud Land. In winter a blizzard can cut visibility to metres for days. We will run a simulated blizzard and watch how Aurora helps a team in India follow it. Next starts the scenario.',
+        body: 'Maitri is about 100 km inland, where a winter blizzard can last for days. Press Next to start a simulated blizzard and see how Aurora helps a team in India follow it.',
       },
       {
         targets: [tid('demo-banner'), tid('alerts-pill')],
         before: async (c) => { await c.inject(); await c.waitFor((d) => Boolean(d.publicDemo?.maitri), 8000); },
         title: 'The scenario is running',
-        body: ({ joined }) => `${joined ? 'Another visitor already started this blizzard, so we follow theirs. ' : ''}The banner is shown to everyone on the site: the scenario is shared, labelled Simulated, and resets itself after 2 minutes. Nothing real is touched; the simulator overrides the outside weather and the satellite signal.`,
+        body: ({ joined }) => (joined
+          ? 'Another visitor already started this blizzard, so you are following theirs. Everyone on the site sees this banner, and it ends by itself after 2 minutes.'
+          : 'The blizzard is now running. It is simulated, everyone on the site sees this banner, and it ends by itself after 2 minutes.'),
       },
       {
         page: 'overview', targets: [tid('hud-wind'), '.overview-stage'],
         before: async (c) => { await c.waitFor((d) => num(d.sensors?.lab?.env_wind) > 60, 12000); },
         title: 'The weather turns',
-        body: 'Wind climbs past storm strength and the temperature drops. These cards are the station\'s live telemetry; the sparkline shows the last half hour. On the ground, this is the moment outdoor work stops.',
+        body: 'The wind rises to storm strength and the temperature falls. These cards show the station\'s live readings; on the ground, this is when outdoor work stops.',
       },
       {
         targets: [tid('alerts-pill')],
         before: async (c) => { await c.waitFor((d) => (d.activeAlerts || []).length > 0, 12000); },
         title: 'Alerts appear',
-        body: 'The alert engine checks every sensor against its thresholds on every tick. Wind and the satellite link cross their limits, so alerts open here, with their severity, for anyone watching from India.',
+        body: 'Every reading is checked against its safe limits every two seconds. The wind and the satellite link are now out of range, so alerts appear here for anyone watching.',
       },
       {
         page: 'overview', targets: [tour('overview')],
         title: 'What the twin shows',
-        body: 'The 3D view follows the data: blowing snow is driven by the live wind speed and direction, and the subsystems in alert are tinted and ringed in their status colour. Select a building, or use the Buildings list, for its readings.',
+        body: 'The 3D view follows the data: the blowing snow follows the live wind, and buildings with an alert turn the alert\'s colour. Select a building, or use the Buildings list, to see its readings.',
       },
       {
         page: 'ai', targets: [tid('ai-anomaly'), tid('kpi-anomaly')],
         title: 'The anomaly detector flags it',
-        body: 'An Isolation Forest compares the readings with what the physics model expects. A storm this sudden makes the residuals jump, so the detector scores the current state as anomalous. It explains how far from normal, not why.',
+        body: 'A machine-learning detector compares the readings with what our station model expects. A storm this sudden is far from normal, so it flags the station as unusual.',
       },
       {
         page: 'ai', targets: [tid('ai-explain'), tid('ai-answer')],
         title: 'The explanation',
-        body: 'Here the situation is put into plain language for the people deciding what to do. With the language model available it writes the summary; without it, Aurora falls back to an offline summary and says so.',
+        body: 'Here an AI language model sums up the situation in plain words for the people who must decide. If it is unavailable, Aurora shows a built-in summary instead and says so.',
       },
       {
         page: 'ai', targets: [tid('ai-decision'), tid('kpi-decision')],
         title: 'The recommended action',
-        body: 'The decision engine turns the readings, the forecast and the alert state into a recommendation with its reasons: for example, suspend outdoor operations and secure the comms link. Rules, not guesses, so the team can check why.',
+        body: 'The decision engine turns the readings, the forecast and the alerts into advice with its reasons, such as stopping outdoor work. It follows fixed rules, so anyone can check why.',
       },
       {
         page: 'overview', targets: [tid('demo-banner'), tour('overview')],
         before: async (c) => { await c.reset(); },
         title: 'Back to normal',
-        body: 'The scenario has been reset: readings return to the model within a few ticks and the alerts clear once they are normal again. That is the loop Aurora closes for a remote station: see it, understand it, act on it.',
+        body: 'We have ended the blizzard: the readings recover within a minute and the alerts clear. See it, understand it, act on it: that is what Aurora does for a remote station.',
       },
     ],
   },
@@ -82,7 +84,7 @@ export const STORIES = {
   generator: {
     id: 'generator',
     title: 'Generator failure at Bharati',
-    summary: 'The coastal station loses its generator: see the alert, the cascade to heating and water, the building panel and the fuel impact.',
+    summary: 'The coastal station loses its generator: see the alert, the knock-on effect on heating and water, and the fuel impact.',
     station: 'bharati',
     scenario: 'generator_failure',
     minutes: 2,
@@ -90,7 +92,7 @@ export const STORIES = {
       {
         page: 'overview', station: 'bharati', targets: [tour('overview')],
         title: 'Generator failure at Bharati',
-        body: 'Bharati, on the Larsemann Hills coast, runs on diesel generators: power, heat and fresh water all depend on them. We will simulate a generator fault and follow its consequences. Next starts the scenario.',
+        body: 'Bharati, on the coast, runs on diesel generators: power, heat and fresh water all depend on them. Press Next to simulate a generator fault and follow what it affects.',
       },
       {
         targets: [tid('alerts-pill'), tid('demo-banner')],
@@ -99,35 +101,37 @@ export const STORIES = {
           await c.waitFor((d) => (d.activeAlerts || []).some((a) => a.buildingId === 'generator'), 14000);
         },
         title: 'The generator alert',
-        body: ({ joined }) => `${joined ? 'Another visitor already started this fault, so we follow theirs. ' : ''}Output and engine speed fall and the coolant overheats: the generator goes critical. The scenario is shared, labelled Simulated, and resets itself after 2 minutes.`,
+        body: ({ joined }) => (joined
+          ? 'Another visitor already started this fault, so you are following theirs. The generator\'s output falls and it overheats, so its alert turns critical.'
+          : 'The generator\'s output falls and it overheats, so its alert turns critical. The fault is simulated, everyone sees it, and it ends by itself after 2 minutes.'),
       },
       {
         page: 'infrastructure', station: 'bharati', targets: [tid('infra-dependency')],
         title: 'The cascade',
-        body: 'The dependency graph follows the station configuration: the generator powers heating, water treatment, comms and the living quarters. When it fails, every building downstream is flagged as a cascade risk, before its own readings change.',
+        body: 'This map shows which buildings rely on which. Everything the generator powers, such as heating, water and the living quarters, is flagged as at risk before its own readings change.',
       },
       {
         targets: [tid('building-drawer')],
         before: async (c) => { await c.openBuilding('generator'); },
         title: 'The building panel',
-        body: 'Every reading of the generator, each against its threshold, with a trend. The chips at the bottom open the buildings it depends on and the ones it feeds.',
+        body: 'Every reading of the generator, each compared with its safe limit. The links at the bottom open the buildings it relies on and the ones it supplies.',
       },
       {
         page: 'energy', station: 'bharati', targets: [tid('energy-kpis')],
         before: async (c) => { c.closeOverlays(); },
         title: 'Power and fuel',
-        body: 'Generation and fuel burn on the energy page show the impact in kilowatts and litres per hour, and the fuel autonomy tells the team how long the station can hold out.',
+        body: 'The energy page shows the impact: how much power is lost and how fast fuel is used. The fuel autonomy tells the team how long the station can last.',
       },
       {
         page: 'ai', targets: [tid('ai-decision'), tid('ai-explain')],
         title: 'The AI explanation',
-        body: 'The decision engine and the explanation summarise the fault and what to do first: switch to the standby generator, shed non-essential load, protect heating and water.',
+        body: 'The advice and the AI summary say what to do first, for example: switch to the standby generator, cut non-essential power, and protect heating and water.',
       },
       {
         page: 'overview', targets: [tour('overview')],
         before: async (c) => { await c.reset(); },
         title: 'Reset',
-        body: 'The fault is cleared and the readings recover within a few ticks. In a real station the same view would show the standby generator taking over.',
+        body: 'We have cleared the fault and the readings recover within a minute. At a real station, this view would show the standby generator taking over.',
       },
     ],
   },
@@ -135,7 +139,7 @@ export const STORIES = {
   fuel: {
     id: 'fuel',
     title: 'Running low on fuel',
-    summary: 'Edit the fuel ledger and test a fuel leak in what-if. Uses only your private sandbox: nobody else sees it.',
+    summary: 'Lower the fuel stock and test a fuel leak. Uses only your private sandbox: nobody else sees it.',
     station: 'maitri',
     scenario: null,
     minutes: 2,
@@ -143,18 +147,18 @@ export const STORIES = {
       {
         page: 'logistics', station: 'maitri', targets: [tid('logistics-kpis')],
         title: 'Running low on fuel',
-        body: 'Fuel is the lifeline of an Antarctic winter: resupply comes once a year by ship or aircraft. The logistics ledger is entered by the station team; autonomy is stock divided by daily use. This story changes only your own sandbox.',
+        body: 'Fuel is the lifeline of an Antarctic winter, and new supplies arrive about once a year. This page lists the stock the station team enters; this story changes only your private copy.',
       },
       {
         targets: [tid('ledger-row-maitri-fuel')],
         before: async (c) => { await c.setLedger('maitri', 'maitri-fuel', 0.06); },
         title: 'A lower reading',
-        body: 'We have written a much lower diesel stock into your sandbox, as if a tank check came in low. Autonomy drops below the reorder level and the item is flagged. The row is tagged "Your sandbox": only you see it.',
+        body: 'We entered a much lower diesel stock for you, as if a tank check came in low. The days of fuel left drop below the reorder level, and the row is tagged "Your sandbox".',
       },
       {
         targets: [tid('kpi-low'), tid('logistics-kpis')],
         title: 'What it means',
-        body: 'The supply summary now leads with the shortest supply. This is what a logistics officer in India watches to plan the next resupply flight or to cut consumption early.',
+        body: 'The summary now puts the shortest supply first. A logistics officer in India watches this to plan the next resupply or to cut use early.',
       },
       {
         page: 'simulation', station: 'maitri', targets: [tid('whatif-result'), tid('whatif-run')],
@@ -164,12 +168,12 @@ export const STORIES = {
           await c.waitForEl(tid('whatif-result'), 10000);
         },
         title: 'What if a tank leaks?',
-        body: 'The what-if engine applies a fuel leak to the current state, using your sandbox stock. It shows the extra burn and the new autonomy, and lists its assumptions. It is a rule-based estimate, not a forecast, and it changes nothing.',
+        body: 'The what-if tool applies a fuel leak to your stock and shows how much sooner the fuel runs out. It is a rule-based estimate and changes nothing.',
       },
       {
         page: 'logistics', targets: [tid('sandbox-reset'), tid('sandbox-notice')],
         title: 'Your sandbox',
-        body: 'Everything you change as a visitor stays in your sandbox for an hour. "Reset my sandbox" puts you back on the shared station at any time.',
+        body: 'Your changes stay private for an hour. "Reset my sandbox" takes you back to the shared station at any time.',
       },
     ],
   },

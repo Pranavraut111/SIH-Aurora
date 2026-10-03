@@ -39,13 +39,13 @@ export default function AboutDialog({ open, onClose, focus }) {
             Power, heat, water and supplies must be planned months ahead, with a small crew, unreliable links and a single resupply season.</P>
         </Section>
         <Section title="How Aurora works" id="about-architecture">
-          <P>A simulator drives a physics model of each station (generator, heating, water treatment, communications) with ERA5 reanalysis weather
+          <P>A simulator drives a physics model of each station (generator, heating, water treatment, communications) with ERA5 reanalysis weather (past weather rebuilt from observations by ECMWF)
             replayed for the station&apos;s coordinates. A FastAPI backend evaluates every reading against configurable thresholds, follows failures
-            through the station&apos;s dependency graph, and serves the dashboard over REST and a WebSocket. An Isolation Forest scores the residuals
-            between readings and the model, a rule-based decision engine recommends actions, and a language model (when available) explains them;
+            through the station&apos;s dependency graph, and serves the dashboard over REST and a WebSocket. An Isolation Forest (a machine-learning anomaly detector) scores how far
+            the readings are from what the model expects, a rule-based decision engine recommends actions, and a language model (when available) explains them;
             otherwise an offline summary is shown, and labelled as such.</P>
         </Section>
-        <Section title="Data provenance" id="about-provenance">
+        <Section title="Where the data comes from (provenance)" id="about-provenance">
           {/* On the page background (not the dialog's lighter surface) the chips keep AA contrast. */}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1.5, p: 2, borderRadius: '8px', bgcolor: 'background.default' }} data-testid="about-provenance" tabIndex={focus === 'provenance' ? -1 : undefined}>
             <ProvenanceChip kind="REAL" /><ProvenanceChip kind="REANALYSIS" /><ProvenanceChip kind="MODEL-DERIVED" />

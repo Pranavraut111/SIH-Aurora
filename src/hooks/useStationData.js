@@ -325,7 +325,7 @@ export function useStationData(activeStation = 'maitri') {
   }, []);
 
   // A visitor's first sandbox write creates their session cookie; the socket only reads it
-  // when it opens, so reconnect to receive their sandbox overlay (their acknowledgements).
+  // when it opens, so reconnect to receive their sandbox overlay (their acknowledgements and own-threshold alerts).
   useEffect(() => {
     const onSandbox = () => {
       const old = wsRef.current;

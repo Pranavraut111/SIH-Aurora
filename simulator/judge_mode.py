@@ -63,6 +63,10 @@ class SandboxRateLimited(Exception):
 class SandboxStore:
     def __init__(self):
         self._writes: dict[str, deque] = {}
+        # (session, station, sensor) → {"level", "raisedAt"}: when a visitor's own threshold
+        # alert started, so its id and age stay stable between reads. Bounded by the
+        # session cap; dropped with the session.
+        self._alert_since: dict[tuple[str, str, str], dict] = {}
         self._lock = threading.Lock()
 
     # ── sessions ──────────────────────────────────────────────
@@ -108,6 +112,7 @@ class SandboxStore:
             conn.execute("DELETE FROM sandbox_sessions WHERE id = ?", (session_id,))
         with self._lock:
             self._writes.pop(session_id, None)
+            self._drop_alert_state(session_id)
         return n
 
     def cleanup(self) -> int:
@@ -118,12 +123,37 @@ class SandboxStore:
             if ids:
                 conn.executemany("DELETE FROM sandbox_changes WHERE session_id = ?", [(i,) for i in ids])
                 conn.executemany("DELETE FROM sandbox_sessions WHERE id = ?", [(i,) for i in ids])
+            live = {r["id"] for r in conn.execute("SELECT id FROM sandbox_sessions")}
         with self._lock:
-            for i in ids:
+            # Memory follows the table, also for sessions another process removed (nightly_reset.py).
+            for i in set(self._writes) - live:
                 self._writes.pop(i, None)
+            for i in {k[0] for k in self._alert_since} - live:
+                self._drop_alert_state(i)
         if ids:
             log.info("Sandbox: %d expired session(s) removed", len(ids))
         return len(ids)
+
+    def _drop_alert_state(self, session_id: str, station_id: str | None = None) -> None:
+        """Forget a session's alert start times (lock held)."""
+        for k in [k for k in self._alert_since if k[0] == session_id and station_id in (None, k[1])]:
+            del self._alert_since[k]
+
+    def alert_since(self, session_id: str, station_id: str, sensor: str, level: str | None, ts_ms: int) -> int | None:
+        """When this visitor's own-threshold alert on `sensor` was raised (ms), or None once
+        it is back to normal. Escalation keeps the start time, like a shared alert."""
+        key = (session_id, station_id, sensor)
+        with self._lock:
+            if level is None:
+                self._alert_since.pop(key, None)
+                return None
+            rec = self._alert_since.setdefault(key, {"level": level, "raisedAt": ts_ms})
+            rec["level"] = level
+            return rec["raisedAt"]
+
+    def forget_alerts(self, session_id: str, station_id: str | None = None) -> None:
+        with self._lock:
+            self._drop_alert_state(session_id, station_id)
 
     @staticmethod
     def live_count() -> int:

@@ -1,9 +1,9 @@
 """ADMIN_TOKEN write protection: every state-changing route needs X-Admin-Token, reads
 and the WebSocket stay public, and an unset token keeps local development working.
 
-The two POSTs that change nothing (/api/simulation/whatif and the explain routes) are
+The POSTs that change nothing (/api/simulation/whatif and the explain routes) are
 deliberately public — they are reads that need a request body, and they are rate-limited
-in nginx instead.
+in nginx instead. So is the visit counter, which only increments aggregate counts.
 """
 
 import asyncio
@@ -54,6 +54,7 @@ READS = [
 PUBLIC_POSTS = [
     ("/api/simulation/whatif", {"stationId": "maitri", "scenarioId": "blizzard"}),
     ("/api/aurora-explain", {"stationId": "maitri", "question": "status"}),
+    ("/api/visit", {"entry": "main"}),        # only a counter (visits.py); nothing personal stored
 ]
 
 

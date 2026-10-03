@@ -50,10 +50,10 @@ export function SandboxNotice({ children, sx }) {
   );
 }
 
-export function SandboxTag({ show, sx }) {
+export function SandboxTag({ show, sx, label = 'Your sandbox' }) {
   if (!show) return null;
   return (
-    <Chip component="span" size="small" label="Your sandbox" data-testid="sandbox-tag"
+    <Chip component="span" size="small" label={label} data-testid="sandbox-tag"
       sx={[(t) => ({ height: 20, fontSize: 11, fontWeight: 600, color: t.vars.palette.primary.main, bgcolor: t.vars.palette.aurora.accentTint }),
         ...(Array.isArray(sx) ? sx : [sx])]} />
   );
