@@ -1037,6 +1037,8 @@ test('Aurora: a state-changing action asks first; my generator failure opens the
   await waitForFreeStation(request, 'bharati');
   await page.goto('/?station=bharati');
   await expect(page.getByTestId('data-source-badge')).toHaveAttribute('data-source', /simulator|physics-fallback/, { timeout: 30_000 });
+  // Without the public demo, only the signed-in team may start a scenario (Aurora refuses otherwise).
+  if (judge.writeProtected && !judge.publicDemo) await operatorLogin(page);
   await page.getByTestId('assistant-open').click();
   try {
     // Cancelled: nothing starts.
