@@ -47,7 +47,7 @@ class DecisionScheduler:
     # ── when to evaluate ──────────────────────────────────────
     def should_evaluate(self, tick: int, anomaly_active: bool, injection_keys, forecast_risk_level):
         """Return (evaluate: bool, reasons: list[str])."""
-        inputs = (bool(anomaly_active), frozenset(injection_keys or ()), forecast_risk_level)
+        inputs = (anomaly_active, frozenset(injection_keys or ()), forecast_risk_level)
         reasons = list(self._pending)
         if self._last_inputs is None:
             reasons.append("initial")
@@ -78,7 +78,7 @@ class DecisionScheduler:
             self._pending.append(reason)
 
     # ── what to publish ───────────────────────────────────────
-    def record(self, tick: int, decision: dict, reasons) -> dict:
+    def record(self, tick: int, decision: dict, reasons) -> dict | None:
         """Store a freshly evaluated decision; returns the decision to publish."""
         self._last_eval_tick = tick
         decision = {k: v for k, v in decision.items() if k != "recentlyResolved"}

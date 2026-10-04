@@ -654,7 +654,7 @@ class StationSimulator:
                             cfg = self.sensors.get(tb, {}).get(ts, {})
                             v = self.values[tb][ts] + nudge
                             v = max(cfg.get("min", v), min(cfg.get("max", v), v))
-                            self.values[tb][ts] = round(v, 2)
+                            self.values[tb][ts] = round(float(v), 2)
 
         # 5. Expire weather patterns
         for i in range(len(self.active_patterns) - 1, -1, -1):
@@ -668,17 +668,20 @@ class StationSimulator:
         return readings
 
     def inject_scenario(self, scenario_id: str, duration_s: float | None = None, source: str = "team") -> dict:
-        scenario = SCENARIOS.get(scenario_id)
+        scenario = dict(SCENARIOS.get(scenario_id) or {})
         if not scenario:
             return {"error": f"Unknown scenario: {scenario_id}"}
 
-        duration = float(scenario["duration"] if duration_s is None else duration_s)
+        duration_val = scenario.get("duration", 30)
+        duration = float(duration_val if duration_s is None else duration_s)
         duration_ticks = int(duration / TICK_INTERVAL)
         expiry = self.tick_count + duration_ticks
         self.active_scenario = scenario_id
 
-        for key, target in dict(scenario["injections"]).items():
-            self.active_injections[key] = (target, expiry)
+        injections = scenario.get("injections")
+        if isinstance(injections, dict):
+            for key, target in injections.items():
+                self.active_injections[key] = (target, expiry)
 
         by = " (public demo, started by a visitor)" if source == "public-demo" else ""
         self.log_event("injection", f"Scenario: {scenario['name']}{by}, {int(duration)} s")
@@ -744,7 +747,7 @@ stations = {
 
 
 # ── Flask Control API ────────────────────────────────────────
-control_app = Flask(__name__)
+control_app: Any = Flask(__name__)
 CORS(control_app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 

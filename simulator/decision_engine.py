@@ -31,6 +31,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -49,7 +50,7 @@ DEPENDENCY_GRAPH = station_config.decision_causal_graph()
 #  Risk matrix — explicit, auditable rules
 # ═══════════════════════════════════════════════════════
 
-RISK_RULES = [
+RISK_RULES: list[dict[str, Any]] = [
     {
         "id": "R001",
         "name": "Anomaly during load increase",
@@ -181,7 +182,7 @@ class DecisionEngine:
             Structured decision with event, evidence, forecast,
             impact, risk, recommendation, and audit trail.
         """
-        audit = []
+        audit: list[dict[str, Any]] = []
 
         # ── 1. Extract current state ────────────────────────
         weather = current_state.get("weather", {})
@@ -361,7 +362,7 @@ class DecisionEngine:
                     "source": "anomaly_detector_v2",
                 })
 
-        if forecast_available:
+        if forecast_available and forecast_result is not None:
             preds = forecast_result.get("predictions", [])
             for p in preds:
                 if p["hours_ahead"] in [1, 6, 24]:
