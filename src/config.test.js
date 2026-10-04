@@ -5,8 +5,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 async function loadConfig({ apiUrl, wsUrl, origin } = {}) {
   vi.resetModules();
-  if (apiUrl !== undefined) vi.stubEnv('VITE_API_URL', apiUrl);
-  if (wsUrl !== undefined) vi.stubEnv('VITE_WS_URL', wsUrl);
+  if (apiUrl !== undefined) {
+    vi.stubEnv('VITE_API_URL', apiUrl);
+  } else {
+    delete import.meta.env.VITE_API_URL;
+  }
+  if (wsUrl !== undefined) {
+    vi.stubEnv('VITE_WS_URL', wsUrl);
+  } else {
+    delete import.meta.env.VITE_WS_URL;
+  }
   if (origin) {
     const url = new URL(origin);
     vi.stubGlobal('window', { location: { protocol: url.protocol, host: url.host } });

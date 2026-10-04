@@ -951,12 +951,26 @@ async function expectAccessible(page, selector, what) {
   expect(bad, `axe: serious/critical violations in ${what}`).toEqual([]);
 }
 
+/** Ask Aurora by text; resolves to the reply popup once it shows the answer to THIS question.
+ *  The dock keeps no transcript: one popup holds the latest question and its answer
+ *  ("Thinking…" while it runs, when the answer itself is not rendered). */
 async function askAurora(page, text) {
-  const before = await page.getByTestId('msg-aurora').count();
   await page.getByTestId('assistant-input').fill(text);
   await page.getByTestId('assistant-input').press('Enter');
-  await expect(page.getByTestId('msg-aurora')).toHaveCount(before + 1, { timeout: 20_000 });
-  return page.getByTestId('msg-aurora').last();
+  const reply = page.getByTestId('assistant-reply')
+    .filter({ has: page.getByTestId('msg-user').filter({ hasText: text }) })
+    .filter({ has: page.getByTestId('msg-aurora') });
+  await expect(reply).toBeVisible({ timeout: 20_000 });
+  return reply;
+}
+
+/** Expand the incident popup into the full checklist card (idempotent). */
+async function openIncidentCard(page) {
+  const toggle = page.getByTestId('incident-float').getByTestId('incident-float-open');
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  const card = page.getByTestId('incident-card');
+  await expect(card).toBeVisible();
+  return card;
 }
 
 test('Aurora: text commands navigate and highlight, answers come from station data with the LLM disabled', async ({ page }) => {
@@ -990,7 +1004,8 @@ test('Aurora: text commands navigate and highlight, answers come from station da
   reply = await askAurora(page, "What's the fuel situation at Maitri?");
   await expect(reply).toContainText(/fuel store is [\d.,]+ kL/);
   reply = await askAurora(page, 'Explain the current anomaly');
-  await expect(reply).toContainText(/detector|anomaly/i);
+  // The answer itself, not the popup (which also echoes the question).
+  await expect(reply.getByTestId('msg-aurora')).toContainText(/detector|anomaly/i);
   await expect(reply.getByTestId('msg-mode')).toContainText('Answering from station data only');
 
   // A named what-if runs read-only and shows on the What-if page.
@@ -1050,28 +1065,30 @@ test('Aurora: a state-changing action asks first; my generator failure opens the
     const idle = await (await request.get(`${API}/api/station/bharati/state`)).json();
     expect(idle.publicDemo?.bharati).toBeFalsy();
 
-    // Confirmed: the visitor's own incident takes over the page.
+    // Confirmed: the visitor's own incident takes over the page. The dock shows it as a
+    // popup (the spoken briefing is not repeated as text) that expands into the checklist.
     await page.getByTestId('assistant-input').fill('trigger a generator failure');
     await page.getByTestId('assistant-input').press('Enter');
     await page.getByTestId('confirm-ok').click();
-    const card = page.getByTestId('incident-card');
-    await expect(card).toHaveAttribute('data-incident', 'generator_failure', { timeout: 60_000 });
+    const float = page.getByTestId('incident-float');
+    await expect(float).toContainText('Bharati', { timeout: 60_000 });
     await expect(page).toHaveURL(/module=energy/);
     await expect(page.getByTestId('highlight-strip')).toHaveAttribute('data-ids', /generator.*heating/);
+    await expect(float).toContainText(/Risk: (High|Critical)/);
+    await expect(float).not.toContainText(/Risk: (Low|Nominal|Moderate)/);
+    await expect(float).toContainText('Example procedure, not an official NCPOR procedure');
+    const card = await openIncidentCard(page);
+    await expect(card).toHaveAttribute('data-incident', 'generator_failure');
     await expect(page.getByTestId('incident-risk')).toContainText(/High|Critical/);
-    const briefing = page.locator('[data-testid=msg-aurora][data-kind=incident]');
-    await expect(briefing).toContainText('Generator failure detected at Bharati');
-    await expect(briefing).not.toContainText(/Risk is (low|nominal|moderate)/);
-    await expect(card).toContainText('Example procedure, not an official NCPOR procedure');
     await page.getByTestId('incident-step-0').check();
     await page.getByTestId('incident-next').click();
-    await expect(page.getByTestId('msg-aurora').last()).toContainText('Step 2 of 6: Notify the station leader');
-    await expectAccessible(page, '[data-testid=assistant-panel]', 'the panel with an incident card');
+    await expect(page.getByTestId('msg-aurora')).toContainText('Step 2 of 6: Notify the station leader');
+    await expectAccessible(page, '[data-testid=incident-float]', 'the incident popup with its checklist');
   } finally {
     await request.post(`${API}/api/sim/reset?stationId=bharati`, { headers: WRITE_HEADERS });
   }
-  await expect(page.getByTestId('incident-card')).toHaveAttribute('data-status', 'resolved', { timeout: 90_000 });
-  await expect(page.locator('[data-testid=msg-aurora][data-kind=summary]')).toContainText(/resolved after .* 1 of 6 steps completed/);
+  await expect(page.getByTestId('incident-float')).toHaveAttribute('data-status', 'resolved', { timeout: 90_000 });
+  await expect(page.getByTestId('incident-summary')).toContainText('1 of 6 steps completed');
 });
 
 test('Aurora: another visitor\'s incident shows the floating card and does not take over the page; my own new one then takes the card', async ({ page, browser, request }) => {
@@ -1096,12 +1113,13 @@ test('Aurora: another visitor\'s incident shows the floating card and does not t
     await page.getByTestId('incident-float-show').click();
     await expect(page).toHaveURL(/module=infrastructure/);
     await expect(page.getByTestId('highlight-strip')).toContainText('Heating Zone A');
-    await expect(page.getByTestId('incident-card')).toBeVisible();
+    await openIncidentCard(page);
 
     // A new incident I start myself takes the card (the one I was viewing moves to the queue),
     // unless the one shown outranks it; then mine is queued and says behind what.
     await waitForFreeStation(request, 'bharati');
-    await page.getByTestId('assistant-close').click();
+    // "Show me" does not open the command bar in the dock; close it only if it is open.
+    if (await page.getByTestId('assistant-close').count()) await page.getByTestId('assistant-close').click();
     await page.getByTestId('station-option-bharati').click();
     await page.getByTestId('assistant-open').click();
     await page.waitForTimeout(IS_REMOTE ? 61_000 : 4_000);          // the per-IP visitor cooldown
@@ -1109,8 +1127,9 @@ test('Aurora: another visitor\'s incident shows the floating card and does not t
     await page.getByTestId('assistant-input').press('Enter');
     await expect(page.getByTestId('confirm-dialog')).toContainText('Run “Blizzard” at Bharati?');
     await page.getByTestId('confirm-ok').click();
-    await expect(page.locator('[data-testid=msg-aurora][data-kind=incident]').last()).toContainText('Blizzard detected at Bharati', { timeout: 60_000 });
-    const card = page.getByTestId('incident-card');
+    // Both incidents are now known: one in the popup, the other counted as queued.
+    await expect(page.getByTestId('incident-float')).toContainText('+1 more incident', { timeout: 60_000 });
+    const card = await openIncidentCard(page);
     if (await card.getAttribute('data-incident') === 'blizzard') {
       await expect(card).toContainText(/Critical: heating failure · Maitri/);
       await expect(page.getByTestId('incident-queued-note')).toHaveCount(0);
