@@ -62,6 +62,11 @@ describe('parseIntent: other commands', () => {
   it('demo scenarios are recognised (and confirmed later)', () => {
     expect(acts('trigger a generator failure')).toEqual([{ type: 'triggerDemoScenario', args: { id: 'generator_failure', station: 'maitri' } }]);
     expect(acts('run the co2 spike scenario at Bharati')).toEqual([{ type: 'triggerDemoScenario', args: { id: 'co2_spike', station: 'bharati' } }]);
+    expect(acts('trigger a blizzard at Bharati')).toEqual([{ type: 'triggerDemoScenario', args: { id: 'blizzard', station: 'bharati' } }]);
+    expect(acts('start a blizzard')).toEqual([{ type: 'triggerDemoScenario', args: { id: 'blizzard', station: 'maitri' } }]);
+    expect(acts('start the blizzard story')).toEqual([{ type: 'startStory', args: { id: 'blizzard' } }]);
+    expect(acts('what happens if there is a blizzard')[0].type).toBe('runWhatIf');      // read-only, not the demo
+    expect(parseIntent('why is there a blizzard warning', ctx).kind).toBe('question');
   });
 
   it('confirm/cancel only while something waits for an answer', () => {
