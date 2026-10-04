@@ -265,16 +265,21 @@ def build_context(sid: str, snapshot: dict | None, anomaly: dict | None = None, 
     fuel_rate, fuel_kl = gen.get("gen_fuel_rate"), store.get("store_fuel")
     derived: dict[str, dict[str, Any]] = {}
     if isinstance(fuel_rate, (int, float)) and isinstance(fuel_kl, (int, float)) and fuel_rate > 0:
-        derived["fuelAutonomyDays"] = {"value": round(fuel_kl * 1000 / (fuel_rate * 24)), "unit": "days",
-                                       "provenance": "MODEL-DERIVED",
-                                       "basis": ("fuel store ÷ current burn rate "
-                                                 "(store_fuel kL × 1000 ÷ gen_fuel_rate L/h ÷ 24)")}
+        fuel_days: dict[str, Any] = {
+            "value": round(fuel_kl * 1000 / (fuel_rate * 24)),
+            "unit": "days",
+            "provenance": "MODEL-DERIVED",
+            "basis": ("fuel store ÷ current burn rate "
+                      "(store_fuel kL × 1000 ÷ gen_fuel_rate L/h ÷ 24)"),
+        }
         # Below this a low-fuel incident's risk is raised to high (playbooks.json riskEscalation).
         high_risk_days = station_config.meta_value(sid, "fuelAutonomyHighRiskDays")
         if isinstance(high_risk_days, (int, float)):
-            derived["fuelAutonomyDays"].update(
-                escalateBelow=high_risk_days,
-                escalateBelowNote="assumed planning threshold (station_config.json), not an NCPOR figure")
+            fuel_days["escalateBelow"] = high_risk_days
+            fuel_days["escalateBelowNote"] = (
+                "assumed planning threshold (station_config.json), not an NCPOR figure"
+            )
+        derived["fuelAutonomyDays"] = fuel_days
     energy = snap.get("energy") or {}
     if isinstance(energy.get("loadPct"), (int, float)):
         derived["generatorLoadPct"] = {"value": round(energy["loadPct"], 1), "unit": "%", "provenance": "MODEL-DERIVED"}
