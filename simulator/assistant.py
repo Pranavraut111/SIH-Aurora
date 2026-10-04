@@ -172,6 +172,15 @@ def validate_action(name: str, args: dict | None, station_id: str) -> dict:
     return {"type": name, "args": clean, "stateChanging": bool(spec["stateChanging"])}
 
 
+def _nullable(schema: dict) -> dict:
+    """An optional argument also accepts null: models often send `"building": null` for "not given",
+    and Groq rejects the whole call (HTTP 400 tool_use_failed) when that breaks the schema."""
+    out = {**schema, "type": [schema["type"], "null"]}
+    if "enum" in out:
+        out["enum"] = [*out["enum"], None]
+    return out
+
+
 def tool_schemas(station_id: str) -> list[dict]:
     """OpenAI-style tool definitions: every whitelisted action plus answer_question."""
     cat = catalogue()
@@ -194,6 +203,8 @@ def tool_schemas(station_id: str) -> list[dict]:
                 props[key] = {"type": "number", "minimum": a["min"], "maximum": a["max"]}
             if a.get("required"):
                 required.append(key)
+            elif key in props:
+                props[key] = _nullable(props[key])
         tools.append({"type": "function", "function": {
             "name": name, "description": spec["description"],
             "parameters": {"type": "object", "properties": props, "required": required}}})
@@ -202,9 +213,9 @@ def tool_schemas(station_id: str) -> list[dict]:
         "description": "The user asked a question about the station rather than for a UI action.",
         "parameters": {"type": "object", "properties": {
             "topic": {"type": "string", "enum": list(TOPICS)},
-            "building": {"type": "string", "enum": buildings},
-            "sensor": {"type": "string", "enum": list(station_config.sensors(station_id))},
-            "station": {"type": "string", "enum": stations},
+            "building": _nullable({"type": "string", "enum": buildings}),
+            "sensor": _nullable({"type": "string", "enum": list(station_config.sensors(station_id))}),
+            "station": _nullable({"type": "string", "enum": stations}),
         }, "required": ["topic"]}}})
     return tools
 

@@ -2247,11 +2247,24 @@ def assistant_status():
         st = _sim_request("GET", "/api/llm/status")
     except HTTPException as exc:
         return {"llmAvailable": False, "notice": ASSISTANT_NOTICE_OFFLINE, "reason": str(exc.detail)}
-    ok = bool(st.get("configured")) and st.get("explainRemaining", 0) > 0
-    reason = None if ok else ("no Groq key on the server" if not st.get("configured")
-                              else "the hourly or daily Groq budget is used up")
-    return {"llmAvailable": ok, "routerAvailable": bool(st.get("configured")) and st.get("routerRemaining", 0) > 0,
-            "notice": None if ok else ASSISTANT_NOTICE_OFFLINE, "reason": reason,
+    # A key alone is not enough: the simulator reports whether each model's last real call or
+    # probe actually succeeded (ok None = first probe still running).
+    explain, router = st.get("explainHealth") or {}, st.get("routerHealth") or {}
+
+    def _why_not(health: dict, remaining: int) -> str | None:
+        if not st.get("configured"):
+            return "no Groq key on the server"
+        if health.get("ok") is False:
+            return health.get("reason") or "Groq calls are failing"
+        if remaining <= 0:
+            return "the hourly or daily Groq budget is used up"
+        return None
+
+    reason = _why_not(explain, st.get("explainRemaining", 0))
+    router_reason = _why_not(router, st.get("routerRemaining", 0))
+    return {"llmAvailable": reason is None, "routerAvailable": router_reason is None,
+            "notice": None if reason is None else ASSISTANT_NOTICE_OFFLINE, "reason": reason,
+            "routerReason": router_reason, "checkedAt": explain.get("checkedAt"),
             "models": {"router": st.get("routerModel"), "explain": st.get("explainModel")}}
 
 

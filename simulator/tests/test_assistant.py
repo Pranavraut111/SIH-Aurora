@@ -222,6 +222,20 @@ def test_tool_schemas_cover_every_action_and_answer_question():
     assert "generator" in tools["openBuildingPanel"]["parameters"]["properties"]["id"]["enum"]
 
 
+def test_tool_schemas_let_optional_arguments_be_null():
+    """Live: gpt-oss-20b sent `"building": null` and Groq rejected the call (400 tool_use_failed)."""
+    tools = {t["function"]["name"]: t["function"]["parameters"] for t in assistant.tool_schemas("maitri")}
+    answer = tools["answer_question"]["properties"]
+    for key in ("building", "sensor", "station"):
+        assert answer[key]["type"] == ["string", "null"]
+        assert None in answer[key]["enum"]
+    assert answer["topic"]["type"] == "string"          # required: stays non-null
+    for name, params in tools.items():
+        for key, prop in params["properties"].items():
+            nullable = isinstance(prop["type"], list)
+            assert nullable == (key not in params["required"]), (name, key)
+
+
 # ── deterministic understanding (the spec's examples) ─────────
 
 @pytest.mark.parametrize("text, topic, station, building", [
@@ -459,6 +473,34 @@ def test_context_playbooks_and_status_routes(client, monkeypatch):
     assert c.get("/api/assistant/status").json()["notice"] == "Answering from station data only"
     monkeypatch.setattr(ub, "_sim_request", fake_sim())
     assert c.get("/api/assistant/status").json()["llmAvailable"] is True
+
+
+@pytest.mark.parametrize("explain, router, llm_ok, reason, router_ok", [
+    ({"ok": True}, {"ok": True}, True, None, True),
+    ({"ok": None}, {"ok": None}, True, None, True),            # first probe still running
+    ({"ok": False, "reason": "Groq rejected the request (400)"}, {"ok": True},
+     False, "Groq rejected the request (400)", True),
+    ({"ok": True}, {"ok": False, "reason": "Groq rejected the key (401)"}, True, None, False),
+])
+def test_status_reflects_whether_groq_actually_answers(client, monkeypatch, explain, router, llm_ok, reason, router_ok):
+    c, ub = client
+    monkeypatch.setattr(ub, "_sim_request", lambda *a, **k: {
+        "configured": True, "explainRemaining": 5, "routerRemaining": 5,
+        "explainHealth": explain, "routerHealth": router})
+    st = c.get("/api/assistant/status").json()
+    assert st["llmAvailable"] is llm_ok and st["reason"] == reason and st["routerAvailable"] is router_ok
+    assert st["notice"] == (None if llm_ok else "Answering from station data only")
+    if not router_ok:
+        assert st["routerReason"] == router["reason"]
+
+
+def test_status_without_a_key_says_so(client, monkeypatch):
+    c, ub = client
+    monkeypatch.setattr(ub, "_sim_request", lambda *a, **k: {
+        "configured": False, "explainRemaining": 5, "routerRemaining": 5,
+        "explainHealth": {"ok": False, "reason": "no Groq key on the server"}, "routerHealth": {}})
+    st = c.get("/api/assistant/status").json()
+    assert st["llmAvailable"] is False and st["reason"] == "no Groq key on the server"
 
 
 def test_assistant_routes_need_no_token_and_change_nothing(client, monkeypatch):

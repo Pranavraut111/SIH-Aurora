@@ -30,6 +30,16 @@ function affectedSentence(inc) {
 }
 
 /** "Generator failure detected at Bharati. … First, verify backup power. …" */
+// "Blizzard" → "blizzard", but "CO₂ build-up…" keeps its capitals.
+const inSentence = (title) => (/^[A-Z][A-Z₀-₉]/.test(title) ? title : title.charAt(0).toLowerCase() + title.slice(1));
+
+/** Why the visitor's own new incident did not take the card: e.g.
+ *  "Your blizzard is queued behind a critical generator failure at Bharati." */
+export function queuedBehindText(inc, book, behind, behindBook) {
+  const where = behind.station !== inc.station ? ` at ${stationMeta(behind.station).name}` : '';
+  return `Your ${inSentence(book.title)} is queued behind a ${behind.severity} ${inSentence(behindBook.title)}${where}.`;
+}
+
 export function briefingText(inc, book, { navigatedTo = null } = {}) {
   const station = stationMeta(inc.station).name;
   const parts = [`${book.title} detected at ${station}${inc.sandbox ? ', in your sandbox' : ''}.`];

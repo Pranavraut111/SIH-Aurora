@@ -209,6 +209,20 @@ export function queue(state) {
     .sort((a, b) => (SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]) || (a.startedAt - b.startedAt));
 }
 
+/** True when incident `a` ranks above `b`: a higher alert severity, or the same severity and a higher risk. */
+export function outranks(a, b) {
+  const bySeverity = (SEVERITY_RANK[a.severity] || 0) - (SEVERITY_RANK[b.severity] || 0);
+  return bySeverity > 0 || (bySeverity === 0 && rank(a.risk) > rank(b.risk));
+}
+
+/** Where the visitor's own NEW incident goes: it takes the card and the one shown moves to the
+ *  queue, unless the one shown outranks it; then it waits in the queue behind that one.
+ *  → {focus: key for the card, behind: the incident it is queued behind, or null} */
+export function placeOwnIncident(shown, incoming) {
+  if (!shown || shown.key === incoming.key || shown.status !== 'active' || shown.dismissed) return { focus: incoming.key, behind: null };
+  return outranks(shown, incoming) ? { focus: shown.key, behind: shown } : { focus: incoming.key, behind: null };
+}
+
 /** The observation for one station from the telemetry snapshot + the assistant context. */
 export function observationFrom(station, stationData, ctx) {
   const an = ctx?.station?.id === station ? ctx.anomaly : null;

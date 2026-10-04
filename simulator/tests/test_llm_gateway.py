@@ -3,6 +3,7 @@ validation, the router's own budget, and tool-call parsing. Groq is mocked."""
 
 import pytest
 
+import config as app_config
 import simulator as sim
 
 
@@ -11,6 +12,8 @@ def gw(monkeypatch):
     monkeypatch.setattr(sim, "GROQ_API_KEY", "test-key-not-used")
     monkeypatch.setattr(sim, "_groq_calls", sim.collections.deque())
     monkeypatch.setattr(sim, "_router_calls", sim.collections.deque())
+    monkeypatch.setattr(sim, "_llm_health", {})
+    monkeypatch.setattr(sim, "_llm_probing", set())
     return sim.control_app.test_client()
 
 
@@ -91,3 +94,87 @@ def test_no_key_means_unavailable(gw, monkeypatch):
     assert r["available"] is False and "GROQ_API_KEY" in r["reason"]
     st = gw.get("/api/llm/status").get_json()
     assert st["configured"] is False
+
+
+# ── Does Groq actually answer? (status reflects real calls + a cached probe) ──
+
+def _chat_once(gw, kind="explain"):
+    return gw.post("/api/llm/chat", json={"kind": kind, "messages": [{"role": "user", "content": "x"}]}).get_json()
+
+
+def test_a_rejected_request_marks_the_model_unavailable_with_a_clear_reason(gw, monkeypatch):
+    monkeypatch.setattr(sim.requests, "post", lambda *a, **k: FakeResp(400, ""))
+    _chat_once(gw)
+    h = sim._llm_health[sim.GROQ_MODEL]
+    assert h["ok"] is False and h["reason"] == "Groq rejected the request (400)"
+    monkeypatch.setattr(sim.requests, "post", lambda *a, **k: FakeResp(401, {"error": "bad key"}))
+    _chat_once(gw)
+    assert sim._llm_health[sim.GROQ_MODEL]["reason"] == "Groq rejected the key (401)"
+    monkeypatch.setattr(sim.requests, "post", lambda *a, **k: _ok(content="fine"))
+    _chat_once(gw)
+    assert sim._llm_health[sim.GROQ_MODEL] == {"ok": True, "reason": None,
+                                               "checkedAt": sim._llm_health[sim.GROQ_MODEL]["checkedAt"]}
+
+
+def test_an_invalid_tool_call_by_the_model_does_not_mark_it_broken(gw, monkeypatch):
+    body = '{"error":{"message":"Tool call validation failed","code":"tool_use_failed"}}'
+    monkeypatch.setattr(sim.requests, "post", lambda *a, **k: FakeResp(400, body))
+    assert _chat_once(gw, "router")["available"] is False
+    assert app_config.GROQ_ROUTER_MODEL not in sim._llm_health
+
+
+def test_unreachable_groq_is_reported(gw, monkeypatch):
+    def boom(*a, **k):
+        raise sim.requests.ConnectionError("down")
+    monkeypatch.setattr(sim.requests, "post", boom)
+    _chat_once(gw)
+    assert sim._llm_health[sim.GROQ_MODEL]["reason"] == "Groq is unreachable from the server"
+
+
+def test_status_probes_in_the_background_when_stale_and_outside_the_budget(gw, monkeypatch):
+    sent = []
+
+    def post(url, json=None, **kw):
+        sent.append(json)
+        return FakeResp(400, "")
+    monkeypatch.setattr(sim.requests, "post", post)
+    st = gw.get("/api/llm/status").get_json()
+    assert st["explainHealth"]["ok"] is None            # first call: never blocks on the probe
+    for t in [t for t in sim.threading.enumerate() if t.name.startswith("llm-probe-")]:
+        t.join(5)
+    st = gw.get("/api/llm/status").get_json()
+    assert st["explainHealth"] == {**st["explainHealth"], "ok": False, "reason": "Groq rejected the request (400)"}
+    assert st["routerHealth"]["ok"] is False
+    assert {b["model"] for b in sent} == {sim.GROQ_MODEL, app_config.GROQ_ROUTER_MODEL}
+    assert all(b["max_tokens"] <= 32 for b in sent)
+    assert len(sim._groq_calls) == 0 and len(sim._router_calls) == 0     # probes spend no budget slot
+    gw.get("/api/llm/status")                           # fresh record → no new probe
+    assert not [t for t in sim.threading.enumerate() if t.name.startswith("llm-probe-")]
+    assert len(sent) == 2
+
+
+def test_a_stale_record_is_reprobed(gw, monkeypatch):
+    monkeypatch.setattr(sim.requests, "post", lambda *a, **k: _ok(content="OK"))
+    sim._note_llm_result(sim.GROQ_MODEL, False, "Groq rejected the request (400)")
+    sim._llm_health[sim.GROQ_MODEL]["checkedAt"] -= app_config.GROQ_PROBE_INTERVAL_S + 1
+    assert sim.llm_health(sim.GROQ_MODEL)["ok"] is False    # stale value returned, probe started
+    for t in [t for t in sim.threading.enumerate() if t.name.startswith("llm-probe-")]:
+        t.join(5)
+    assert sim.llm_health(sim.GROQ_MODEL)["ok"] is True
+
+
+def test_no_key_health_needs_no_probe(gw, monkeypatch):
+    monkeypatch.setattr(sim, "GROQ_API_KEY", "")
+    assert sim.llm_health(sim.GROQ_MODEL) == {"ok": False, "reason": "no Groq key on the server", "checkedAt": None}
+
+
+@pytest.mark.parametrize("raw", ['gsk_abc123', ' gsk_abc123 ', '"gsk_abc123"', "'gsk_abc123'",
+                                 'gsk_abc123\r', '"gsk_abc123"\r\n', 'gsk_abc 123', '\tgsk_abc123\n'])
+def test_the_groq_key_is_cleaned_of_quotes_and_whitespace(monkeypatch, raw):
+    monkeypatch.setenv("GROQ_API_KEY", raw)
+    assert app_config._get_secret("GROQ_API_KEY") == "gsk_abc123"
+
+
+def test_an_unset_secret_uses_the_default(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "  ")
+    assert app_config._get_secret("GROQ_API_KEY") == ""
