@@ -66,7 +66,8 @@ const CONTROL = [
 const VERB = /\b(?:open|show|go to|goto|take me to|switch to|navigate to|bring up|pull up|display|jump to|view|see)\b/;
 const WHATIF = /\bwhat (?:happens|would happen|will happen|if)\b|\bwhat-if\b|\bwhatif\b|\bsimulate\b|\bsuppose\b|\bimagine\b|\bhypothetical/;
 const DEMO_VERB = /\b(?:trigger|inject|start|run|launch|cause)\b/;
-const DEMO_NOUN = /\b(?:scenario|demo|fault|failure|spike|loss|crisis|outage)\b/;
+// "blizzard" is the one demo scenario whose name has no failure-type noun ("trigger a blizzard").
+const DEMO_NOUN = /\b(?:scenario|demo|fault|failure|spike|loss|crisis|outage|blizzard|storm)\b/;
 
 function intensityOf(t) {
   if (/\b(?:twice|double|extreme|severe|massive|huge|very strong)\b/.test(t)) return 2;
