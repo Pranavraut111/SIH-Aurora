@@ -14,7 +14,7 @@ let token = null;
 let writeProtected = null;   // null = not yet known
 // Judge mode (GET /api/admin/session): anonymous visitors write to a private sandbox
 // (VISITOR_SANDBOX) and may run the predefined demo scenarios (PUBLIC_DEMO).
-let judge = { sandbox: false, publicDemo: false, sandboxTtlS: 3600, publicDemoDurationS: 120 };
+let judge = { sandbox: false, publicDemo: false, sandboxTtlS: 3600, publicDemoDurationS: 60 };
 const listeners = new Set();
 
 function notify() {

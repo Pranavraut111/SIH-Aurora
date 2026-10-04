@@ -1,9 +1,10 @@
 /* ═══════════════════════════════════════════════════════════════
    Aurora assistant — the host (lazy chunk, mounted after the first snapshot).
 
-   Owns the conversation, the action layer's execution, speech and incident mode;
-   renders the panel (AssistantPanel, its own chunk) when open, a compact incident
-   card when it is closed, and the "highlighted by Aurora" strip on the page.
+   Owns the requests, the action layer's execution, speech and incident mode;
+   renders the dock (AuroraDock): an incident popup that appears by itself, a
+   popup with the answer to the latest request (no chat history), and the command
+   bar when opened; plus the "highlighted by Aurora" strip on the page.
 
    Rules it enforces:
    - Only validated, whitelisted actions run (actions.js). State-changing ones ask
@@ -13,7 +14,7 @@
      never while a tour or story runs; incidents still show visually.
    - Spoken incident updates: at most one per 20 s unless the risk escalates.
    ═══════════════════════════════════════════════════════════════ */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiGet, apiPost } from '../services/api';
 import { usePolling } from '../hooks/usePolling';
@@ -28,16 +29,16 @@ import { buildingName, demoLabel, describeAction, downstream, InvalidAction, lis
 import { parseIntent } from './intents';
 import { emptyState, observationFrom, observe, placeOwnIncident, queue, stepsFor } from './incidents';
 import { briefingText, nextStep, nextStepText, queuedBehindText, resolvedSummary, updateText } from './briefing';
-import { createRecognizer, recognitionErrorText, speak, speechSupport, stopSpeaking } from './speech';
+import { chime, createRecognizer, initAudio, recognitionErrorText, speak, speechSupport, stopSpeaking } from './speech';
 import { loadPrefs, savePrefs } from './prefs';
-import IncidentCard from './IncidentCard';
+import AuroraDock from './AuroraDock';
 import HighlightStrip from './HighlightStrip';
-
-const AssistantPanel = lazy(() => import('./AssistantPanel'));
 
 const CONTEXT_POLL_MS = 10000;
 const SPOKEN_UPDATE_GAP_MS = 20000;
 const SNOOZE_MS = 5 * 60 * 1000;
+const INCIDENT_KINDS = new Set(['incident', 'update', 'summary']);
+const TEST_PHRASE = 'This is Aurora. All station systems are being monitored. I will tell you calmly and clearly when something needs your attention.';
 let nextId = 1;
 const uid = () => `e${nextId++}`;
 
@@ -62,7 +63,6 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   const ptt = useAssistant((s) => s.ptt);
   const gesture = useAssistant((s) => s.gesture);
   const highlight = useAssistant((s) => s.highlight);
-  const panelMounted = useAssistant((s) => s.opened);
   const confirm = useConfirm();
   const support = useMemo(() => speechSupport(), []);
   const now = useNow(5000);
@@ -80,6 +80,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   const [focusKey, setFocusKey] = useState(null);
   const [snoozed, setSnoozed] = useState({});
   const [micError, setMicError] = useState(null);
+  const [hiddenReply, setHiddenReply] = useState(null);
 
   // Async flows read the latest values through this ref (they outlive renders).
   const live = useRef({});
@@ -123,28 +124,35 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   const recRef = useRef(null);
   const canSpeak = useCallback((force = false) => {
     const l = live.current;
-    return support.synthesis && l.prefs.voice && l.gesture && (!l.tourActive || force);
+    if (!support.synthesis) return false;
+    if (force) return true;
+    return Boolean(l.prefs.voice && !l.tourActive);
   }, [support.synthesis]);
-  const say = useCallback(async (text, { force = false } = {}) => {
+  const say = useCallback(async (text, { force = false, withChime = true } = {}) => {
     if (!text || !canSpeak(force)) return;
     const l = live.current;
     const resume = Boolean(recRef.current?.conversation);
     if (resume) { try { recRef.current.rec.abort(); } catch (err) { console.warn('[Aurora] pause listening', err); } }
     setSpeaking(true);
-    await speak(text, { rate: l.prefs.rate, lang: l.prefs.lang });
-    setSpeaking(false);
+    try {
+      if (withChime) await chime();
+      await speak(text, { rate: l.prefs.rate, lang: l.prefs.lang, voiceName: l.prefs.voiceName });
+    } catch (err) {
+      console.warn('[Aurora] speech output failed', err);
+    } finally {
+      setSpeaking(false);
+    }
   }, [canSpeak]);
   const hush = useCallback(() => { stopSpeaking(); setSpeaking(false); }, []);
 
   // ── Confirmation (click or voice) ──
   const askConfirm = useCallback(async (a) => {
     const name = stationMeta(a.args.station || live.current.activeStation).name;
-    const minutes = 2;
     let title;
     let body;
     if (a.type === 'triggerDemoScenario') {
       title = `Run “${demoLabel(a.args.id)}” at ${name}?`;
-      body = `Every visitor sees it: a simulated fault for about ${minutes} minutes, then the station resets itself. The values are labelled Simulated. Nothing real is affected.`;
+      body = `Every visitor sees it: a simulated fault for about 60 seconds, then the station resets itself. The values are labelled Simulated. Nothing real is affected.`;
     } else {
       const meta = STORY_META[a.args.id];
       title = `Start the story “${storyLabel(a.args.id)}”?`;
@@ -224,7 +232,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         await apiPost(`/sim/inject/${a.args.id}?stationId=${station}`);
         noteOwnScenario(station, a.args.id);
         if (station !== l.activeStation) controls.setStation(station);
-        return { say: `Started the ${demoLabel(a.args.id).toLowerCase()} demo at ${stationMeta(station).name}. It is simulated and resets itself in about 2 minutes.` };
+        return { say: `Started the ${demoLabel(a.args.id).toLowerCase()} demo at ${stationMeta(station).name}. It is simulated and resets itself in about 60 seconds.` };
       }
       case 'stopSpeaking':
         hush();
@@ -304,7 +312,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
       lastSpoken.current[key] = now;
       clearTimeout(pendingUpdate.current[key]?.timer);
       delete pendingUpdate.current[key];
-      say(text);
+      say(text, { withChime: urgent });
       return;
     }
     // Debounce: keep only the latest update and say it when the 20 s window opens.
@@ -377,7 +385,6 @@ export default function AssistantHost({ stationData, activeStation, activeModule
             queuedNote = queuedBehindText(i, book, place.behind, bookOf(place.behind) || { title: place.behind.playbookId });
             patchIncident(i.key, (x) => ({ ...x, queuedBehind: queuedNote }));
           }
-          setAssistant({ open: true });
           if (l.prefs.autoNavigate && !place.behind) {
             const nav = autoNavigate(i, book);
             chips = [{ id: uid(), label: nav.label, undo: nav.undo }];
@@ -387,7 +394,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         const text = briefingText(i, book, { navigatedTo });
         add({ role: 'aurora', kind: 'incident', incidentKey: i.key, text, chips, quiet: !takeOver,
           note: own ? queuedNote : 'Started by someone else or from shared data: shown, not opened for you.' });
-        if (speakIt) { lastSpoken.current[i.key] = Date.now(); say(queuedNote ? `${text} ${queuedNote}` : text); }
+        if (speakIt) { lastSpoken.current[i.key] = Date.now(); say(queuedNote ? `${text} ${queuedNote}` : text, { withChime: true }); }
       } else if (ev.type === 'update' || ev.type === 'escalate') {
         if (i.dismissed) continue;
         const text = updateText(ev, book);
@@ -456,10 +463,12 @@ export default function AssistantHost({ stationData, activeStation, activeModule
 
   // ── One request, typed or spoken ──
   const handle = useCallback(async (text, via = 'text') => {
+    initAudio();
     const t = String(text || '').trim();
     if (!t) return;
     const l = live.current;
     add({ role: 'user', text: t, via });
+    setAssistant({ gesture: true });
     const parsed = parseIntent(t, { station: l.activeStation, module: l.activeModule, incident: Boolean(queue(l.inc).length), pending: Boolean(l.pending) });
 
     if (parsed.kind === 'control') {
@@ -467,7 +476,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
       if (c === 'confirm' || c === 'cancel') { l.pending?.settle(c === 'confirm'); return; }
       if (c === 'stop') { hush(); add({ role: 'aurora', text: 'Stopped.', chips: [{ id: uid(), label: 'Stopped speaking' }] }); return; }
       if (c === 'mute') { hush(); setPrefs({ voice: false }); add({ role: 'aurora', text: 'Voice off. I’ll answer in text; say or type “unmute” to hear me again.', chips: [{ id: uid(), label: 'Voice off', undo: () => setPrefs({ voice: true }) }] }); return; }
-      if (c === 'unmute') { setPrefs({ voice: true }); add({ role: 'aurora', text: 'Voice on.' }); live.current.prefs = { ...l.prefs, voice: true }; say('Voice on.'); return; }
+      if (c === 'unmute') { setPrefs({ voice: true }); add({ role: 'aurora', text: 'Voice on.' }); live.current.prefs = { ...l.prefs, voice: true }; say('Voice on.', { force: true }); return; }
       const reply = incidentControl(c);
       if (reply) { add({ role: 'aurora', text: reply }); say(reply); }
       return;
@@ -484,7 +493,16 @@ export default function AssistantHost({ stationData, activeStation, activeModule
       const r = await runActions(parsed.actions);
       setBusy(false);
       const spoken = r.said.length ? r.said.join(' ') : `${r.chips.filter((c) => !c.refused).map((c) => c.label).join('. ')}.`;
-      add({ role: 'aurora', text: spoken, chips: r.chips, detail: r.detail, mode: 'local' });
+      const voiceOffChips = !l.prefs.voice ? [{
+        id: uid(),
+        label: 'Voice is muted (click to unmute)',
+        undo: () => {
+          setPrefs({ voice: true });
+          live.current.prefs = { ...live.current.prefs, voice: true };
+          say(spoken, { force: true });
+        },
+      }] : [];
+      add({ role: 'aurora', text: spoken, chips: [...r.chips, ...voiceOffChips], detail: r.detail, mode: 'local' });
       say(spoken);
       return;
     }
@@ -503,7 +521,16 @@ export default function AssistantHost({ stationData, activeStation, activeModule
       if (out.station !== live.current.activeStation) suggest.unshift({ type: 'switchStation', args: { station: out.station } });
       const r = auto.length ? await runActions(auto) : { chips: [], said: [], detail: [] };
       const spoken = out.spoken || r.said.join(' ') || `${r.chips.filter((c) => !c.refused).map((c) => c.label).join('. ')}.`;
-      add({ role: 'aurora', text: spoken, detail: [...(out.detail || []), ...r.detail], chips: r.chips, suggestions: suggest,
+      const voiceOffChips = !l.prefs.voice ? [{
+        id: uid(),
+        label: 'Voice is muted (click to unmute)',
+        undo: () => {
+          setPrefs({ voice: true });
+          live.current.prefs = { ...live.current.prefs, voice: true };
+          say(spoken, { force: true });
+        },
+      }] : [];
+      add({ role: 'aurora', text: spoken, detail: [...(out.detail || []), ...r.detail], chips: [...r.chips, ...voiceOffChips], suggestions: suggest,
         mode: out.mode, notice: out.notice, sources: out.sources, grounding: out.grounding, station: out.station });
       if (out.notice) setStatus((s) => ({ ...(s || {}), llmAvailable: false, notice: out.notice }));
       say(spoken);
@@ -594,20 +621,38 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   useEffect(() => { if (tourActive) hush(); }, [tourActive, hush]);
 
   const queued = queue(inc);
-  const floatIncident = !open && !tourActive && currentIncident && (snoozed[currentIncident.key] || 0) < now ? currentIncident : null;
   const slot = typeof document !== 'undefined' ? document.getElementById('aurora-highlight-slot') : null;
-  const panelProps = {
-    open, isPhone, onClose: () => { setAssistant({ open: false }); stopListening(); },
-    entries, busy, listening, interim, speaking, support, prefs, setPrefs, status, micError, writeProtected,
-    onSend: (t) => handle(t, 'text'), onMic: () => (listening ? stopListening() : startListening({ mode: prefs.conversation ? 'conversation' : 'single' })),
-    onUndo: undo, onSuggestion: runSuggestion, onStop: hush, pendingConfirm: Boolean(pending),
-    incident: shownIncident, book: bookOf(shownIncident), queued, onFocusIncident: setFocusKey,
-    onToggleStep: toggleStep, onIncidentControl: (c) => { const reply = incidentControl(c, shownIncident?.key); if (reply) { add({ role: 'aurora', text: reply }); if (c === 'next-step' || c === 'repeat') say(reply, { force: true }); } },
-    onShowChain: (i) => { const b = bookOf(i); if (b) { const nav = autoNavigate(i, b); add({ role: 'aurora', text: `${nav.label}.`, chips: [{ id: uid(), label: nav.label, undo: nav.undo }] }); } },
-    snoozedUntil: shownIncident ? snoozed[shownIncident.key] : null, now,
-    stationName: stationMeta(activeStation).name, stationId: activeStation, ctxRisk: ctx?.decision?.available ? ctx.decision.risk : null, ctx,
-    draft: getAssistant().draft,
-  };
+
+  // The popup shows the answer to the latest request only; a question still running is `pending`.
+  const { reply, pendingQ } = useMemo(() => {
+    let lastReply = -1;
+    let lastUser = -1;
+    for (let k = entries.length - 1; k >= 0 && (lastReply < 0 || lastUser < 0); k -= 1) {
+      const e = entries[k];
+      if (lastReply < 0 && e.role === 'aurora' && !INCIDENT_KINDS.has(e.kind)) lastReply = k;
+      if (lastUser < 0 && e.role === 'user') lastUser = k;
+    }
+    const q = lastUser >= 0 && lastUser < lastReply ? entries[lastUser] : null;
+    const r = lastReply >= 0 && entries[lastReply].id !== hiddenReply
+      ? { ...entries[lastReply], question: q?.text || null, via: q?.via } : null;
+    const p = lastUser > lastReply ? { question: entries[lastUser].text, via: entries[lastUser].via } : null;
+    return { reply: r, pendingQ: p };
+  }, [entries, hiddenReply]);
+  const dismissReply = useCallback(() => setHiddenReply(reply?.id ?? null), [reply?.id]);
+  const latestUpdate = useMemo(() => {
+    if (!shownIncident) return null;
+    const u = [...entries].reverse().find((e) => e.kind === 'update' && e.incidentKey === shownIncident.key);
+    return u?.text || null;
+  }, [entries, shownIncident]);
+  const showIncident = Boolean(shownIncident && !tourActive && (open || (snoozed[shownIncident.key] || 0) < now));
+
+  const showMe = useCallback((i) => {
+    const b = bookOf(i);
+    if (!b) return;
+    setFocusKey(i.key);
+    const nav = autoNavigate(i, b);
+    add({ role: 'aurora', text: `${nav.label}.`, chips: [{ id: uid(), label: nav.label, undo: nav.undo }] });
+  }, [add, autoNavigate, bookOf]);
 
   return (
     <>
@@ -615,25 +660,24 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         <HighlightStrip highlight={highlight} activeStation={activeStation} activeModule={activeModule}
           onOpenMap={() => { controls.navigate('infrastructure'); controls.scrollTo('infra-dependency'); }}
           onClear={() => setAssistant({ highlight: null })} />, slot)}
-      {panelMounted && (
-        <Suspense fallback={null}>
-          <AssistantPanel {...panelProps} />
-        </Suspense>
-      )}
-      {floatIncident && bookOf(floatIncident) && (
-        <IncidentCard compact incident={floatIncident} book={bookOf(floatIncident)} isPhone={isPhone}
-          queued={queued.length - 1}
-          onOpen={() => { setFocusKey(floatIncident.key); setAssistant({ open: true }); }}
-          onShowMe={() => {
-            const b = bookOf(floatIncident);
-            setFocusKey(floatIncident.key);
-            setAssistant({ open: true });
-            const nav = autoNavigate(floatIncident, b);
-            add({ role: 'aurora', text: `${nav.label}.`, chips: [{ id: uid(), label: nav.label, undo: nav.undo }] });
-          }}
-          onSnooze={() => incidentControl('snooze', floatIncident.key)}
-          nextStepLabel={nextStep(floatIncident, bookOf(floatIncident))?.step.do} />
-      )}
+      <AuroraDock
+        open={open} isPhone={isPhone} onClose={() => { setAssistant({ open: false }); stopListening(); }}
+        reply={reply} pending={pendingQ} onDismissReply={dismissReply}
+        busy={busy} listening={listening} interim={interim} speaking={speaking} support={support} prefs={prefs} setPrefs={setPrefs}
+        status={status} micError={micError} writeProtected={writeProtected}
+        onSend={(t) => handle(t, 'text')} onMic={() => (listening ? stopListening() : startListening({ mode: prefs.conversation ? 'conversation' : 'single' }))}
+        onUndo={undo} onSuggestion={runSuggestion} onStop={hush} onTestVoice={() => say(TEST_PHRASE, { force: true })} pendingConfirm={Boolean(pending)}
+        incident={shownIncident} book={bookOf(shownIncident)} queued={queued} latestUpdate={latestUpdate} showIncident={showIncident}
+        onFocusIncident={setFocusKey} onToggleStep={toggleStep}
+        onIncidentControl={(c) => {
+          const reply2 = incidentControl(c, shownIncident?.key);
+          // Snooze / dismiss are clicks with a visible effect: no popup line for them.
+          if (reply2 && (c === 'next-step' || c === 'repeat')) { add({ role: 'aurora', text: reply2 }); say(reply2, { force: true }); }
+        }}
+        onShowChain={showMe} onShowMe={showMe}
+        snoozedUntil={shownIncident ? snoozed[shownIncident.key] : null} now={now}
+        stationName={stationMeta(activeStation).name} stationId={activeStation} ctx={ctx} draft={getAssistant().draft}
+      />
     </>
   );
 }

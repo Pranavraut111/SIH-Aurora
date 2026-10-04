@@ -77,6 +77,86 @@
   white-space: nowrap;
 }
 
+/* 3D overview, inspection modes (X-ray / Systems / Heat map): subsystem chips, heat legend. */
+.scene-zone-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.scene-zone-chip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--chip) 55%, transparent);
+  background: rgba(10, 13, 19, 0.86);
+  color: #e6ebf2;
+  font: 600 11px/16px 'IBM Plex Sans Variable', 'IBM Plex Sans', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.3s, background-color 0.2s;
+}
+.scene-zone-chip:hover,
+.scene-zone-chip:focus-visible {
+  background: rgba(22, 28, 38, 0.92);
+  border-color: var(--chip);
+  outline: none;
+}
+.scene-zone-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chip);
+  box-shadow: 0 0 8px var(--chip);
+}
+.scene-zone-chip__value {
+  color: var(--chip);
+  font-feature-settings: 'tnum' 1;
+}
+.scene-heat-legend {
+  position: absolute;
+  left: 12px;
+  z-index: 2;
+  width: min(300px, calc(100% - 24px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(14, 17, 23, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(127, 178, 229, 0.18);
+  color: rgba(214, 222, 233, 0.75);
+  font: 500 10.5px/14px 'IBM Plex Sans Variable', 'IBM Plex Sans', sans-serif;
+  animation: aurora-panel-in 0.35s cubic-bezier(0.2, 0, 0, 1);
+}
+.scene-heat-legend__title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.scene-heat-legend__bar {
+  height: 8px;
+  border-radius: 4px;
+}
+.scene-heat-legend__ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+@keyframes aurora-panel-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene-heat-legend,
+  [data-testid='equipment-telemetry-panel'] { animation: none !important; }
+}
+
 /* Phones: the scene's note moves to the bottom-left (the HUD flows below the scene there). */
 @media (max-width: 599.95px) {
   .station-scene-3d .scene-note {
@@ -150,6 +230,18 @@
    The panel is non-modal: from 1200 px the page makes room for it instead of being
    covered, so pages Aurora opens and highlights stay visible beside the conversation. */
 .highlight-slot:empty { display: none; }
-@media (min-width: 1200px) {
-  .aurora-app[data-assistant-open] .app-layout-body { margin-right: 400px; }
+
+/* ── Killer chain animations ─────────────────────────────────────── */
+@keyframes aurora-flow-pulse {
+  0%, 100% { opacity: 0.5; transform: translateX(0); }
+  50% { opacity: 1; transform: translateX(3px); }
 }
+@keyframes aurora-cascade-flow {
+  0% { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0; }
+}
+@keyframes aurora-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+

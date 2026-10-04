@@ -115,14 +115,17 @@ export default function DependencyMap({ stationId, alerts = {}, dependencyAlerts
             const on = litEdge(e);
             return (
               <path key={`${e.source}-${e.target}`} d={edgePath(a, b)} fill="none"
-                stroke={sev ? chart.status[sev] : on ? chart.accent : chart.labelFill} strokeWidth={sev || on ? 2.25 : 1.5}
-                strokeOpacity={dim ? 0.15 : sev || on ? 1 : 0.7} strokeDasharray={RELATION_DASH[e.relation] ?? undefined}
+                stroke={sev ? chart.status[sev] : on ? chart.accent : chart.labelFill} strokeWidth={sev || on ? 2.5 : 1.5}
+                strokeOpacity={dim ? 0.15 : sev || on ? 1 : 0.7}
+                strokeDasharray={sev || on ? '12 12' : RELATION_DASH[e.relation] ?? undefined}
+                style={sev || on ? { animation: 'aurora-cascade-flow 1.2s linear infinite' } : undefined}
                 markerEnd={`url(#dep-arrow-${sev || 'normal'})`} data-cascade={sev || undefined} data-highlighted={on || undefined} />
             );
           })}
           {buildings.map((b) => {
             const p = pos[b.id];
             const lvl = levelOf(b.id);
+            const onCascade = [...cascade.keys()].some((k) => k.startsWith(`${b.id}>`) || k.endsWith(`>${b.id}`));
             return (
               <g key={b.id} className="node" role="button" tabIndex={0} transform={`translate(${p.x} ${p.y})`}
                 aria-label={`${b.name}: ${STATUS_LABEL[lvl]}. Open details`}
@@ -131,6 +134,9 @@ export default function DependencyMap({ stationId, alerts = {}, dependencyAlerts
                 onFocus={() => setFocus(b.id)} onBlur={() => setFocus(null)}
                 onClick={() => onOpenBuilding?.(b.id)}
                 onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onOpenBuilding?.(b.id); } }}>
+                {onCascade && lvl !== 'normal' && <rect x={-6} y={-6} width={NODE_W + 12} height={NODE_H + 12} rx={14} fill="none"
+                  stroke={chart.status[lvl]} strokeWidth={2} strokeOpacity={0.4}
+                  style={{ animation: 'aurora-pulse 2s ease-in-out infinite' }} />}
                 {lit.has(b.id) && <rect x={-5} y={-5} width={NODE_W + 10} height={NODE_H + 10} rx={14} fill="none"
                   stroke={chart.accent} strokeWidth={2} strokeDasharray="5 3" />}
                 <rect width={NODE_W} height={NODE_H} rx={10}

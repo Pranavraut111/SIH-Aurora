@@ -106,6 +106,22 @@ export const theme = createTheme({
           WebkitFontSmoothing: 'antialiased',
         },
         ':focus-visible': { outline: `2px solid ${theme.vars.palette.primary.main}`, outlineOffset: 2 },
+        '@keyframes aurora-pop-in': {
+          '0%': { opacity: 0, transform: 'translateY(8px) scale(0.97)' },
+          '100%': { opacity: 1, transform: 'translateY(0) scale(1)' },
+        },
+        '@keyframes aurora-pulse': {
+          '0%, 100%': { opacity: 1 },
+          '50%': { opacity: 0.55 },
+        },
+        '@keyframes aurora-flow-pulse': {
+          '0%, 100%': { opacity: 0.5, transform: 'translateX(0)' },
+          '50%': { opacity: 1, transform: 'translateX(3px)' },
+        },
+        '@keyframes aurora-cascade-flow': {
+          '0%': { strokeDashoffset: 24 },
+          '100%': { strokeDashoffset: 0 },
+        },
         '@media (prefers-reduced-motion: reduce)': {
           '*, *::before, *::after': {
             animationDuration: '0.01ms !important',

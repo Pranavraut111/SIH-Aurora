@@ -200,7 +200,7 @@ SCENARIOS = {
         "description": ("Overrides generator power, speed and coolant toward fault values. Downstream "
                         "buildings are flagged as cascade risks by the alert rules; their readings are "
                         "not changed."),
-        "duration": 30,
+        "duration": 60,
         "injections": {
             "generator.gen_power": 25.0,
             "generator.gen_rpm": 600.0,
@@ -211,7 +211,7 @@ SCENARIOS = {
         "name": "Heating System Failure",
         "description": ("Overrides Heating Zone A supply temperature and flow, and the living-quarters "
                         "temperature, toward fault values."),
-        "duration": 25,
+        "duration": 60,
         "injections": {
             "heating.heat_a_temp": 32.0,
             "heating.heat_a_flow": 8.0,
@@ -223,7 +223,7 @@ SCENARIOS = {
         "description": ("Overrides outside wind and temperature and the comms signal toward storm values. "
                         "The physics model does not see injected weather, so heating demand is not "
                         "recomputed."),
-        "duration": 40,
+        "duration": 60,
         "injections": {
             "lab.env_wind": 145.0,
             "lab.env_temp": -48.0,
@@ -233,7 +233,7 @@ SCENARIOS = {
     "water_crisis": {
         "name": "Water System Alert",
         "description": "Overrides the water-tank level and pH toward fault values.",
-        "duration": 20,
+        "duration": 60,
         "injections": {
             "waterTank.water_level": 8.0,
             "waterTank.water_ph": 5.4,
@@ -242,7 +242,7 @@ SCENARIOS = {
     "co2_spike": {
         "name": "CO2 Spike",
         "description": "Overrides living-quarters CO2 and humidity toward a ventilation-failure level.",
-        "duration": 20,
+        "duration": 60,
         "injections": {
             "livingQuarters.lq_co2": 1600.0,
             "livingQuarters.lq_humidity": 72.0,

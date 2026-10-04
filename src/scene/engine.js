@@ -19,6 +19,7 @@ import { createDrift, createSnowfall } from './snow';
 import { statusColours, styleZone } from './builders';
 import { buildContinent } from './continent';
 import { arcPoint, ease, easeIn, easeInOut, flightPlan, phaseAt } from './flyover';
+import { createOverlay } from './overlays';
 import { bharati } from './stations/bharati';
 import { maitri } from './stations/maitri';
 
@@ -66,6 +67,11 @@ export class SceneEngine {
     this.lastSunCalc = -Infinity;
     this.frameTimes = [];
     this.colours = statusColours({ ...STATUS_HEX, accent: ACCENT_HEX });
+    // "See inside" inspection modes (src/scene/overlays.js)
+    this.sceneMode = 'normal';
+    this.overlayEdges = {};               // {stationId: [{source, target}]}
+    this.heat = {};                       // {buildingId: 0..1} for the active station
+    this.focus = null;                    // camera glide to a subsystem
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.tier.dpr));
@@ -153,7 +159,7 @@ export class SceneEngine {
     snowfall.setPixelRatio(this.renderer.getPixelRatio());
     scene.add(snowfall.mesh);
     const world = {
-      id, def, scene, zones, night, terrainMat, atmos, drift, snowfall, target,
+      id, def, scene, site, zones, night, terrainMat, atmos, drift, snowfall, target, overlay: null,
       home: { position: new THREE.Vector3(...def.camera.position), target: target.clone() },
     };
     this.worlds[id] = world;
@@ -376,7 +382,93 @@ export class SceneEngine {
     const w = this.world;
     if (!w) return;
     w.zones.forEach((z) => styleZone(z, { level: levelOf(this.alerts, z.id), selected: this.selected === z.id, hovered: this.hovered === z.id }, this.colours));
+    this.syncOverlay();
     this.request();
+  }
+
+  // ── Inspection modes: X-ray, systems flow, heat map ───────
+
+  overlayFor(w) {
+    if (!w.overlay && this.sceneMode !== 'normal') w.overlay = createOverlay(w);
+    return w.overlay;
+  }
+
+  /** Bring the active world's overlay in line with the mode, alert levels and heat. */
+  syncOverlay() {
+    const w = this.world;
+    if (!w) return;
+    // Other worlds go back to normal (their ghosted materials are restored).
+    Object.values(this.worlds).forEach((o) => { if (o !== w && o.overlay && o.overlay.mode !== 'normal') o.overlay.setMode('normal', { colours: this.colours }); });
+    const ov = this.overlayFor(w);
+    if (!ov) return;
+    const levels = Object.fromEntries(w.zones.map((z) => [z.id, levelOf(this.alerts, z.id)]));
+    ov.setLevels(levels, this.colours);
+    ov.setHeat(this.heat, this.colours);
+    ov.setMode(this.sceneMode, { edges: this.overlayEdges[w.id] || [], colours: this.colours });
+    if (ov.hidesShells()) {
+      w.zones.forEach((z) => { if (this.hovered !== z.id && this.selected !== z.id) z.shell.visible = false; });
+    }
+    this.labelsDirty = true;
+  }
+
+  setSceneMode(mode) {
+    if (mode === this.sceneMode) return;
+    this.sceneMode = mode || 'normal';
+    this.container.dataset.sceneMode = this.sceneMode;
+    this.applyZones();
+    if (this.sceneMode === 'normal') this.cb.onZoneLabels?.(null);
+  }
+
+  setOverlayEdges(stationId, edges) {
+    this.overlayEdges[stationId] = edges || [];
+    const w = this.worlds[stationId];
+    w?.overlay?.setEdges(this.overlayEdges[stationId], this.colours);
+    this.request();
+  }
+
+  setHeat(heat) {
+    this.heat = heat || {};
+    this.world?.overlay?.setHeat(this.heat, this.colours);
+    this.labelsDirty = true;
+    this.request();
+  }
+
+  /** Glide the camera to look at a subsystem (keeps the current viewing direction). */
+  focusZone(id) {
+    const w = this.world;
+    const z = w?.zones.find((zz) => zz.id === id);
+    if (!z || this.view !== 'station' || this.flight) return;
+    const toTarget = z.shell.position.clone();
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    const size = Math.max(z.shell.scale.x, z.shell.scale.y, z.shell.scale.z);
+    const dist = Math.min(this.controls.maxDistance || 400, Math.max(this.controls.minDistance || 30, size * 2.6 + 28));
+    const toPos = toTarget.clone().addScaledVector(dir, dist);
+    toPos.y = Math.max(toPos.y, toTarget.y + 10);
+    if (this.reducedMotion) {
+      this.controls.target.copy(toTarget); this.camera.position.copy(toPos); this.request(); return;
+    }
+    this.focus = { t0: performance.now(), ms: 900, fromT: this.controls.target.clone(), fromP: this.camera.position.clone(), toT: toTarget, toP: toPos };
+    this.request();
+  }
+
+  advanceFocus(now) {
+    const f = this.focus;
+    const u = Math.min(1, (now - f.t0) / f.ms);
+    const e = easeInOut(u);
+    this.controls.target.lerpVectors(f.fromT, f.toT, e);
+    this.camera.position.lerpVectors(f.fromP, f.toP, e);
+    if (u >= 1) this.focus = null;
+    return true;
+  }
+
+  publishZoneLabels() {
+    const w = this.world;
+    if (!w || this.sceneMode === 'normal') return;
+    const out = w.zones.map((z) => {
+      const pt = this.screenPoint(z.center.clone().add(new THREE.Vector3(0, 2.5, 0)), this.camera);
+      return pt ? { id: z.id, x: Math.round(pt[0]), y: Math.round(pt[1]), heat: this.heat[z.id] ?? 0, level: levelOf(this.alerts, z.id) } : null;
+    }).filter(Boolean);
+    this.cb.onZoneLabels?.(out);
   }
 
   setEnvironment(env) {
@@ -529,7 +621,7 @@ export class SceneEngine {
 
   /** Something keeps changing on screen, so keep drawing (snow; never under reduced motion). */
   animating() {
-    if (this.flight) return true;
+    if (this.flight || this.focus) return true;
     return !this.reducedMotion && this.view === 'station';
   }
 
@@ -582,6 +674,7 @@ export class SceneEngine {
     const dt = Math.min(0.1, (now - this.last) / 1000);
     if (!this.visible || document.hidden) { this.running = false; return; }
     if (this.flight) this.advanceFlight(now);
+    if (this.focus) this.advanceFocus(now);
     const moved = this.flight ? true : this.controls.update();
     // When only the snow moves, 30 fps is plenty (4–5 fps on a struggling device, see trackPerformance).
     const minInterval = moved || this.needsFrame ? 0 : (this.idleInterval || 30);
@@ -597,6 +690,10 @@ export class SceneEngine {
       this.trackPerformance(dt);
       this.needsFrame = false;
       if (this.view === 'station' && this.hovered) this.cb.onHoverMove?.(this.screenPoint(this.world.zones.find((z) => z.id === this.hovered)?.center, this.camera));
+      if (this.view === 'station' && this.sceneMode !== 'normal') {
+        this.world.overlay?.update(this.time);
+        if (moved || this.labelsDirty || this.frameNo % 3 === 0) { this.labelsDirty = false; this.publishZoneLabels(); }
+      }
       if (this.view === 'antarctica' && this.continent) this.publishPins();
       if ((this.frameNo = (this.frameNo || 0) + 1) % 20 === 0) this.publishModelBox();
     }

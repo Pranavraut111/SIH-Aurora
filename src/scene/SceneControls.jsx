@@ -4,11 +4,16 @@
      · "Buildings": every subsystem as a button, with its physical zone and
        its alert level as text, so selection never needs the canvas
      · "Schematic layout — positions approximate" and "About this view"
+     · Normal / X-ray / Systems / Heat map inspection modes (keys X, H)
      · a polite live region with the station and alert summary
    ═══════════════════════════════════════════════════════════════ */
 import { useEffect, useId, useRef, useState } from 'react';
 import { Box, Button, ButtonBase, Paper, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import StatusDot from '../ui/StatusDot';
+import ViewInArOutlined from '@mui/icons-material/ViewInArOutlined';
+import LayersOutlined from '@mui/icons-material/LayersOutlined';
+import HubOutlined from '@mui/icons-material/HubOutlined';
+import ThermostatOutlined from '@mui/icons-material/ThermostatOutlined';
 import { STATUS_LABEL } from '../ui/statusLabels';
 
 const srOnly = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
@@ -18,9 +23,17 @@ const panelSx = (t) => ({
   boxShadow: t.vars.palette.aurora?.shadowFloat, color: 'text.primary',
 });
 
+const SCENE_MODE_OPTIONS = [
+  { id: 'normal', label: 'Normal', Icon: ViewInArOutlined, hint: 'Normal view' },
+  { id: 'xray', label: 'X-ray', Icon: LayersOutlined, hint: 'See inside: ghosted shells, blueprint edges, subsystem cores (X)' },
+  { id: 'systems', label: 'Systems', Icon: HubOutlined, hint: 'Dependency flows between subsystems' },
+  { id: 'heatmap', label: 'Heat map', Icon: ThermostatOutlined, hint: 'Threshold proximity and model residuals (H)' },
+];
+
 export default function SceneControls({
   view, onViewChange, antarcticaEnabled, zones, selectedBuilding, onSelectBuilding,
   summary, environment, stationName, aboutLines, pins = [], onPinSelect, flying,
+  sceneMode = 'normal', onSceneModeChange,
 }) {
   const [open, setOpen] = useState(null);   // 'buildings' | 'about' | null
   const listId = useId(); const aboutId = useId();
@@ -81,6 +94,20 @@ export default function SceneControls({
               </Paper>
             )}
           </Box>
+        )}
+        {view === 'station' && onSceneModeChange && (
+          <ToggleButtonGroup exclusive size="small" value={sceneMode} aria-label="Inspection mode" data-testid="scene-mode-toggle"
+            onChange={(_, v) => { if (v && v !== sceneMode) onSceneModeChange(v); }}
+            sx={(t) => ({
+              ...panelSx(t), '& .MuiToggleButton-root': { border: 0, px: 2, height: 32, textTransform: 'none', fontWeight: 600, fontSize: 13, gap: 0.75 },
+              '& .MuiToggleButton-root.Mui-selected': { color: '#7FDBFF', bgcolor: 'rgba(127,219,255,0.12)' },
+            })}>
+            {SCENE_MODE_OPTIONS.map((m) => (
+              <ToggleButton key={m.id} value={m.id} data-testid={`scene-mode-${m.id}`} title={m.hint}>
+                <m.Icon sx={{ fontSize: 16 }} />{m.label}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
         )}
       </Box>
 

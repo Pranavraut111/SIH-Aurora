@@ -45,4 +45,18 @@ export default defineConfig({
     // one is lazily loaded with the 3D twin, so it never delays first paint.
     chunkSizeWarningLimit: 600,
   },
+  server: {
+    // Proxy /api and /ws to the unified backend so credentialed requests stay
+    // same-origin and never trigger CORS preflight in local dev.
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://localhost:8080',
+        ws: true,
+      },
+    },
+  },
 })

@@ -32,6 +32,7 @@ import WriteButton from '../../ui/WriteButton';
 import { SandboxNotice, SandboxTag } from '../../ui/Sandbox';
 import { useConfirm, useToast } from '../../ui/feedbackContext';
 import { MODULES, sectionLabel } from '../../shell/navigation';
+import ResupplyCoverage from './ResupplyCoverage';
 
 const hidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' };
 
@@ -223,6 +224,9 @@ export default function LogisticsModule({ activeStation = 'maitri' }) {
           ) : <Typography variant="body2" sx={{ color: 'text.secondary' }}>{ready ? 'No edits recorded yet.' : '—'}</Typography>}
         </Card>
       </Box>
+
+      {/* ── Resupply Mission Coverage & Depletion Analysis ── */}
+      <ResupplyCoverage items={items} stationName={station} />
 
       <SectionCard title="Inventory" subtitle="Autonomy = stock ÷ daily use. Low = at or below the item's reorder level." testId="logistics-inventory"
         provenance={<ProvenanceChip kind="OPERATOR-ENTERED" />}>

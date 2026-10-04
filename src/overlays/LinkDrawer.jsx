@@ -101,10 +101,10 @@ export default function LinkDrawer({ open, onClose, link, onToggleConnection, te
 
       <Stack sx={{ mt: 5, gap: 2, alignItems: 'flex-start' }}>
         <Button variant="contained" onClick={() => { onClose(); onOpenDemo?.(); }} data-testid="link-try-demo">
-          Try it: Satellite link loss (2 min)
+          Try it: Satellite link loss (60 s)
         </Button>
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-          In Demo Control. Everyone sees it, and the link comes back by itself after 2 minutes.
+          In Demo Control. Everyone sees it, and the link comes back by itself after 60 seconds.
         </Typography>
         <WriteButton team variant="outlined" color={up ? 'error' : 'primary'}
           startIcon={up ? <LinkOffOutlined /> : <LinkOutlined />} onClick={toggle} data-testid="link-toggle">

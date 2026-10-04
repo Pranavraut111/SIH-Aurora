@@ -33,6 +33,7 @@ import PageHeader from '../../ui/PageHeader';
 import ProvenanceChip from '../../ui/Provenance';
 import SectionCard from '../../ui/SectionCard';
 import { MODULES, sectionLabel } from '../../shell/navigation';
+import MicrogridTopology from './MicrogridTopology';
 
 const num = (v) => (isNum(v) ? v : null);
 const WINDOW_MIN = 30;   // wall-clock minutes of history kept (= 60 h of replay at 120×)
@@ -407,6 +408,42 @@ export default function EnergyModule({
           series={series['generator.gen_rpm']} sparkBucketMs={clock.sparkBucketMs}
           context={thresholdText(catalog, 'gen_rpm')} />
       </Box>
+
+      {/* ── Power Intelligence: proactive warnings before failures happen ── */}
+      {(() => {
+        const warnings = [];
+        if (loadPct != null && loadPct > 85) warnings.push({ severity: loadPct > 95 ? 'error' : 'warning', text: `Generator load is ${formatNumber(loadPct)}% of rated capacity. ${loadPct > 95 ? 'Critical overload risk — immediate load shedding recommended.' : 'Approaching overload — consider non-essential load shedding.'}`, metric: 'Load' });
+        if (autonomyDays != null && autonomyDays < 30) warnings.push({ severity: autonomyDays < 14 ? 'error' : 'warning', text: `Fuel autonomy is ${formatNumber(autonomyDays, 0)} days at current burn rate. ${autonomyDays < 14 ? 'Below emergency threshold — initiate fuel conservation.' : 'Below planning threshold — schedule resupply.'}`, metric: 'Fuel' });
+        if (coolantC != null && coolantC > 85) warnings.push({ severity: coolantC > 95 ? 'error' : 'warning', text: `Coolant temperature is ${formatNumber(coolantC, 1)}°C. ${coolantC > 95 ? 'Critical — risk of generator trip.' : 'Elevated — monitor closely.'}`, metric: 'Coolant' });
+        if (rpm != null && (rpm < 1450 || rpm > 1550)) warnings.push({ severity: 'warning', text: `Engine speed ${formatNumber(rpm, 0)} RPM is outside the nominal 1480–1520 range. Governor adjustment may be needed.`, metric: 'RPM' });
+        if (avgBurn != null && fuelRateLph != null && fuelRateLph > avgBurn * 1.3) warnings.push({ severity: 'warning', text: `Current fuel burn (${formatNumber(fuelRateLph, 1)} L/h) is 30% above the rolling average (${formatNumber(avgBurn, 1)} L/h). Unusual load spike or efficiency loss.`, metric: 'Burn rate' });
+        if (!warnings.length) return null;
+        return (
+          <Box component="section" aria-label="Power intelligence" data-testid="power-intelligence" sx={{ mb: 4 }}>
+            <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5, mb: 2 }}>
+              <Typography variant="h2" sx={{ fontSize: 18, fontWeight: 600, m: 0 }}>⚡ Power Intelligence</Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>Proactive warnings · rule-based, not AI</Typography>
+            </Stack>
+            <Stack sx={{ gap: 1.5 }}>
+              {warnings.map((w) => (
+                <Alert key={w.metric} severity={w.severity} variant="outlined"
+                  sx={{ '& .MuiAlert-message': { fontSize: 14 }, borderRadius: '10px' }}>
+                  <strong>{w.metric}:</strong> {w.text}
+                </Alert>
+              ))}
+            </Stack>
+          </Box>
+        );
+      })()}
+
+      {/* ── Microgrid Power Flow Topology: Live sources, BESS battery storage & loads ── */}
+      <MicrogridTopology
+        powerKW={powerKW}
+        demandData={energy}
+        envWindKmh={num(sensorData?.lab?.env_wind)}
+        isDaylight={Boolean(replayMs != null ? true : true)}
+        stationName={station}
+      />
 
       <Grid container spacing={4}>
         <Grid size={{ xs: 12, lg: 7 }}>

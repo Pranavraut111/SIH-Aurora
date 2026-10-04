@@ -17,10 +17,12 @@ inspector, what-if, logistics, remote commands and admin config.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -43,7 +45,7 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Import digital twin engines
@@ -2360,7 +2362,7 @@ def assistant_chat(req: AssistantChatRequest, request: Request):
     # 2. Explanations (not plain lookups) are phrased by the explanation model, then checked.
     explain = (q["topic"] not in _ASSISTANT_LOOKUPS or req.lang == "hi") and not (q["topic"] == "unknown" and actions)
     grounding = None
-    if explain and q["topic"] != "unknown":
+    if explain and (q["topic"] != "unknown" or not actions):
         res = _llm("explain", assistant.explain_messages(ctx, req.text, draft, req.lang), maxTokens=700, json=True)
         llm["explain"] = bool(res.get("available"))
         if res.get("available"):
@@ -2401,6 +2403,62 @@ def assistant_chat(req: AssistantChatRequest, request: Request):
         with _explain_lock:
             _explain_cache[key] = (time.time(), out)
     return out
+
+
+_TTS_CACHE_DIR = Path("/tmp/aurora_tts_cache")
+_TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# Concurrent `say` processes contend for the macOS speech daemon and all slow down
+# (under load they timed out): render one at a time.
+_tts_lock = threading.Lock()
+_MAC_VOICES = None
+
+
+def _mac_voices():
+    """Installed `say` voice names (cached); browser voice names are not valid here."""
+    global _MAC_VOICES
+    if _MAC_VOICES is None:
+        try:
+            out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=10).stdout
+            _MAC_VOICES = {line.split("  ")[0].strip() for line in out.splitlines() if line.strip()}
+        except Exception:  # noqa: BLE001 — fall back to the defaults below
+            _MAC_VOICES = set()
+    return _MAC_VOICES
+
+
+@app.get("/api/assistant/tts")
+def assistant_tts(text: str = Query(..., max_length=800), lang: str = "en", voice: str = ""):
+    """Offline high-quality native system TTS audio stream for Aurora assistant."""
+    clean_text = text.strip()[:800]
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="Empty text")
+
+    default_voice = "Lekha" if lang == "hi" else "Samantha"
+    selected_voice = voice if voice and voice != "null" else default_voice
+    if sys.platform == "darwin" and _mac_voices() and selected_voice not in _mac_voices():
+        selected_voice = default_voice   # e.g. a Chrome voice name such as "Google UK English Female"
+
+    h = hashlib.md5(f"{selected_voice}:{clean_text}".encode("utf-8")).hexdigest()
+    wav_path = _TTS_CACHE_DIR / f"{h}.wav"
+
+    if not wav_path.exists():
+        if sys.platform != "darwin":
+            raise HTTPException(status_code=501, detail="Native TTS only supported on macOS")
+        with _tts_lock:
+            if not wav_path.exists():   # another request may have rendered it while we waited
+                tmp_path = _TTS_CACHE_DIR / f"{h}.{threading.get_ident()}.tmp.wav"
+                try:
+                    subprocess.run(
+                        ["say", "-v", selected_voice, "--file-format=WAVE", "--data-format=LEI16@22050",
+                         "-o", str(tmp_path), "-f", "-"],
+                        input=clean_text, text=True, check=True, timeout=25,
+                    )
+                    tmp_path.replace(wav_path)
+                except Exception as e:  # noqa: BLE001
+                    tmp_path.unlink(missing_ok=True)
+                    log.warning("macOS say failed: %s", e)
+                    raise HTTPException(status_code=500, detail=str(e))
+
+    return FileResponse(str(wav_path), media_type="audio/wav", headers={"Cache-Control": "public, max-age=86400"})
 
 
 if __name__ == "__main__":

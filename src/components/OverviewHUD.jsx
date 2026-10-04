@@ -15,11 +15,9 @@ import { useEffect, useRef } from 'react';
 import { Box, Button, Card, Stack, Typography, useMediaQuery } from '@mui/material';
 import { useColorScheme, useTheme } from '@mui/material/styles';
 import ArrowForwardOutlined from '@mui/icons-material/ArrowForwardOutlined';
-import MicNoneOutlined from '@mui/icons-material/MicNoneOutlined';
 import ScienceOutlined from '@mui/icons-material/ScienceOutlined';
 import PlaceOutlined from '@mui/icons-material/PlaceOutlined';
 import ViewInArOutlined from '@mui/icons-material/ViewInArOutlined';
-import { openAssistant } from '../assistant/bus';
 import { crewLabel, formatCoords, stationMeta } from '../data/stationConfig';
 import { useSeries, valueAgo } from '../hooks/useSeries';
 import { onModelClock } from '../lib/modelClock';
@@ -193,10 +191,6 @@ export default function OverviewHUD({
               Twin Inspector
             </Button>
           )}
-          <Button variant="outlined" onClick={() => openAssistant()} startIcon={<MicNoneOutlined />} data-testid="hud-ask-aurora"
-            title="Ask Aurora: voice or text, answers from the station data">
-            Ask Aurora
-          </Button>
         </Stack>
       </Card>
 

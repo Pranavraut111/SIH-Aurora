@@ -365,7 +365,7 @@ def _decision_ctx(d: dict | None, error: str | None) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 TOPICS = ("depends", "why_building", "anomaly", "action", "why", "fuel", "alerts", "forecast",
-          "sensor", "weather", "generator", "status", "unknown")
+          "sensor", "weather", "generator", "status", "greeting", "unknown")
 
 _TOPIC_RULES = [
     ("depends", r"\bdepend|\bdownstream|\brel(?:y|ies) on|\bruns? on\b|\bfeeds?\b|\bpowered by|"
@@ -380,6 +380,7 @@ _TOPIC_RULES = [
                 r"\boutside\b|\btemperature outside\b|\bsnow(?:ing)?\b"),
     ("generator", r"\bgenerator\b|\bpower\b|\brpm\b|\bengine\b|\bload\b"),
     ("status", r"\bstatus\b|\bhow is\b|\bhow are\b|\boverview\b|\bsituation\b|\bsummary\b|\bsummar"),
+    ("greeting", r"\b(?:hello|hi|hey|greetings|namaste|morning|evening|how are you|who are you|say something|introduce yourself|tell me something|are you there|test|talk to me)\b"),
 ]
 
 
@@ -652,6 +653,16 @@ def local_answer(q: dict, ctx: dict) -> dict:
             detail.append(f"Load: {fmt(ctx['derived']['generatorLoadPct']['value'], '%')} of rated (model-derived).")
         sources = ["telemetry"]
 
+    elif topic == "greeting":
+        env = _reading(ctx, "env_temp")
+        wind = _reading(ctx, "env_wind")
+        weather_s = f" Outside conditions are {_rv(ctx, 'env_temp')} with wind at {_rv(ctx, 'env_wind')}." if env else ""
+        spoken = (f"Hello! I am Aurora, your Antarctic station digital twin AI assistant for {name}.{weather_s} "
+                  "All core telemetry, life support, and operational monitoring systems are online. How can I help you?")
+        detail = [f"Station: {name} Research Station.", "Operational status: Online and monitoring.",
+                  "You can ask about alerts, fuel autonomy, power generation, weather, cascade risks, or run diagnostics."]
+        sources = ["telemetry"]
+
     else:
         spoken = (f"{NOT_IN_DATA} I can answer about {name}'s alerts, fuel, generator, weather, anomalies, "
                   "risk and dependencies, or open a page for you.")
@@ -677,8 +688,9 @@ EXPLAIN_SYSTEM = (
     "(a digital twin; most values are simulated or model-derived).\n"
     "RULES:\n"
     "1. DRAFT is a correct answer built from CONTEXT. Rephrase it naturally for an operator and add relevant "
-    "facts from CONTEXT. If the question's premise is false (e.g. a building is not in warning), say so, using the "
-    "data. Use nothing outside CONTEXT and DRAFT; only if neither answers the question, say exactly: "
+    "facts from CONTEXT. If the user is greeting you, having conversation, or asking you to speak, "
+    "respond warmly and professionally as Aurora, summarizing the current station status from CONTEXT. "
+    "Only if an explicit metric is queried that is truly missing, say: "
     f"\"{NOT_IN_DATA}\"\n"
     "2. Every number you write must appear in CONTEXT or DRAFT, with its unit. Do not compute new numbers, "
     "convert units or round differently.\n"

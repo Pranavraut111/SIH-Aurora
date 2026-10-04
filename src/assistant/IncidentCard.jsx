@@ -17,6 +17,7 @@ import { StatusChip } from '../ui/Status';
 import { buildingName } from './actions';
 import { escalationSentence, formatDuration, nextStep, resolvedSummary } from './briefing';
 import { stepsFor } from './incidents';
+import CascadeChainMini from './CascadeChainMini';
 
 const RISK_STATUS = { high: 'critical', critical: 'critical', moderate: 'warning', low: 'normal', nominal: 'normal' };
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -116,7 +117,9 @@ export default function IncidentCard({
             </Collapse>
           </Section>
           <Section title="Affected systems" testId="incident-affected">
-            <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+            <CascadeChainMini stationId={inc.station} sources={inc.sources} affected={inc.affected}
+              severity={inc.severity} resolved={resolved} />
+            <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', alignItems: 'center', mt: 1.5 }}>
               {inc.sources.map((b) => <Chip key={b} size="small" color="error" variant="outlined" label={buildingName(inc.station, b)} />)}
               {others.length > 0 && <Box component="span" aria-hidden="true" sx={{ color: 'text.secondary' }}>→</Box>}
               {others.map((b) => <Chip key={b} size="small" variant="outlined" label={buildingName(inc.station, b)} />)}

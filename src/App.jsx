@@ -68,6 +68,7 @@ export default function App() {
   const hudOverlays = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true });
   const isPhone = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const [hudBand, setHudBand] = useState(0);   // px of HUD cards along the scene's bottom
+  const [sceneMode, setSceneMode] = useState('normal');   // 3D inspection mode: normal | xray | systems | heatmap
 
   // ── State ──────────────────────────────────────────────────
   // Page and station start from the URL (refresh-safe, shareable) and stay in it.
@@ -535,7 +536,7 @@ export default function App() {
                   <Suspense fallback={<PanelFallback name="3D station view" />}>
                     <StationScene
                       activeStation={activeStation}
-                      avoidBottom={hudOverlays ? hudBand : 0}
+                      avoidBottom={hudOverlays && sceneMode === 'normal' ? hudBand : 0}
                       alertStates={stationData.alerts}
                       selectedBuilding={selectedBuilding}
                       onBuildingClick={handleBuildingClick}
@@ -543,11 +544,14 @@ export default function App() {
                       onStationChange={handleStationChange}
                       sensors={stationData.sensors}
                       replay={stationData.replay}
+                      sceneMode={sceneMode}
+                      onSceneModeChange={setSceneMode}
                     />
                   </Suspense>
                 </ErrorBoundary>
               </div>
 
+              {sceneMode === 'normal' && (
               <ErrorBoundary name="Overview HUD">
                 <Suspense fallback={null}>
                   <OverviewHUD
@@ -565,6 +569,7 @@ export default function App() {
                   />
                 </Suspense>
               </ErrorBoundary>
+              )}
             </div>
           ) : renderModulePage()}
         </main>
