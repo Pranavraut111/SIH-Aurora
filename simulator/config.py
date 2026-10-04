@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import overload
 
 from dotenv import load_dotenv
 
@@ -29,7 +30,11 @@ load_dotenv(_ROOT_ENV, override=False)
 _legacy_env_present = _LEGACY_ENV.exists()
 
 
-def _get(name: str, default=None):
+@overload
+def _get(name: str, default: str) -> str: ...
+@overload
+def _get(name: str, default: None = None) -> str | None: ...
+def _get(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name)
     if value is None or value.strip() == "":
         return default
@@ -97,8 +102,8 @@ if _legacy_env_present:
 HOST = _get("HOST", "127.0.0.1")               # Docker sets 0.0.0.0
 API_PORT = _get_int("API_PORT", 8080)          # unified_backend.py
 SIM_PORT = _get_int("SIM_PORT", 8001)          # simulator.py (internal)
-BACKEND_URL = (_get("BACKEND_URL", f"http://localhost:{API_PORT}")).rstrip("/")
-SIMULATOR_URL = (_get("SIMULATOR_URL", f"http://localhost:{SIM_PORT}")).rstrip("/")
+BACKEND_URL = _get("BACKEND_URL", f"http://localhost:{API_PORT}").rstrip("/")
+SIMULATOR_URL = _get("SIMULATOR_URL", f"http://localhost:{SIM_PORT}").rstrip("/")
 
 DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
 
@@ -232,7 +237,7 @@ SANDBOX_WRITES_PER_MIN = _get_int("SANDBOX_WRITES_PER_MIN", 30)
 # Anonymous visitors may run the predefined Demo Control scenarios: one per station at a
 # time, PUBLIC_DEMO_DURATION_S long, then reset automatically; PUBLIC_DEMO_COOLDOWN_S per IP.
 PUBLIC_DEMO = _get_bool("PUBLIC_DEMO", False)
-PUBLIC_DEMO_DURATION_S = _get_int("PUBLIC_DEMO_DURATION_S", 60)
+PUBLIC_DEMO_DURATION_S = _get_int("PUBLIC_DEMO_DURATION_S", 120)
 PUBLIC_DEMO_COOLDOWN_S = _get_int("PUBLIC_DEMO_COOLDOWN_S", 60)
 
 # ── Simulated satellite link (store-and-forward, link_buffer.py) ──

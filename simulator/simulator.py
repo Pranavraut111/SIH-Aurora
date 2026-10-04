@@ -19,6 +19,7 @@ import random
 import threading
 import time
 from datetime import datetime
+from typing import Any
 
 import requests
 from flask import Flask, jsonify
@@ -200,7 +201,7 @@ SCENARIOS = {
         "description": ("Overrides generator power, speed and coolant toward fault values. Downstream "
                         "buildings are flagged as cascade risks by the alert rules; their readings are "
                         "not changed."),
-        "duration": 60,
+        "duration": 30,
         "injections": {
             "generator.gen_power": 25.0,
             "generator.gen_rpm": 600.0,
@@ -211,7 +212,7 @@ SCENARIOS = {
         "name": "Heating System Failure",
         "description": ("Overrides Heating Zone A supply temperature and flow, and the living-quarters "
                         "temperature, toward fault values."),
-        "duration": 60,
+        "duration": 25,
         "injections": {
             "heating.heat_a_temp": 32.0,
             "heating.heat_a_flow": 8.0,
@@ -223,7 +224,7 @@ SCENARIOS = {
         "description": ("Overrides outside wind and temperature and the comms signal toward storm values. "
                         "The physics model does not see injected weather, so heating demand is not "
                         "recomputed."),
-        "duration": 60,
+        "duration": 40,
         "injections": {
             "lab.env_wind": 145.0,
             "lab.env_temp": -48.0,
@@ -233,7 +234,7 @@ SCENARIOS = {
     "water_crisis": {
         "name": "Water System Alert",
         "description": "Overrides the water-tank level and pH toward fault values.",
-        "duration": 60,
+        "duration": 20,
         "injections": {
             "waterTank.water_level": 8.0,
             "waterTank.water_ph": 5.4,
@@ -242,7 +243,7 @@ SCENARIOS = {
     "co2_spike": {
         "name": "CO2 Spike",
         "description": "Overrides living-quarters CO2 and humidity toward a ventilation-failure level.",
-        "duration": 60,
+        "duration": 20,
         "injections": {
             "livingQuarters.lq_co2": 1600.0,
             "livingQuarters.lq_humidity": 72.0,
@@ -297,7 +298,7 @@ WEATHER_PATTERNS = {
 }
 
 # ── Cascade Rules (SIMULATION mode only) ─────────────────────
-CASCADE_RULES = [
+CASCADE_RULES: list[dict[str, Any]] = [
     {"trigger": "lab.env_temp", "threshold_below": -40,
      "nudges": [("heating.heat_a_flow", 0.3), ("heatingB.heat_b_flow", 0.2),
                 ("generator.gen_power", 0.5), ("generator.gen_fuel_rate", 0.15),
@@ -326,8 +327,10 @@ class StationSimulator:
       - 'simulation': Random walk + organic patterns (legacy)
     """
 
+    _shared_chronos: Any = None
+
     def __init__(self, station_id: str, mode: str = "reanalysis",
-                 date: str = None, speed_factor: float = 120):
+                 date: str | None = None, speed_factor: float = 120):
         self.station_id = station_id
         self.mode = mode
         self.profile = STATION_PROFILES[station_id]
@@ -416,9 +419,9 @@ class StationSimulator:
         for building_id, sensors in self.sensors.items():
             self.values[building_id] = {}
             for sensor_id, config in sensors.items():
-                jitter = (random.random() - 0.5) * config["step"] * 4
-                initial = max(config["min"], min(config["max"],
-                              config["nominal"] + jitter))
+                jitter = (random.random() - 0.5) * float(config["step"]) * 4
+                initial = max(float(config["min"]), min(float(config["max"]),
+                              float(config["nominal"]) + jitter))
                 self.values[building_id][sensor_id] = initial
 
     def _log_stage_error(self, stage: str):
@@ -457,6 +460,8 @@ class StationSimulator:
         Injections override specific values.
         """
         # 1. Get interpolated weather from cached ERA5 data
+        if self.weather_layer is None or self.physics_model is None:
+            return self._tick_simulation()
         weather = self.weather_layer.get_current_weather()
         if weather is None:
             return self._tick_simulation()  # Fallback
@@ -611,14 +616,14 @@ class StationSimulator:
                     target, _ = self.active_injections[key]
                     next_val = current + (target - current) * 0.3
                 else:
-                    mean_reversion = (config["nominal"] - current) * 0.02
-                    noise = (random.random() - 0.5) * 2 * config["step"]
+                    mean_reversion = (float(config["nominal"]) - current) * 0.02
+                    noise = (random.random() - 0.5) * 2 * float(config["step"])
                     trend = 0
                     if sensor_id.startswith("env_"):
                         cycle = math.sin(self.tick_count * 0.05)
-                        trend = cycle * config["step"] * 0.5
+                        trend = cycle * float(config["step"]) * 0.5
                     if sensor_id.startswith("store_"):
-                        trend = -config["step"] * 0.1
+                        trend = -float(config["step"]) * 0.1
 
                     for pattern in self.active_patterns:
                         effect = pattern["effects"].get(key)
@@ -627,8 +632,8 @@ class StationSimulator:
 
                     next_val = current + mean_reversion + noise + trend
 
-                next_val = max(config["min"], min(config["max"], next_val))
-                next_val = round(next_val, 2)
+                next_val = max(float(config["min"]), min(float(config["max"]), next_val))
+                next_val = round(float(next_val), 2)
                 self.values[building_id][sensor_id] = next_val
                 readings[building_id][sensor_id] = {"value": next_val, "unit": config["unit"]}
 
@@ -667,12 +672,12 @@ class StationSimulator:
         if not scenario:
             return {"error": f"Unknown scenario: {scenario_id}"}
 
-        duration = scenario["duration"] if duration_s is None else duration_s
+        duration = float(scenario["duration"] if duration_s is None else duration_s)
         duration_ticks = int(duration / TICK_INTERVAL)
         expiry = self.tick_count + duration_ticks
         self.active_scenario = scenario_id
 
-        for key, target in scenario["injections"].items():
+        for key, target in dict(scenario["injections"]).items():
             self.active_injections[key] = (target, expiry)
 
         by = " (public demo, started by a visitor)" if source == "public-demo" else ""
@@ -705,7 +710,7 @@ class StationSimulator:
 
     def get_data_source_info(self) -> dict:
         """Return metadata about the current data source for UI display."""
-        if self.mode == "reanalysis" and self.weather_available:
+        if self.mode == "reanalysis" and self.weather_layer:
             progress = self.weather_layer.get_replay_progress()
             weather = getattr(self, '_last_weather', None)
             return {
@@ -1303,7 +1308,7 @@ def _groq_chat(model: str, messages: list, *, tools=None, max_tokens: int = 400,
     """One Groq chat completion. The caller has already taken a budget slot.
     → {"ok", "content", "toolCalls": [{"name", "arguments"}], "reason", "usage"}; never raises.
     Uses requests (certifi's CA bundle), so it also works on Python builds without system certificates."""
-    body = {"model": model, "messages": messages, "temperature": 0.2, "max_tokens": max_tokens}
+    body: dict[str, Any] = {"model": model, "messages": messages, "temperature": 0.2, "max_tokens": max_tokens}
     if model.startswith("openai/gpt-oss"):
         body["reasoning_effort"] = "low"      # reasoning tokens count against max_tokens
     if tools:

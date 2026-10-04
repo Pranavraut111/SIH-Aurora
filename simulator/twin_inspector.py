@@ -44,7 +44,7 @@ def model_assumptions(params: dict) -> dict:
 
 
 def build_twin_inspector(*, station_id: str, mode: str, tick_count, values: dict, meta: dict,
-                         params: dict, environment_source: str, environment_source_type: str,
+                         params: dict | None = None, environment_source: str, environment_source_type: str,
                          simulated_time, data_source: dict, telemetry_source: str) -> dict:
     """values: {building: {sensor: number}} (the telemetry being shown);
     meta: physics `_meta` for the same tick; params: StationPhysicsModel.params.

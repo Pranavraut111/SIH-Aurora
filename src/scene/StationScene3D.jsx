@@ -78,7 +78,7 @@ export default function StationScene3D({
   useEffect(() => { modeRef.current = sceneMode; });
   const [panelMin, setPanelMin] = useState(() => { try { return localStorage.getItem('aurora.internalsMinimized') === '1'; } catch { return false; } });
   const togglePanelMin = useCallback(() => setPanelMin((v) => {
-    try { localStorage.setItem('aurora.internalsMinimized', v ? '0' : '1'); } catch { /* private mode */ }
+    try { localStorage.setItem('aurora.internalsMinimized', v ? '0' : '1'); } catch (e) { void e; }
     return !v;
   }), []);
   const stationRef = useRef(activeStation);

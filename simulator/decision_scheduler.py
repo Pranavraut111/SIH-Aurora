@@ -92,7 +92,7 @@ class DecisionScheduler:
             self._last_non_normal = None
         return self.publishable(tick, decision)
 
-    def publishable(self, tick: int, decision: dict) -> dict:
+    def publishable(self, tick: int, decision: dict | None) -> dict | None:
         """Decision plus `recentlyResolved` while within the hold window."""
         if decision is None:
             return None

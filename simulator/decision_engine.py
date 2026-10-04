@@ -169,7 +169,7 @@ class DecisionEngine:
         self.station_id = station_id
 
     def evaluate(self, current_state: dict, anomaly_result: dict,
-                 forecast_result: dict) -> dict:
+                 forecast_result: dict | None = None) -> dict:
         """Produce a structured decision from all available information.
 
         Args:

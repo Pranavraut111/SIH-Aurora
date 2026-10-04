@@ -86,17 +86,24 @@ export function ensureVoices() {
   if (!voicesReady) {
     voicesReady = new Promise((resolve) => {
       let resolved = false;
+      let pollTimer = null;
       const done = () => {
         if (resolved) return;
         resolved = true;
-        clearInterval(poll);
+        if (pollTimer) clearTimeout(pollTimer);
         window.speechSynthesis.removeEventListener?.('voiceschanged', done);
         resolve(allVoices());
       };
       window.speechSynthesis.addEventListener?.('voiceschanged', done);
-      const poll = setInterval(() => {
-        if (allVoices().length > 0) done();
-      }, 40);
+      const checkVoices = () => {
+        if (resolved) return;
+        if (allVoices().length > 0) {
+          done();
+        } else {
+          pollTimer = setTimeout(checkVoices, 40);
+        }
+      };
+      pollTimer = setTimeout(checkVoices, 40);
       setTimeout(done, 1200);
     }).then((v) => { if (!v.length) voicesReady = null; return v; });
   }
@@ -135,14 +142,14 @@ export function initAudio() {
     if (AC) {
       audioCtx = audioCtx || new AC();
       if (audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
+        audioCtx.resume().catch((e) => { void e; });
       }
     }
     if (window.speechSynthesis && window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
     }
   } catch (err) {
-    /* ignore */
+    void err;
   }
 }
 
@@ -153,7 +160,7 @@ export function chime() {
     if (!AC) return Promise.resolve();
     audioCtx = audioCtx || new AC();
     if (audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(() => {});
+      audioCtx.resume().catch((e) => { void e; });
     }
     const t0 = audioCtx.currentTime;
     [[659.25, 0], [880, 0.16]].forEach(([freq, at]) => {
@@ -258,7 +265,7 @@ export async function speak(text, { rate = 0.92, pitch = 1, lang = 'en', voiceNa
       const AC = window.AudioContext || window.webkitAudioContext;
       if (AC) {
         audioCtx = audioCtx || new AC();
-        if (audioCtx.state !== 'running') await audioCtx.resume().catch(() => {});
+        if (audioCtx.state !== 'running') await audioCtx.resume().catch((e) => { void e; });
       }
       if (token !== speakToken) return 'cancelled';
       if (audioCtx && audioCtx.state === 'running') {
@@ -306,7 +313,7 @@ export async function speak(text, { rate = 0.92, pitch = 1, lang = 'en', voiceNa
   if (synth.speaking || synth.pending) {
     try {
       synth.cancel();
-    } catch (e) { /* ignore */ }
+    } catch (e) { void e; }
     await new Promise((r) => setTimeout(r, 80));
   }
 
@@ -320,12 +327,12 @@ export async function speak(text, { rate = 0.92, pitch = 1, lang = 'en', voiceNa
 
   return new Promise((resolve) => {
     let resolved = false;
-    let resumeInterval = null;
+    let resumeTimer = null;
     let currentIndex = 0;
 
     const guardMs = Math.max(30000, 6000 + Math.round((said.length * 150) / (rate || 0.9)));
     const guard = setTimeout(() => {
-      try { synth.cancel(); } catch (e) { /* ignore */ }
+      try { synth.cancel(); } catch (e) { void e; }
       finish('timeout');
     }, guardMs);
 
@@ -333,20 +340,25 @@ export async function speak(text, { rate = 0.92, pitch = 1, lang = 'en', voiceNa
       if (resolved) return;
       resolved = true;
       clearTimeout(guard);
-      if (resumeInterval) clearInterval(resumeInterval);
+      if (resumeTimer) clearTimeout(resumeTimer);
       if (typeof window !== 'undefined' && window.__auroraUtterances) {
         window.__auroraUtterances.length = 0;
       }
       resolve(result);
     };
 
-    resumeInterval = setInterval(() => {
+    const checkResume = () => {
+      if (resolved) return;
       if (!synth.speaking && !synth.pending) {
-        clearInterval(resumeInterval);
-      } else if (synth.paused) {
-        try { synth.resume(); } catch (e) { /* ignore */ }
+        // finished or empty
+      } else {
+        if (synth.paused) {
+          try { synth.resume(); } catch (e) { void e; }
+        }
+        resumeTimer = setTimeout(checkResume, 250);
       }
-    }, 250);
+    };
+    resumeTimer = setTimeout(checkResume, 250);
 
     const speakChunk = (idx) => {
       if (idx >= chunks.length) {
@@ -405,7 +417,7 @@ export async function speak(text, { rate = 0.92, pitch = 1, lang = 'en', voiceNa
 export function stopSpeaking() {
   try {
     if (currentSource) {
-      try { currentSource.stop(); } catch (e) { /* ignore */ }
+      try { currentSource.stop(); } catch (e) { void e; }
       currentSource = null;
     }
     if (currentAudio) {
