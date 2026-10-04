@@ -22,6 +22,7 @@ import math
 import re
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import Any
 
 import config as app_config
 import station_config
@@ -57,7 +58,7 @@ def playbook(pid: str) -> dict | None:
     return next((p for p in playbooks()["playbooks"] if p["id"] == pid), None)
 
 
-def select_playbook(scenario: str | None = None, sensors=(), causes=()) -> dict:
+def select_playbook(scenario: str | None = None, sensors=(), causes=()) -> dict | None:
     """The playbook for an incident: the running demo scenario wins, then the alert
     sensors (first playbook in file order with a match), then the anomaly's candidate
     causes, then the generic 'anomaly' playbook."""
@@ -84,7 +85,7 @@ def select_playbook(scenario: str | None = None, sensors=(), causes=()) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def normalise(text: str) -> str:
-    t = str(text or "").replace("\x00", "").strip().lower()[:TEXT_MAX]
+    t = (text or "").replace("\x00", "").strip().lower()[:TEXT_MAX]
     t = t.replace("’", "'").replace("co₂", "co2")
     return re.sub(r"\s+", " ", t)
 
@@ -262,7 +263,7 @@ def build_context(sid: str, snapshot: dict | None, anomaly: dict | None = None, 
     gen = sensors.get("generator") or {}
     store = sensors.get("storage") or {}
     fuel_rate, fuel_kl = gen.get("gen_fuel_rate"), store.get("store_fuel")
-    derived = {}
+    derived: dict[str, dict[str, Any]] = {}
     if isinstance(fuel_rate, (int, float)) and isinstance(fuel_kl, (int, float)) and fuel_rate > 0:
         derived["fuelAutonomyDays"] = {"value": round(fuel_kl * 1000 / (fuel_rate * 24)), "unit": "days",
                                        "provenance": "MODEL-DERIVED",
@@ -520,8 +521,13 @@ def local_answer(q: dict, ctx: dict) -> dict:
                       for c in upstream]
         else:
             spoken = f"{bname} is not in warning: it has no active alerts and nothing upstream of it is degraded."
-        causes = [c for c in ctx["anomaly"].get("candidateCauses") or []
-                  if any(_reading(ctx, s) and _reading(ctx, s)["building"] == b for s in c.get("sensors") or [])]
+        causes = [
+            c for c in ctx["anomaly"].get("candidateCauses") or []
+            if any(
+                (rd := _reading(ctx, s)) is not None and rd["building"] == b
+                for s in c.get("sensors") or []
+            )
+        ]
         if causes:
             c = causes[0]
             spoken += f" The {HEURISTIC_CAUSE_LABEL} is: {c['description'].lower()}."
