@@ -1252,6 +1252,53 @@ LLM_MAX_CHARS = 16000
 LLM_MAX_TOOLS = 20
 
 
+# ── Is Groq actually answering? ──
+# One record per model: real calls update it, and a few-token probe refreshes it in the
+# background when it is older than GROQ_PROBE_INTERVAL_S, so /api/llm/status never blocks.
+_llm_health: dict[str, dict] = {}
+_llm_probing: set[str] = set()
+_llm_health_lock = threading.Lock()
+
+
+def _groq_failure_reason(status: int) -> str:
+    if status in (401, 403):
+        return f"Groq rejected the key ({status})"
+    if status == 429:
+        return "Groq rate limit reached (429)"
+    if status >= 500:
+        return f"Groq is having problems ({status})"
+    return f"Groq rejected the request ({status})"
+
+
+def _note_llm_result(model: str, ok: bool, reason: str | None = None) -> None:
+    with _llm_health_lock:
+        _llm_health[model] = {"ok": ok, "reason": None if ok else reason, "checkedAt": time.time()}
+
+
+def _probe_llm(model: str) -> None:
+    try:
+        _groq_chat(model, [{"role": "user", "content": "Reply with the word OK."}], max_tokens=32)
+    finally:
+        with _llm_health_lock:
+            _llm_probing.discard(model)
+
+
+def llm_health(model: str) -> dict:
+    """{"ok": True | False | None (not checked yet), "reason", "checkedAt"}; starts a background
+    probe when the record is missing or older than GROQ_PROBE_INTERVAL_S."""
+    if not GROQ_API_KEY:
+        return {"ok": False, "reason": "no Groq key on the server", "checkedAt": None}
+    with _llm_health_lock:
+        rec = dict(_llm_health.get(model) or {"ok": None, "reason": None, "checkedAt": None})
+        stale = rec["checkedAt"] is None or time.time() - rec["checkedAt"] >= app_config.GROQ_PROBE_INTERVAL_S
+        start = stale and model not in _llm_probing
+        if start:
+            _llm_probing.add(model)
+    if start:
+        threading.Thread(target=_probe_llm, args=(model,), name=f"llm-probe-{model}", daemon=True).start()
+    return rec
+
+
 def _groq_chat(model: str, messages: list, *, tools=None, max_tokens: int = 400, json_mode: bool = False) -> dict:
     """One Groq chat completion. The caller has already taken a budget slot.
     → {"ok", "content", "toolCalls": [{"name", "arguments"}], "reason", "usage"}; never raises.
@@ -1269,10 +1316,16 @@ def _groq_chat(model: str, messages: list, *, tools=None, max_tokens: int = 400,
             "Authorization": f"Bearer {GROQ_API_KEY}", "User-Agent": GROQ_USER_AGENT})
     except requests.RequestException as e:
         log.warning("[Groq] %s request failed: %s", model, type(e).__name__)
+        _note_llm_result(model, False, "Groq is unreachable from the server")
         return {"ok": False, "reason": "upstream unreachable", "content": "", "toolCalls": []}
     if resp.status_code != 200:
         log.warning("[Groq] %s returned HTTP %s: %s", model, resp.status_code, resp.text[:300])
+        # tool_use_failed = the model produced an invalid tool call: a bad answer, not a broken
+        # request, so the model still counts as working.
+        if not (resp.status_code == 400 and '"tool_use_failed"' in resp.text):
+            _note_llm_result(model, False, _groq_failure_reason(resp.status_code))
         return {"ok": False, "reason": f"upstream HTTP {resp.status_code}", "content": "", "toolCalls": []}
+    _note_llm_result(model, True)
     try:
         result = resp.json()
     except ValueError:
@@ -1298,6 +1351,7 @@ def llm_status():
     """Internal: whether the assistant's LLM stages can be used right now (never the key)."""
     return jsonify({"configured": bool(GROQ_API_KEY), "explainRemaining": groq_budget_remaining(),
                     "routerRemaining": router_budget_remaining(),
+                    "explainHealth": llm_health(GROQ_MODEL), "routerHealth": llm_health(app_config.GROQ_ROUTER_MODEL),
                     "explainModel": GROQ_MODEL, "routerModel": app_config.GROQ_ROUTER_MODEL})
 
 
@@ -1496,6 +1550,8 @@ def main():
     log.info(f"Control API: http://{HOST}:{CONTROL_PORT}  (CORS: {', '.join(ALLOWED_ORIGINS)})")
     groq_status = "configured" if GROQ_API_KEY else "NOT SET"
     log.info(f"Groq API: {groq_status}")
+    for model in {GROQ_MODEL, app_config.GROQ_ROUTER_MODEL}:
+        llm_health(model)                      # first probe now, so status is known within seconds
 
     # Start Flask control API
     control_thread = threading.Thread(target=run_control_server, daemon=True)

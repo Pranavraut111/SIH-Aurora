@@ -26,8 +26,8 @@ import { describeFailure } from '../lib/failure';
 import { getAssistant, noteOwnScenario, setAssistant, useAssistant } from './bus';
 import { buildingName, demoLabel, describeAction, downstream, InvalidAction, listText, storyLabel, validateAction, whatIfLabel } from './actions';
 import { parseIntent } from './intents';
-import { emptyState, observationFrom, observe, queue, stepsFor } from './incidents';
-import { briefingText, nextStep, nextStepText, resolvedSummary, updateText } from './briefing';
+import { emptyState, observationFrom, observe, placeOwnIncident, queue, stepsFor } from './incidents';
+import { briefingText, nextStep, nextStepText, queuedBehindText, resolvedSummary, updateText } from './briefing';
 import { createRecognizer, recognitionErrorText, speak, speechSupport, stopSpeaking } from './speech';
 import { loadPrefs, savePrefs } from './prefs';
 import IncidentCard from './IncidentCard';
@@ -84,7 +84,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   // Async flows read the latest values through this ref (they outlive renders).
   const live = useRef({});
   useEffect(() => {
-    live.current = { prefs, activeStation, activeModule, ctx, books, inc, gesture, tourActive, open, snoozed, stationData, pending };
+    live.current = { prefs, activeStation, activeModule, ctx, books, inc, gesture, tourActive, open, snoozed, stationData, pending, focusState: focusKey };
   });
 
   const setPrefs = useCallback((patch) => setPrefsState((p) => { const n = { ...p, ...patch }; savePrefs(n); return n; }), []);
@@ -292,6 +292,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   }, [inc, focusKey]);
   const shownIncident = currentIncident
     || Object.values(inc.incidents).filter((i) => i.status === 'resolved' && !i.dismissed && i.key === focusKey)[0] || null;
+  const patchIncident = useCallback((key, fn) => setInc((s) => (s.incidents[key] ? { ...s, incidents: { ...s.incidents, [key]: fn(s.incidents[key]) } } : s)), []);
   const bookOf = useCallback((i) => (books?.playbooks || []).find((b) => b.id === i?.playbookId), [books]);
 
   const speakIncident = useCallback((key, text, { urgent = false } = {}) => {
@@ -364,10 +365,20 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         const speakIt = live0 && (own || l.prefs.announceAll);
         let chips = [];
         let navigatedTo = null;
+        let queuedNote = null;
         if (takeOver) {
-          setFocusKey((k) => k || i.key);
+          // A new incident the visitor started takes the card (the one shown moves to the queue),
+          // unless the one shown outranks it; then it is queued behind it and says so.
+          const others = queue(l.inc).filter((x) => x.key !== i.key);
+          const shown = others.find((x) => x.key === l.focusState) || others[0];     // the card before this incident
+          const place = placeOwnIncident(shown, i);
+          setFocusKey(place.focus);
+          if (place.behind) {
+            queuedNote = queuedBehindText(i, book, place.behind, bookOf(place.behind) || { title: place.behind.playbookId });
+            patchIncident(i.key, (x) => ({ ...x, queuedBehind: queuedNote }));
+          }
           setAssistant({ open: true });
-          if (l.prefs.autoNavigate) {
+          if (l.prefs.autoNavigate && !place.behind) {
             const nav = autoNavigate(i, book);
             chips = [{ id: uid(), label: nav.label, undo: nav.undo }];
             navigatedTo = MODULES[book.page]?.label || null;
@@ -375,8 +386,8 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         }
         const text = briefingText(i, book, { navigatedTo });
         add({ role: 'aurora', kind: 'incident', incidentKey: i.key, text, chips, quiet: !takeOver,
-          note: own ? null : 'Started by someone else or from shared data: shown, not opened for you.' });
-        if (speakIt) { lastSpoken.current[i.key] = Date.now(); say(text); }
+          note: own ? queuedNote : 'Started by someone else or from shared data: shown, not opened for you.' });
+        if (speakIt) { lastSpoken.current[i.key] = Date.now(); say(queuedNote ? `${text} ${queuedNote}` : text); }
       } else if (ev.type === 'update' || ev.type === 'escalate') {
         if (i.dismissed) continue;
         const text = updateText(ev, book);
@@ -396,7 +407,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
         setFocusKey((k) => k || i.key);
       }
     }
-  }, [add, autoNavigate, bookOf, isOwn, refreshCtx, say, speakIncident]);
+  }, [add, autoNavigate, bookOf, isOwn, patchIncident, refreshCtx, say, speakIncident]);
 
   // Observe the active station on every snapshot (and every context poll).
   const obsKey = JSON.stringify([activeStation, (stationData.activeAlerts || []).map((a) => [a.id, a.level]),
@@ -413,8 +424,8 @@ export default function AssistantHost({ stationData, activeStation, activeModule
     if (r.events.length) handleIncidentEvents(r.events);
   }, [obsKey, now, books, activeStation, handleIncidentEvents]);     // `now`: a 5 s heartbeat so a cleared trigger resolves
 
-  const patchIncident = useCallback((key, fn) => setInc((s) => (s.incidents[key] ? { ...s, incidents: { ...s.incidents, [key]: fn(s.incidents[key]) } } : s)), []);
   const toggleStep = useCallback((key, index) => patchIncident(key, (i) => ({ ...i, done: i.done.includes(index) ? i.done.filter((d) => d !== index) : [...i.done, index] })), [patchIncident]);
+  useEffect(() => { live.current.focusKey = currentIncident?.key; });
   const incidentControl = useCallback((control, key = live.current.focusKey || queue(live.current.inc)[0]?.key) => {
     const i = live.current.inc.incidents[key];
     const book = bookOf(i);
@@ -442,7 +453,6 @@ export default function AssistantHost({ stationData, activeStation, activeModule
     if (control === 'repeat') return briefingText(i, book);
     return null;
   }, [bookOf, patchIncident, toggleStep]);
-  useEffect(() => { live.current.focusKey = currentIncident?.key; });
 
   // ── One request, typed or spoken ──
   const handle = useCallback(async (text, via = 'text') => {

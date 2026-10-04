@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import PLAYBOOKS from '../../simulator/playbooks.json';
-import { emptyState, observationFrom, observe, queue, selectPlaybook, stepsFor } from './incidents';
-import { briefingText, formatDuration, nextStepText, resolvedSummary, updateText } from './briefing';
+import { emptyState, observationFrom, observe, outranks, placeOwnIncident, queue, selectPlaybook, stepsFor } from './incidents';
+import { briefingText, formatDuration, nextStepText, queuedBehindText, resolvedSummary, updateText } from './briefing';
 
 const books = PLAYBOOKS.playbooks;
 const book = (id) => books.find((b) => b.id === id);
@@ -240,5 +240,37 @@ describe('low_fuel risk escalation', () => {
     const ctx = { station: { id: 'bharati' }, derived: fuel(12) };
     expect(observationFrom('bharati', {}, ctx).metrics.fuelAutonomyDays.value).toBe(12);
     expect(observationFrom('maitri', {}, ctx).metrics).toEqual({});
+  });
+});
+
+describe('the visitor\'s own new incident and the card', () => {
+  const inc = (over) => ({ key: 'k', station: 'bharati', status: 'active', severity: 'critical', risk: 'high', ...over });
+  const gen = inc({ key: 'bharati:generator_failure', playbookId: 'generator_failure' });
+  const blizzard = inc({ key: 'maitri:blizzard', station: 'maitri', playbookId: 'blizzard' });
+
+  it('takes the card when nothing is shown, or the shown one is resolved or dismissed', () => {
+    expect(placeOwnIncident(null, blizzard)).toEqual({ focus: blizzard.key, behind: null });
+    expect(placeOwnIncident({ ...gen, status: 'resolved' }, blizzard).focus).toBe(blizzard.key);
+    expect(placeOwnIncident({ ...gen, dismissed: true }, blizzard).focus).toBe(blizzard.key);
+    expect(placeOwnIncident(blizzard, blizzard).focus).toBe(blizzard.key);
+  });
+
+  it('takes the card from an equal-ranked incident (the older one moves to the queue)', () => {
+    expect(placeOwnIncident(gen, blizzard)).toEqual({ focus: blizzard.key, behind: null });
+    expect(placeOwnIncident({ ...gen, severity: 'warning', risk: 'critical' }, blizzard).focus).toBe(blizzard.key);
+  });
+
+  it('is queued behind a higher-severity incident, or a same-severity one at higher risk', () => {
+    expect(placeOwnIncident(gen, { ...blizzard, severity: 'warning' })).toEqual({ focus: gen.key, behind: gen });
+    expect(placeOwnIncident({ ...gen, risk: 'critical' }, blizzard)).toEqual({ focus: gen.key, behind: { ...gen, risk: 'critical' } });
+    expect(outranks({ ...gen, risk: 'critical' }, blizzard)).toBe(true);
+    expect(outranks(gen, blizzard)).toBe(false);
+  });
+
+  it('says what it is queued behind, naming the other station', () => {
+    expect(queuedBehindText(blizzard, book('blizzard'), gen, book('generator_failure')))
+      .toBe('Your blizzard is queued behind a critical generator failure at Bharati.');
+    expect(queuedBehindText({ ...gen, station: 'maitri' }, book('co2_spike'), { ...blizzard, severity: 'critical' }, book('blizzard')))
+      .toBe('Your CO₂ build-up in the living quarters is queued behind a critical blizzard.');
   });
 });

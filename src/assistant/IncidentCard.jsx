@@ -171,6 +171,10 @@ export default function IncidentCard({
             <Chip key={q.key} size="small" clickable onClick={() => onFocus?.(q.key)} variant="outlined"
               label={`${q.severity === 'critical' ? 'Critical' : 'Warning'}: ${q.playbookId.replace(/_/g, ' ')} · ${stationMeta(q.station).name}`} />
           ))}
+          {queue.filter((q) => q.key !== inc.key && q.queuedBehind).map((q) => (
+            <Typography key={`${q.key}-note`} variant="caption" sx={{ display: 'block', width: '100%', color: 'text.secondary' }}
+              data-testid="incident-queued-note">{q.queuedBehind}</Typography>
+          ))}
         </Stack>
       )}
     </Card>

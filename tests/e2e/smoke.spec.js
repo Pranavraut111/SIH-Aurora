@@ -1074,7 +1074,7 @@ test('Aurora: a state-changing action asks first; my generator failure opens the
   await expect(page.locator('[data-testid=msg-aurora][data-kind=summary]')).toContainText(/resolved after .* 1 of 6 steps completed/);
 });
 
-test('Aurora: another visitor\'s incident shows the floating card and does not take over the page', async ({ page, browser, request }) => {
+test('Aurora: another visitor\'s incident shows the floating card and does not take over the page; my own new one then takes the card', async ({ page, browser, request }) => {
   test.skip(!ALLOW_WRITES, LIVE_WRITES_SKIPPED);
   const judge = await judgeMode(request);
   test.skip(judge.writeProtected && !judge.publicDemo, 'another visitor cannot start a scenario on this stack');
@@ -1097,8 +1097,30 @@ test('Aurora: another visitor\'s incident shows the floating card and does not t
     await expect(page).toHaveURL(/module=infrastructure/);
     await expect(page.getByTestId('highlight-strip')).toContainText('Heating Zone A');
     await expect(page.getByTestId('incident-card')).toBeVisible();
+
+    // A new incident I start myself takes the card (the one I was viewing moves to the queue),
+    // unless the one shown outranks it; then mine is queued and says behind what.
+    await waitForFreeStation(request, 'bharati');
+    await page.getByTestId('assistant-close').click();
+    await page.getByTestId('station-option-bharati').click();
+    await page.getByTestId('assistant-open').click();
+    await page.waitForTimeout(IS_REMOTE ? 61_000 : 4_000);          // the per-IP visitor cooldown
+    await page.getByTestId('assistant-input').fill('trigger a blizzard');
+    await page.getByTestId('assistant-input').press('Enter');
+    await expect(page.getByTestId('confirm-dialog')).toContainText('Run “Blizzard” at Bharati?');
+    await page.getByTestId('confirm-ok').click();
+    await expect(page.locator('[data-testid=msg-aurora][data-kind=incident]').last()).toContainText('Blizzard detected at Bharati', { timeout: 60_000 });
+    const card = page.getByTestId('incident-card');
+    if (await card.getAttribute('data-incident') === 'blizzard') {
+      await expect(card).toContainText(/Critical: heating failure · Maitri/);
+      await expect(page.getByTestId('incident-queued-note')).toHaveCount(0);
+    } else {
+      await expect(card).toHaveAttribute('data-incident', 'heating_failure');
+      await expect(page.getByTestId('incident-queued-note')).toHaveText(/^Your blizzard is queued behind a critical heating failure at Maitri\.$/);
+    }
   } finally {
     await b.page.request.post(`${API}/api/sim/reset?stationId=maitri`);
+    await request.post(`${API}/api/sim/reset?stationId=bharati`, { headers: WRITE_HEADERS });
     await b.context.close();
   }
 });

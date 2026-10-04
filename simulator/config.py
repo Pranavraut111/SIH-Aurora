@@ -36,6 +36,20 @@ def _get(name: str, default=None):
     return value.strip()
 
 
+def _get_secret(name: str, default: str = "") -> str:
+    """An API key/token: drop surrounding quotes and any whitespace (spaces, tabs, CR, newlines).
+    A key never contains them, and a value pasted as "gsk_…" or with Windows line endings is
+    otherwise sent verbatim in the Authorization header, which Groq rejects with HTTP 400."""
+    raw = _get(name)
+    if raw is None:
+        return default
+    cleaned = "".join(raw.split()).strip("\"'")
+    if cleaned != raw:
+        logging.getLogger("aurora.config").warning(
+            "%s contained quotes or whitespace; stripped them (%d → %d characters)", name, len(raw), len(cleaned))
+    return cleaned
+
+
 def _get_int(name: str, default: int) -> int:
     raw = _get(name)
     if raw is None:
@@ -163,7 +177,7 @@ REMOTE_ACK_DELAY_S = _get_float("REMOTE_ACK_DELAY_S", 5.0)
 ALERT_RESOLVE_TICKS = _get_int("ALERT_RESOLVE_TICKS", 3)
 
 # ── LLM (Groq) — server-side only ─────────────────────────────
-GROQ_API_KEY = _get("GROQ_API_KEY", "")
+GROQ_API_KEY = _get_secret("GROQ_API_KEY")
 GROQ_MODEL = _get("GROQ_MODEL", "openai/gpt-oss-120b")
 # Cap on outbound Groq calls per rolling hour, across the whole process. Past the cap the
 # explain routes return the offline summary instead — honest, and it bounds the bill.
@@ -185,6 +199,11 @@ EXPLAIN_CACHE_S = _get_int("EXPLAIN_CACHE_S", 120)
 GROQ_ROUTER_MODEL = _get("GROQ_ROUTER_MODEL", "openai/gpt-oss-20b")
 GROQ_ROUTER_MAX_CALLS_PER_HOUR = _get_int("GROQ_ROUTER_MAX_CALLS_PER_HOUR", 30)
 GROQ_ROUTER_MAX_CALLS_PER_DAY = _get_int("GROQ_ROUTER_MAX_CALLS_PER_DAY", 120)
+# /api/assistant/status reports whether Groq actually answers, not just whether a key is set:
+# every real call records its outcome, and a tiny probe (a few tokens, outside the budgets
+# above) refreshes each model's result when it is older than this. At most 144 probes a day
+# per model, well inside the free tier's 1,000 requests.
+GROQ_PROBE_INTERVAL_S = _get_int("GROQ_PROBE_INTERVAL_S", 600)
 
 # ── Write protection ─────────────────────────────────────────
 # When set, every state-changing route requires `X-Admin-Token: <ADMIN_TOKEN>`.
