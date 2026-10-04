@@ -380,7 +380,10 @@ _TOPIC_RULES = [
                 r"\boutside\b|\btemperature outside\b|\bsnow(?:ing)?\b"),
     ("generator", r"\bgenerator\b|\bpower\b|\brpm\b|\bengine\b|\bload\b"),
     ("status", r"\bstatus\b|\bhow is\b|\bhow are\b|\boverview\b|\bsituation\b|\bsummary\b|\bsummar"),
-    ("greeting", r"\b(?:hello|hi|hey|greetings|namaste|morning|evening|how are you|who are you|say something|introduce yourself|tell me something|are you there|test|talk to me)\b"),
+    ("greeting", (
+        r"\b(?:hello|hi|hey|greetings|namaste|morning|evening|how are you|who are you|say something|"
+        r"introduce yourself|tell me something|are you there|test|talk to me)\b"
+    )),
 ]
 
 
@@ -655,12 +658,19 @@ def local_answer(q: dict, ctx: dict) -> dict:
 
     elif topic == "greeting":
         env = _reading(ctx, "env_temp")
-        wind = _reading(ctx, "env_wind")
-        weather_s = f" Outside conditions are {_rv(ctx, 'env_temp')} with wind at {_rv(ctx, 'env_wind')}." if env else ""
-        spoken = (f"Hello! I am Aurora, your Antarctic station digital twin AI assistant for {name}.{weather_s} "
-                  "All core telemetry, life support, and operational monitoring systems are online. How can I help you?")
-        detail = [f"Station: {name} Research Station.", "Operational status: Online and monitoring.",
-                  "You can ask about alerts, fuel autonomy, power generation, weather, cascade risks, or run diagnostics."]
+        temp_val = _rv(ctx, "env_temp")
+        wind_val = _rv(ctx, "env_wind")
+        weather_s = f" Outside conditions are {temp_val} with wind at {wind_val}." if env else ""
+        spoken = (
+            f"Hello! I am Aurora, your Antarctic station digital twin AI assistant for {name}.{weather_s} "
+            "All core telemetry, life support, and operational monitoring systems are online. "
+            "How can I help you?"
+        )
+        detail = [
+            f"Station: {name} Research Station.",
+            "Operational status: Online and monitoring.",
+            "You can ask about alerts, fuel autonomy, power generation, weather, cascade risks, or run diagnostics.",
+        ]
         sources = ["telemetry"]
 
     else:

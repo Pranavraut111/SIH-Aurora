@@ -40,12 +40,13 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Import digital twin engines
@@ -2437,7 +2438,7 @@ def assistant_tts(text: str = Query(..., max_length=800), lang: str = "en", voic
     if sys.platform == "darwin" and _mac_voices() and selected_voice not in _mac_voices():
         selected_voice = default_voice   # e.g. a Chrome voice name such as "Google UK English Female"
 
-    h = hashlib.md5(f"{selected_voice}:{clean_text}".encode("utf-8")).hexdigest()
+    h = hashlib.md5(f"{selected_voice}:{clean_text}".encode()).hexdigest()
     wav_path = _TTS_CACHE_DIR / f"{h}.wav"
 
     if not wav_path.exists():
@@ -2456,7 +2457,7 @@ def assistant_tts(text: str = Query(..., max_length=800), lang: str = "en", voic
                 except Exception as e:  # noqa: BLE001
                     tmp_path.unlink(missing_ok=True)
                     log.warning("macOS say failed: %s", e)
-                    raise HTTPException(status_code=500, detail=str(e))
+                    raise HTTPException(status_code=500, detail=str(e)) from e
 
     return FileResponse(str(wav_path), media_type="audio/wav", headers={"Cache-Control": "public, max-age=86400"})
 
