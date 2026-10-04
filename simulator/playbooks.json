@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "disclaimer": "Example procedure, not an official NCPOR procedure.",
-  "description": "Aurora's incident playbooks: one per failure type the twin can show (the public demo scenarios and the main alert and anomaly types). Read by simulator/assistant.py and served at GET /api/assistant/playbooks. Each one is a conservative EXAMPLE written for the demo: safety first, verify before acting, keep the station leader and the mainland informed. Typical causes are typical, never a diagnosis. Matching: an active demo scenario id wins; otherwise the playbook whose alert sensors match the incident's alerts (first in this file's order); otherwise its anomaly causes; otherwise 'anomaly'. Each step has `do` (the checklist text) and `say` (a short phrase for the spoken briefing). `baselineRisk` is the floor for this failure type (decision-engine scale nominal < low < moderate < high < critical): a briefing never states a lower risk, even while the engine has not caught up.",
+  "description": "Aurora's incident playbooks: one per failure type the twin can show (the public demo scenarios and the main alert and anomaly types). Read by simulator/assistant.py and served at GET /api/assistant/playbooks. Each one is a conservative EXAMPLE written for the demo: safety first, verify before acting, keep the station leader and the mainland informed. Typical causes are typical, never a diagnosis. Matching: an active demo scenario id wins; otherwise the playbook whose alert sensors match the incident's alerts (first in this file's order); otherwise its anomaly causes; otherwise 'anomaly'. Each step has `do` (the checklist text) and `say` (a short phrase for the spoken briefing). `baselineRisk` is the floor for this failure type (decision-engine scale nominal < low < moderate < high < critical): a briefing never states a lower risk, even while the engine has not caught up. A step may have `variants`: the first whose `whenSensors` includes a sensor that has alerted during the incident replaces the step's `do`/`say`; with none matching the step's own text (the conservative one) is used. A playbook may have `riskEscalation` {metric, risk}: while the context metric is below its configured threshold the floor is raised to `risk`.",
   "playbooks": [
     {
       "id": "generator_failure",
@@ -39,6 +39,10 @@
           "say": "verify backup power"
         },
         {
+          "do": "Notify the station leader and log the event.",
+          "say": "notify the station leader"
+        },
+        {
           "do": "Check the affected electrical loads and shed non-essential ones so the standby supply is not overloaded.",
           "say": "check the affected electrical loads"
         },
@@ -51,8 +55,8 @@
           "say": "confirm heating in the living quarters"
         },
         {
-          "do": "Notify the station leader, log the event, and inform the mainland if power is not restored within the agreed time.",
-          "say": "notify the station leader"
+          "do": "Inform the mainland if power is not restored within the agreed time.",
+          "say": "inform the mainland if power is not restored"
         }
       ]
     },
@@ -93,6 +97,10 @@
           "say": "check the indoor temperatures"
         },
         {
+          "do": "Notify the station leader and log the event, with the indoor temperatures over time.",
+          "say": "notify the station leader"
+        },
+        {
           "do": "Verify the circulation pump is running and the loop pressure is within its normal range.",
           "say": "verify the circulation pump and loop pressure"
         },
@@ -103,10 +111,6 @@
         {
           "do": "Bring standby heating online for the affected zone if it is available.",
           "say": "bring standby heating online"
-        },
-        {
-          "do": "Notify the station leader and log the event, with the indoor temperatures over time.",
-          "say": "notify the station leader"
         }
       ]
     },
@@ -139,7 +143,24 @@
       "steps": [
         {
           "do": "Restrict drinking water use until the water quality has been checked by hand.",
-          "say": "restrict drinking water use"
+          "say": "restrict drinking water use",
+          "variants": [
+            {
+              "whenSensors": [
+                "water_ph",
+                "water_temp"
+              ],
+              "do": "Restrict drinking water use until the water quality has been checked by hand.",
+              "say": "restrict drinking water use"
+            },
+            {
+              "whenSensors": [
+                "water_level"
+              ],
+              "do": "Start conserving water and check the tank level by hand.",
+              "say": "start conserving water and check the tank level"
+            }
+          ]
         },
         {
           "do": "Verify the level reading with a manual check of the tank.",
@@ -191,6 +212,10 @@
           "say": "move people out if anyone feels unwell"
         },
         {
+          "do": "Notify the station leader and log the readings.",
+          "say": "notify the station leader"
+        },
+        {
           "do": "Check carbon monoxide with a handheld detector, since a combustion source is possible.",
           "say": "check carbon monoxide with a handheld detector"
         },
@@ -201,10 +226,6 @@
         {
           "do": "Increase fresh-air exchange and reduce occupancy until the level falls.",
           "say": "increase fresh-air exchange"
-        },
-        {
-          "do": "Notify the station leader and log the readings.",
-          "say": "notify the station leader"
         }
       ]
     },
@@ -238,6 +259,10 @@
           "say": "stop outdoor work and account for everyone"
         },
         {
+          "do": "Notify the station leader.",
+          "say": "notify the station leader"
+        },
+        {
           "do": "Secure external equipment and close outer doors and hatches.",
           "say": "secure external equipment"
         },
@@ -250,8 +275,8 @@
           "say": "send critical messages early"
         },
         {
-          "do": "Notify the station leader and keep a weather watch until the wind drops.",
-          "say": "notify the station leader"
+          "do": "Keep a weather watch until the wind drops.",
+          "say": "keep a weather watch"
         }
       ]
     },
@@ -350,7 +375,12 @@
           "do": "Notify the station leader and the mainland logistics team about the resupply timing.",
           "say": "notify the station leader and mainland logistics"
         }
-      ]
+      ],
+      "riskEscalation": {
+        "metric": "fuelAutonomyDays",
+        "risk": "high",
+        "note": "Raised to high while the model-derived fuel autonomy (GET /api/assistant/context derived.fuelAutonomyDays) is below fuelAutonomyHighRiskDays in station_config.json, an assumed planning threshold. Once raised it stays raised for the rest of the incident, so it does not flap around the threshold."
+      }
     },
     {
       "id": "anomaly",

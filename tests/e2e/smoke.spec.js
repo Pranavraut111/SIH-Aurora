@@ -1065,13 +1065,13 @@ test('Aurora: a state-changing action asks first; my generator failure opens the
     await expect(card).toContainText('Example procedure, not an official NCPOR procedure');
     await page.getByTestId('incident-step-0').check();
     await page.getByTestId('incident-next').click();
-    await expect(page.getByTestId('msg-aurora').last()).toContainText('Step 2 of 5');
+    await expect(page.getByTestId('msg-aurora').last()).toContainText('Step 2 of 6: Notify the station leader');
     await expectAccessible(page, '[data-testid=assistant-panel]', 'the panel with an incident card');
   } finally {
     await request.post(`${API}/api/sim/reset?stationId=bharati`, { headers: WRITE_HEADERS });
   }
   await expect(page.getByTestId('incident-card')).toHaveAttribute('data-status', 'resolved', { timeout: 90_000 });
-  await expect(page.locator('[data-testid=msg-aurora][data-kind=summary]')).toContainText(/resolved after .* 1 of 5 steps completed/);
+  await expect(page.locator('[data-testid=msg-aurora][data-kind=summary]')).toContainText(/resolved after .* 1 of 6 steps completed/);
 });
 
 test('Aurora: another visitor\'s incident shows the floating card and does not take over the page', async ({ page, browser, request }) => {

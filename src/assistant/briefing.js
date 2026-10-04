@@ -5,12 +5,20 @@
    ═══════════════════════════════════════════════════════════════ */
 import { stationMeta } from '../data/stationConfig';
 import { buildingName, listText } from './actions';
+import { stepsFor } from './incidents';
 
 const ORDINAL = ['First', 'Next', 'Then'];
 
 export function riskSentence(risk) {
   if (!risk) return 'The decision engine has no risk assessment yet.';
   return `Risk is ${risk}.`;
+}
+
+/** "Fuel autonomy is 21 days, below the 30-day planning threshold." */
+export function escalationSentence(esc) {
+  if (!esc) return '';
+  if (esc.metric === 'fuelAutonomyDays') return `Fuel autonomy is ${esc.value} days, below the ${esc.below}-day planning threshold.`;
+  return `${esc.metric} is ${esc.value}, below ${esc.below}.`;
 }
 
 function affectedSentence(inc) {
@@ -28,7 +36,8 @@ export function briefingText(inc, book, { navigatedTo = null } = {}) {
   const aff = affectedSentence(inc);
   if (aff) parts.push(aff);
   parts.push(riskSentence(inc.risk));
-  const todo = book.steps.map((s, i) => ({ s, i })).filter(({ i }) => !inc.done.includes(i)).slice(0, 3);
+  if (inc.escalation) parts.push(escalationSentence(inc.escalation));
+  const todo = stepsFor(book, inc).map((s, i) => ({ s, i })).filter(({ i }) => !inc.done.includes(i)).slice(0, 3);
   todo.forEach(({ s }, k) => parts.push(`${ORDINAL[k]}, ${s.say}.`));
   if (navigatedTo) parts.push(`I've opened the ${navigatedTo} and highlighted the affected systems.`);
   return parts.join(' ');
@@ -39,13 +48,19 @@ export function updateText(ev, book) {
   const inc = ev.incident;
   const station = stationMeta(inc.station).name;
   const bits = [];
-  if (ev.confirmed && !ev.risk) {
+  if (ev.escalation && ev.risk) {
+    bits.push(`${escalationSentence(ev.escalation)} Risk at ${station} raised from ${ev.from} to ${ev.risk}.`);
+  } else if (ev.confirmed && !ev.risk) {
     bits.push(`The decision engine now confirms the risk at ${station} is ${inc.engineRisk}.`);
   } else if (ev.risk) {
     bits.push(ev.from ? `Risk at ${station} ${ev.type === 'escalate' ? 'escalated' : 'changed'} from ${ev.from} to ${ev.risk}.`
       : `The decision engine rates the risk ${ev.risk}.`);
   } else if (ev.type === 'escalate') {
     bits.push(`${book.title} at ${station} is now critical.`);
+  }
+  if (ev.changedSteps?.length) {
+    const steps = stepsFor(book, inc);
+    ev.changedSteps.forEach((i) => bits.push(`Step ${i + 1} is now: ${steps[i].say}.`));
   }
   if (ev.added?.length) {
     const names = ev.added.map((b) => buildingName(inc.station, b));
@@ -55,8 +70,9 @@ export function updateText(ev, book) {
 }
 
 export function nextStep(inc, book) {
-  const i = book.steps.findIndex((_, k) => !inc.done.includes(k));
-  return i < 0 ? null : { index: i, step: book.steps[i] };
+  const steps = stepsFor(book, inc);
+  const i = steps.findIndex((_, k) => !inc.done.includes(k));
+  return i < 0 ? null : { index: i, step: steps[i] };
 }
 
 export function nextStepText(inc, book) {

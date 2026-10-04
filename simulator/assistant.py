@@ -257,6 +257,12 @@ def build_context(sid: str, snapshot: dict | None, anomaly: dict | None = None, 
                                        "provenance": "MODEL-DERIVED",
                                        "basis": ("fuel store ÷ current burn rate "
                                                  "(store_fuel kL × 1000 ÷ gen_fuel_rate L/h ÷ 24)")}
+        # Below this a low-fuel incident's risk is raised to high (playbooks.json riskEscalation).
+        high_risk_days = station_config.meta_value(sid, "fuelAutonomyHighRiskDays")
+        if isinstance(high_risk_days, (int, float)):
+            derived["fuelAutonomyDays"].update(
+                escalateBelow=high_risk_days,
+                escalateBelowNote="assumed planning threshold (station_config.json), not an NCPOR figure")
     energy = snap.get("energy") or {}
     if isinstance(energy.get("loadPct"), (int, float)):
         derived["generatorLoadPct"] = {"value": round(energy["loadPct"], 1), "unit": "%", "provenance": "MODEL-DERIVED"}

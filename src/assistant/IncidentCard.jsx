@@ -15,7 +15,8 @@ import { stationMeta } from '../data/stationConfig';
 import { formatValue } from '../lib/format';
 import { StatusChip } from '../ui/Status';
 import { buildingName } from './actions';
-import { formatDuration, nextStep, resolvedSummary } from './briefing';
+import { escalationSentence, formatDuration, nextStep, resolvedSummary } from './briefing';
+import { stepsFor } from './incidents';
 
 const RISK_STATUS = { high: 'critical', critical: 'critical', moderate: 'warning', low: 'normal', nominal: 'normal' };
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -127,9 +128,11 @@ export default function IncidentCard({
             <Stack direction="row" sx={{ gap: 2, alignItems: 'center' }}>
               {inc.risk ? <StatusChip status={RISK_STATUS[inc.risk] || 'warning'} label={cap(inc.risk)} /> : <Typography variant="body2">Not assessed yet</Typography>}
               <Typography variant="caption" sx={{ color: 'text.secondary', flex: 1 }} data-testid="incident-risk-source">
-                {inc.engineConfirmed || !inc.baselineRisk
+                {inc.engineConfirmed || !inc.floorRisk
                   ? 'Decision engine (rule-based risk matrix)'
-                  : `Baseline for this failure type; the decision engine (rule-based) currently rates it ${inc.engineRisk || 'not yet'}`}
+                  : inc.escalation && inc.floorRisk !== inc.baselineRisk
+                    ? `Raised: ${escalationSentence(inc.escalation)} (assumed threshold in station_config.json, not an NCPOR figure). The decision engine (rule-based) currently rates it ${inc.engineRisk || 'not yet'}`
+                    : `Baseline for this failure type; the decision engine (rule-based) currently rates it ${inc.engineRisk || 'not yet'}`}
               </Typography>
               <Button size="small" onClick={() => setShowWhy((v) => !v)} aria-expanded={showWhy} sx={{ minWidth: 0 }}>Why it matters</Button>
             </Stack>
@@ -142,7 +145,7 @@ export default function IncidentCard({
 
       <Section title={`Steps (${inc.done.length}/${book.steps.length})`} testId="incident-steps">
         <Stack component="ol" sx={{ m: 0, p: 0, listStyle: 'none' }}>
-          {book.steps.map((s, i) => (
+          {stepsFor(book, inc).map((s, i) => (
             <Box component="li" key={s.do} sx={(t) => ({ borderRadius: '8px', px: 1, ...(next?.index === i && !resolved ? { bgcolor: t.vars.palette.action.hover } : {}) })}>
               <FormControlLabel sx={{ alignItems: 'flex-start', m: 0, py: 0.5 }}
                 control={<Checkbox size="small" checked={inc.done.includes(i)} onChange={() => onToggleStep?.(inc.key, i)} sx={{ p: 0.5, mr: 1.5 }}

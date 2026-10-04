@@ -26,7 +26,7 @@ import { describeFailure } from '../lib/failure';
 import { getAssistant, noteOwnScenario, setAssistant, useAssistant } from './bus';
 import { buildingName, demoLabel, describeAction, downstream, InvalidAction, listText, storyLabel, validateAction, whatIfLabel } from './actions';
 import { parseIntent } from './intents';
-import { emptyState, observationFrom, observe, queue } from './incidents';
+import { emptyState, observationFrom, observe, queue, stepsFor } from './incidents';
 import { briefingText, nextStep, nextStepText, resolvedSummary, updateText } from './briefing';
 import { createRecognizer, recognitionErrorText, speak, speechSupport, stopSpeaking } from './speech';
 import { loadPrefs, savePrefs } from './prefs';
@@ -402,7 +402,7 @@ export default function AssistantHost({ stationData, activeStation, activeModule
   const obsKey = JSON.stringify([activeStation, (stationData.activeAlerts || []).map((a) => [a.id, a.level]),
     stationData.publicDemo?.[activeStation]?.scenario, stationData.provenance?.activeScenario, stationData.link?.up,
     (stationData.dependencyAlerts || []).map((d) => (d.chain || []).join('>')), ctx?.station?.id, ctx?.anomaly?.isAnomaly,
-    ctx?.anomaly?.maxResidualSigma, ctx?.decision?.risk?.level]);
+    ctx?.anomaly?.maxResidualSigma, ctx?.decision?.risk?.level, ctx?.derived?.fuelAutonomyDays?.value]);
   useEffect(() => {
     if (!books?.playbooks) return;
     const sd = live.current.stationData;
@@ -424,8 +424,9 @@ export default function AssistantHost({ stationData, activeStation, activeModule
       const n = nextStep(i, book);
       if (!n) return 'Every step is already ticked.';
       toggleStep(key, n.index);
-      const after = book.steps.findIndex((_, k) => k !== n.index && !i.done.includes(k));
-      return `Ticked step ${n.index + 1}.${after >= 0 ? ` Next: ${book.steps[after].say}.` : ' That was the last step.'}`;
+      const steps = stepsFor(book, i);
+      const after = steps.findIndex((_, k) => k !== n.index && !i.done.includes(k));
+      return `Ticked step ${n.index + 1}.${after >= 0 ? ` Next: ${steps[after].say}.` : ' That was the last step.'}`;
     }
     if (control === 'snooze') {
       setSnoozed((s) => ({ ...s, [key]: Date.now() + SNOOZE_MS }));

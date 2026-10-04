@@ -14,10 +14,17 @@
    (alert buildings + the backend's cascade chains) and follows the risk; it is
    resolved once its trigger has been absent for RESOLVE_AFTER observations.
 
-   Risk: max(the playbook's baselineRisk, the decision engine's level). The engine can
-   lag the alerts by a tick or two, so an incident never states less than the baseline
-   for its failure type; once the engine reaches the baseline the incident is marked
-   `engineConfirmed` (an update says so), and a higher engine rating escalates it.
+   Risk: max(the playbook's floor, the decision engine's level). The floor is its
+   baselineRisk, raised by the playbook's `riskEscalation` once the named context metric
+   falls below its configured threshold (low fuel: fuel autonomy below
+   station_config.json's planning threshold → high); a raised floor stays raised for the
+   rest of the incident. The engine can lag the alerts by a tick or two, so an incident
+   never states less than the floor for its failure type; once the engine reaches the
+   floor the incident is marked `engineConfirmed` (an update says so), and a higher
+   engine rating escalates it.
+
+   Steps: a step may have `variants`, chosen by the alert sensors seen during the
+   incident (stepsFor). If the chosen variants change, an update names the steps.
 
    Events: new | update | escalate | resolved. Incidents already present on the
    first observation of a station are flagged `atLoad` (shown, never announced).
@@ -35,6 +42,29 @@ export function effectiveRisk(baseline, engine) {
 }
 
 export const emptyState = () => ({ incidents: {}, seen: {} });
+
+/** The variant chosen for each step: index into `variants`, or -1 for the step's own text. */
+function variantChoice(book, sensors) {
+  return (book?.steps || []).map((s) => (s.variants || []).findIndex((v) => v.whenSensors.some((x) => sensors.includes(x))));
+}
+
+/** The playbook's steps for this incident: each step's first variant whose `whenSensors`
+ *  includes a sensor that has alerted during the incident, else the step's own text. */
+export function stepsFor(book, inc) {
+  const choice = variantChoice(book, inc?.sensors || []);
+  return (book?.steps || []).map((s, i) => {
+    const v = choice[i] >= 0 ? s.variants[choice[i]] : s;
+    return { do: v.do, say: v.say };
+  });
+}
+
+/** The playbook's riskEscalation when its metric is below the threshold now, else null. */
+function escalationNow(book, metrics) {
+  const rule = book?.riskEscalation;
+  const m = rule && metrics?.[rule.metric];
+  if (!m || typeof m.value !== 'number' || typeof m.escalateBelow !== 'number' || !(m.value < m.escalateBelow)) return null;
+  return { metric: rule.metric, risk: rule.risk, value: m.value, below: m.escalateBelow };
+}
 
 /** The playbook for a scenario / alert sensors / anomaly causes (mirrors assistant.select_playbook). */
 export function selectPlaybook(books, { scenario = null, sensors = [], causes = [] } = {}) {
@@ -113,14 +143,19 @@ export function observe(state, obs, books, now) {
     const sources = g.buildings;
     const affected = [...new Set([...sources, ...cascadeAffected(obs.cascades, sources)])];
     const cur = incidents[key];
+    const book = books.find((b) => b.id === pid);
+    const alertSensors = g.alerts.map((a) => a.sensor).filter(Boolean);
     if (!cur || cur.status === 'resolved') {
-      const baseline = books.find((b) => b.id === pid)?.baselineRisk || null;
-      const risk = effectiveRisk(baseline, engine);
+      const baseline = book?.baselineRisk || null;
+      const escalation = escalationNow(book, obs.metrics);
+      const floor = escalation ? effectiveRisk(baseline, escalation.risk) : baseline;
+      const risk = effectiveRisk(floor, engine);
       const inc = {
         id: `${key}:${now}`, key, station: obs.station, playbookId: pid, kind: g.kind, severity: g.severity,
         status: 'active', startedAt: now, atLoad: first, alertIds: g.alerts.map((a) => a.id),
         sources: [...sources], affected, everAffected: affected, risk, peakRisk: risk,
-        baselineRisk: baseline, engineRisk: engine, engineConfirmed: rank(engine) >= rank(baseline) && engine != null,
+        baselineRisk: baseline, floorRisk: floor, escalation, engineRisk: engine,
+        engineConfirmed: rank(engine) >= rank(floor) && engine != null, sensors: [...new Set(alertSensors)],
         sandbox: g.alerts.length > 0 && g.alerts.every((a) => a.sandboxThreshold || a.sandbox),
         scenario: obs.scenario || null, done: [], clear: 0, updatedAt: now,
       };
@@ -131,21 +166,28 @@ export function observe(state, obs, books, now) {
     const added = affected.filter((b) => !cur.everAffected.includes(b));
     const escalated = (SEVERITY_RANK[g.severity] || 0) > (SEVERITY_RANK[cur.severity] || 0);
     const eng = engine || cur.engineRisk;
-    const risk = effectiveRisk(cur.baselineRisk, eng);
+    const newEscalation = cur.escalation ? null : escalationNow(book, obs.metrics);
+    const escalation = cur.escalation || newEscalation;
+    const floor = newEscalation ? effectiveRisk(cur.floorRisk, newEscalation.risk) : cur.floorRisk;
+    const risk = effectiveRisk(floor, eng);
     const riskUp = rank(risk) > rank(cur.risk);
     const riskChanged = risk !== cur.risk;
-    const confirmed = !cur.engineConfirmed && eng != null && rank(eng) >= rank(cur.baselineRisk);
+    const confirmed = !cur.engineConfirmed && eng != null && rank(eng) >= rank(floor);
+    const sensors = [...new Set([...cur.sensors, ...alertSensors])];
+    const before = variantChoice(book, cur.sensors);
+    const changedSteps = variantChoice(book, sensors).map((c, i) => (c !== before[i] ? i : -1)).filter((i) => i >= 0);
     const next = {
-      ...cur, severity: escalated ? g.severity : cur.severity, sources: [...sources], affected,
+      ...cur, severity: escalated ? g.severity : cur.severity, sources: [...sources], affected, sensors, floorRisk: floor, escalation,
       everAffected: [...cur.everAffected, ...added], alertIds: [...new Set([...cur.alertIds, ...g.alerts.map((a) => a.id)])],
       risk, engineRisk: eng, engineConfirmed: cur.engineConfirmed || confirmed, clear: 0,
       peakRisk: rank(risk) > rank(cur.peakRisk) ? risk : cur.peakRisk,
     };
-    if (added.length || escalated || riskChanged || confirmed) next.updatedAt = now;
+    if (added.length || escalated || riskChanged || confirmed || changedSteps.length) next.updatedAt = now;
     incidents[key] = next;
-    if (escalated || (riskUp && cur.risk != null)) events.push({ type: 'escalate', incident: next, added, risk: riskUp ? risk : null, from: cur.risk, confirmed });
-    else if (added.length || riskChanged || confirmed) {
-      events.push({ type: 'update', incident: next, added, risk: riskChanged ? risk : null, from: cur.risk, confirmed });
+    const detail = { incident: next, added, from: cur.risk, confirmed, escalation: newEscalation, changedSteps };
+    if (escalated || (riskUp && cur.risk != null)) events.push({ type: 'escalate', ...detail, risk: riskUp ? risk : null });
+    else if (added.length || riskChanged || confirmed || changedSteps.length) {
+      events.push({ type: 'update', ...detail, risk: riskChanged ? risk : null });
     }
   });
 
@@ -183,6 +225,8 @@ export function observationFrom(station, stationData, ctx) {
       buildings: [...new Set((an.evidence || []).map((e) => tele.find((r) => r.sensor === e.sensor)?.building).filter(Boolean))],
     } : null,
     risk: ctx?.station?.id === station && ctx.decision?.available ? ctx.decision.risk?.level || null : null,
+    // Context metrics a playbook's riskEscalation can name ({value, escalateBelow}).
+    metrics: ctx?.station?.id === station ? ctx.derived || {} : {},
     cascades: stationData?.dependencyAlerts || [],
   };
 }

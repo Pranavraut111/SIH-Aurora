@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import PLAYBOOKS from '../../simulator/playbooks.json';
-import { emptyState, observationFrom, observe, queue, selectPlaybook } from './incidents';
+import { emptyState, observationFrom, observe, queue, selectPlaybook, stepsFor } from './incidents';
 import { briefingText, formatDuration, nextStepText, resolvedSummary, updateText } from './briefing';
 
 const books = PLAYBOOKS.playbooks;
@@ -143,15 +143,15 @@ describe('briefings', () => {
   it('speaks the spec-style briefing', () => {
     expect(briefingText(inc, book('generator_failure'), { navigatedTo: 'Energy grid' })).toBe(
       'Generator failure detected at Bharati. Heating Zone A and Heating Zone B may be affected. Risk is high. '
-      + 'First, verify backup power. Next, check the affected electrical loads. Then, inspect the generator fault indicators. '
+      + 'First, verify backup power. Next, notify the station leader. Then, check the affected electrical loads. '
       + "I've opened the Energy grid and highlighted the affected systems.");
   });
   it('skips ticked steps, reads the next one, summarises', () => {
     const ticked = { ...inc, done: [0] };
-    expect(briefingText(ticked, book('generator_failure'))).toContain('First, check the affected electrical loads.');
-    expect(nextStepText(ticked, book('generator_failure'))).toMatch(/^Step 2 of 5: Check the affected electrical loads/);
+    expect(briefingText(ticked, book('generator_failure'))).toContain('First, notify the station leader.');
+    expect(nextStepText(ticked, book('generator_failure'))).toMatch(/^Step 2 of 6: Notify the station leader and log the event/);
     expect(resolvedSummary(ticked, book('generator_failure')).text).toBe(
-      'Generator failure at Bharati resolved after 2 minutes 10 seconds. Affected: Generator Shed, Heating Zone A and Heating Zone B. 1 of 5 steps completed.');
+      'Generator failure at Bharati resolved after 2 minutes 10 seconds. Affected: Generator Shed, Heating Zone A and Heating Zone B. 1 of 6 steps completed.');
   });
   it('update texts', () => {
     expect(updateText({ type: 'escalate', incident: inc, risk: 'high', from: 'moderate', added: [] }, book('generator_failure')))
@@ -159,5 +159,86 @@ describe('briefings', () => {
     expect(updateText({ type: 'update', incident: inc, added: ['livingQuarters'] }, book('generator_failure')))
       .toBe('Living Quarters is now affected.');
     expect(formatDuration(61000)).toBe('1 minute 1 second');
+  });
+});
+
+describe('notify the station leader early', () => {
+  it.each(['generator_failure', 'heating_failure', 'co2_spike', 'blizzard'])('%s: the briefing says it second', (id) => {
+    const steps = book(id).steps;
+    expect(steps[1].say).toBe('notify the station leader');
+    const inc = { station: 'maitri', playbookId: id, sources: [], affected: [], risk: 'high', done: [] };
+    expect(briefingText(inc, book(id))).toContain('Next, notify the station leader.');
+  });
+  it('the generator playbook still informs the mainland as its last step', () => {
+    const steps = book('generator_failure').steps;
+    expect(steps.at(-1).say).toBe('inform the mainland if power is not restored');
+  });
+});
+
+describe('water_crisis step 1 follows the alerting sensor', () => {
+  const water = book('water_crisis');
+  const lvl = { id: 'w1', buildingId: 'waterTreatment', sensor: 'water_level', level: 'critical', value: 12, unit: '%' };
+  const ph = { id: 'w2', buildingId: 'waterTreatment', sensor: 'water_ph', level: 'critical', value: 9.4, unit: 'pH' };
+  it('only the level is low: conserve and check the tank by hand', () => {
+    const { events } = run([{}, { alerts: [lvl] }]);
+    const inc = events[1][0].incident;
+    expect(stepsFor(water, inc)[0]).toEqual({ do: 'Start conserving water and check the tank level by hand.', say: 'start conserving water and check the tank level' });
+    expect(briefingText(inc, water)).toContain('First, start conserving water and check the tank level.');
+  });
+  it.each([['water_ph'], ['water_temp']])('a quality sensor (%s) is out of range: restrict drinking water', (sensor) => {
+    const { events } = run([{}, { alerts: [{ ...ph, sensor }] }]);
+    expect(stepsFor(water, events[1][0].incident)[0].do).toBe('Restrict drinking water use until the water quality has been checked by hand.');
+  });
+  it('level and quality together: quality wins', () => {
+    const { events } = run([{}, { alerts: [lvl, ph] }]);
+    expect(stepsFor(water, events[1][0].incident)[0].say).toBe('restrict drinking water use');
+  });
+  it('no alert sensor known: the conservative text', () => {
+    expect(stepsFor(water, { sensors: [] })[0].say).toBe('restrict drinking water use');
+  });
+  it('a quality alert joining a level incident switches step 1 and says so; it stays switched', () => {
+    const { events, state } = run([{}, { alerts: [lvl] }, { alerts: [lvl, { ...ph, level: 'warning' }] }, { alerts: [lvl] }]);
+    const ev = events[2][0];
+    expect(ev).toMatchObject({ type: 'update', changedSteps: [0] });
+    expect(updateText(ev, water)).toBe('Step 1 is now: restrict drinking water use.');
+    expect(events[3]).toEqual([]);
+    expect(stepsFor(water, queue(state)[0])[0].say).toBe('restrict drinking water use');
+  });
+});
+
+describe('low_fuel risk escalation', () => {
+  const fuelAlert = { id: 'f1', buildingId: 'storage', sensor: 'store_fuel', level: 'critical', value: 20, unit: 'kL' };
+  const fuel = (value) => ({ fuelAutonomyDays: { value, unit: 'days', escalateBelow: 30 } });
+  it('above the threshold the baseline (moderate) stands', () => {
+    const { events } = run([{}, { alerts: [fuelAlert], risk: 'low', metrics: fuel(45) }]);
+    expect(events[1][0].incident).toMatchObject({ risk: 'moderate', floorRisk: 'moderate', escalation: null });
+  });
+  it('below the threshold the incident starts at high and the briefing says why', () => {
+    const { events } = run([{}, { alerts: [fuelAlert], risk: 'low', metrics: fuel(21) }]);
+    const inc = events[1][0].incident;
+    expect(inc).toMatchObject({ risk: 'high', baselineRisk: 'moderate', floorRisk: 'high', engineConfirmed: false });
+    expect(briefingText(inc, book('low_fuel'))).toContain('Risk is high. Fuel autonomy is 21 days, below the 30-day planning threshold.');
+  });
+  it('crossing the threshold mid-incident escalates, and it does not flap back', () => {
+    const { events, state } = run([{}, { alerts: [fuelAlert], risk: 'low', metrics: fuel(31) },
+      { alerts: [fuelAlert], risk: 'low', metrics: fuel(29) }, { alerts: [fuelAlert], risk: 'low', metrics: fuel(31) }]);
+    const ev = events[2][0];
+    expect(ev).toMatchObject({ type: 'escalate', risk: 'high', from: 'moderate' });
+    expect(updateText(ev, book('low_fuel'))).toBe('Fuel autonomy is 29 days, below the 30-day planning threshold. Risk at Bharati raised from moderate to high.');
+    expect(events[3]).toEqual([]);
+    expect(queue(state)[0].risk).toBe('high');
+  });
+  it('the engine confirms against the raised floor; a critical engine rating still wins', () => {
+    expect(run([{}, { alerts: [fuelAlert], risk: 'high', metrics: fuel(10) }]).events[1][0].incident.engineConfirmed).toBe(true);
+    expect(run([{}, { alerts: [fuelAlert], risk: 'critical', metrics: fuel(10) }]).events[1][0].incident.risk).toBe('critical');
+  });
+  it('other playbooks ignore the metric', () => {
+    const { events } = run([{}, { alerts: [genAlert], risk: 'low', metrics: fuel(5) }]);
+    expect(events[1][0].incident).toMatchObject({ risk: 'high', escalation: null });
+  });
+  it('observationFrom passes the context metrics of the same station only', () => {
+    const ctx = { station: { id: 'bharati' }, derived: fuel(12) };
+    expect(observationFrom('bharati', {}, ctx).metrics.fuelAutonomyDays.value).toBe(12);
+    expect(observationFrom('maitri', {}, ctx).metrics).toEqual({});
   });
 });

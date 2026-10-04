@@ -104,6 +104,51 @@ def test_failure_playbooks_have_a_serious_risk_floor():
         assert rank[assistant.playbook(pid)["baselineRisk"]] >= rank["moderate"], pid
 
 
+@pytest.mark.parametrize("pid", ["generator_failure", "heating_failure", "co2_spike", "blizzard"])
+def test_high_baseline_playbooks_notify_the_station_leader_at_step_2(pid):
+    steps = assistant.playbook(pid)["steps"]
+    assert steps[1]["do"].startswith("Notify the station leader") and steps[1]["say"] == "notify the station leader"
+    assert not any("station leader" in s["do"] for s in steps[2:]), pid      # said once, early
+    assert all("mainland" not in s["do"] for s in steps[:2]), pid           # the mainland stays a later step
+
+
+def test_generator_failure_still_informs_the_mainland_later():
+    steps = assistant.playbook("generator_failure")["steps"]
+    assert "mainland" in steps[-1]["do"] and "mainland" in steps[-1]["say"]
+
+
+def test_step_variants_are_well_formed():
+    for p in assistant.playbooks()["playbooks"]:
+        for s in p["steps"]:
+            for v in s.get("variants", []):
+                assert v["whenSensors"] and set(v["whenSensors"]) <= set(p["match"]["sensors"]), p["id"]
+                assert v["do"].endswith(".") and v["say"] and v["say"][0].islower(), p["id"]
+
+
+def test_water_crisis_step_1_depends_on_which_sensor_alerted():
+    step = assistant.playbook("water_crisis")["steps"][0]
+    quality, level = step["variants"]
+    assert set(quality["whenSensors"]) == {"water_ph", "water_temp"}
+    assert quality["do"] == "Restrict drinking water use until the water quality has been checked by hand."
+    assert level["whenSensors"] == ["water_level"]
+    assert level["do"] == "Start conserving water and check the tank level by hand."
+    assert step["do"] == quality["do"]            # no matching sensor → the conservative text
+
+
+def test_low_fuel_escalates_on_the_configured_autonomy_threshold():
+    rule = assistant.playbook("low_fuel")["riskEscalation"]
+    assert rule == {"metric": "fuelAutonomyDays", "risk": "high", "note": rule["note"]}
+    for sid in station_config.station_ids():
+        m = station_config.station(sid)["metadata"]["fuelAutonomyHighRiskDays"]
+        assert m["value"] == 30 and m["unit"] == "days"
+        assert "assumed planning threshold" in m["source"] and m["confidence"] == "low"
+
+
+def test_context_carries_the_fuel_escalation_threshold(ctx):
+    fuel = ctx["derived"]["fuelAutonomyDays"]
+    assert fuel["escalateBelow"] == 30 and "assumed planning threshold" in fuel["escalateBelowNote"]
+
+
 @pytest.mark.parametrize("scenario", assistant.catalogue()["demoScenarios"])
 def test_every_public_demo_scenario_has_its_own_playbook(scenario):
     assert assistant.select_playbook(scenario=scenario)["id"] == scenario

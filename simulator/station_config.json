@@ -75,6 +75,14 @@
           "confidence": "low",
           "needsNcporConfirmation": true,
           "note": "set a value (litres) to enable the fuel stock gauge on the Energy page"
+        },
+        "fuelAutonomyHighRiskDays": {
+          "value": 30,
+          "unit": "days",
+          "source": "assumed planning threshold for the demo, not an NCPOR figure: below this many days of model-derived fuel autonomy Aurora raises a low-fuel incident's risk to high",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "replace with the station's resupply planning margin once NCPOR provides one"
         }
       },
       "buildings": [
@@ -712,6 +720,14 @@
           "confidence": "low",
           "needsNcporConfirmation": true,
           "note": "set a value (litres) to enable the fuel stock gauge on the Energy page"
+        },
+        "fuelAutonomyHighRiskDays": {
+          "value": 30,
+          "unit": "days",
+          "source": "assumed planning threshold for the demo, not an NCPOR figure: below this many days of model-derived fuel autonomy Aurora raises a low-fuel incident's risk to high",
+          "confidence": "low",
+          "needsNcporConfirmation": true,
+          "note": "replace with the station's resupply planning margin once NCPOR provides one"
         }
       },
       "buildings": [
