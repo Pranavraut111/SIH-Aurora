@@ -182,8 +182,8 @@ describe('water_crisis step 1 follows the alerting sensor', () => {
   it('only the level is low: conserve and check the tank by hand', () => {
     const { events } = run([{}, { alerts: [lvl] }]);
     const inc = events[1][0].incident;
-    expect(stepsFor(water, inc)[0]).toEqual({ do: 'Start conserving water and check the tank level by hand.', say: 'start conserving water and check the tank level' });
-    expect(briefingText(inc, water)).toContain('First, start conserving water and check the tank level.');
+    expect(stepsFor(water, inc)[0]).toEqual({ do: 'Start conserving water.', say: 'start conserving water' });
+    expect(briefingText(inc, water)).toContain('First, start conserving water.');
   });
   it.each([['water_ph'], ['water_temp']])('a quality sensor (%s) is out of range: restrict drinking water', (sensor) => {
     const { events } = run([{}, { alerts: [{ ...ph, sensor }] }]);

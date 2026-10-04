@@ -131,7 +131,7 @@ def test_water_crisis_step_1_depends_on_which_sensor_alerted():
     assert set(quality["whenSensors"]) == {"water_ph", "water_temp"}
     assert quality["do"] == "Restrict drinking water use until the water quality has been checked by hand."
     assert level["whenSensors"] == ["water_level"]
-    assert level["do"] == "Start conserving water and check the tank level by hand."
+    assert level["do"] == "Start conserving water."
     assert step["do"] == quality["do"]            # no matching sensor → the conservative text
 
 

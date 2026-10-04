@@ -26,7 +26,7 @@ operator assistant. Design, checkpoint screenshots and transcripts: `docs/assist
     engine to re-evaluate.
   - High-baseline playbooks notify the station leader at step 2; informing the mainland stays a later step.
   - Water: step 1 depends on the alerting sensor (quality out of range → restrict drinking water;
-    level only → conserve and check the tank by hand). A quality alert joining later switches it and says so.
+    level only → start conserving water). A quality alert joining later switches it and says so.
   - Low fuel: risk raised to high while fuel autonomy is below `fuelAutonomyHighRiskDays`
     (`station_config.json`, 30 days, an assumed planning threshold).
   - The visitor's own incidents open the page, highlight the dependency chain and are spoken. Other

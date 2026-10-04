@@ -157,8 +157,8 @@
               "whenSensors": [
                 "water_level"
               ],
-              "do": "Start conserving water and check the tank level by hand.",
-              "say": "start conserving water and check the tank level"
+              "do": "Start conserving water.",
+              "say": "start conserving water"
             }
           ]
         },
