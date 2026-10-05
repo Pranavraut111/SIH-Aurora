@@ -8,6 +8,8 @@
    the panel calls these from a click / key press, or after one has happened.
    ═══════════════════════════════════════════════════════════════ */
 
+import { API_PREFIX } from '../config.js';
+
 export function speechSupport() {
   if (typeof window === 'undefined') return { recognition: false, synthesis: false };
   return {
@@ -197,7 +199,7 @@ const TTS_TIMEOUT_MS = 9000;   // then fall back to the browser's own voices
 const ttsCache = new Map();    // url → Promise<ArrayBuffer|null> (small, recent only)
 
 function ttsUrl(said, lang, voiceName) {
-  return `/api/assistant/tts?text=${encodeURIComponent(said)}&lang=${encodeURIComponent(lang)}&voice=${encodeURIComponent(voiceName || '')}`;
+  return `${API_PREFIX}/assistant/tts?text=${encodeURIComponent(said)}&lang=${encodeURIComponent(lang)}&voice=${encodeURIComponent(voiceName || '')}`;
 }
 
 function fetchTts(url) {
@@ -205,7 +207,8 @@ function fetchTts(url) {
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = setTimeout(() => ctrl?.abort(), TTS_TIMEOUT_MS);
   const p = fetch(url, { signal: ctrl?.signal })
-    .then((r) => (r.ok ? r.arrayBuffer() : null))
+    .then((r) => (r.ok && r.status !== 204 ? r.arrayBuffer() : null))
+    .then((buf) => (buf && buf.byteLength ? buf : null))   // 204 / empty = no server voice here
     .catch((err) => { console.warn('[Aurora] server voice unavailable', err?.name || err); return null; })
     .finally(() => clearTimeout(timer));
   ttsCache.set(url, p);

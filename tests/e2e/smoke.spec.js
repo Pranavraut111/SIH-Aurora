@@ -801,7 +801,7 @@ test('judge mode: anyone can run a demo scenario, every visitor sees the banner,
   await waitForFreeStation(request, 'bharati');
   await page.goto('/?station=bharati');
   await page.getByTestId('try-demo').click();
-  await expect(page.getByTestId('demo-public-note')).toContainText('reset automatically after 2 minutes');
+  await expect(page.getByTestId('demo-public-note')).toContainText('reset automatically after 60 seconds');
   await page.getByTestId('demo-scenario-water_crisis').click();
   await page.getByTestId('confirm-ok').click();
   const b = await secondVisitor(browser);
@@ -1106,7 +1106,8 @@ test('Aurora: another visitor\'s incident shows the floating card and does not t
     const started = await b.page.request.post(`${API}/api/sim/inject/heating_failure?stationId=maitri`);
     expect(started.ok(), await started.text()).toBeTruthy();
     const float = page.getByTestId('incident-float');
-    await expect(float).toContainText('Heating failure · Maitri', { timeout: 60_000 });
+    // Title and "Maitri · Critical · Simulated" are separate lines in the card.
+    await expect(float).toContainText(/Heating failure\s*(·\s*)?Maitri/, { timeout: 60_000 });
     await expect(page.getByTestId('assistant-panel')).toHaveCount(0);
     await expect(page).toHaveURL(/module=logistics/);
     await expectAccessible(page, '[data-testid=incident-float]', 'the floating incident card');

@@ -2443,7 +2443,9 @@ def assistant_tts(text: str = Query(..., max_length=800), lang: str = "en", voic
 
     if not wav_path.exists():
         if sys.platform != "darwin":
-            raise HTTPException(status_code=501, detail="Native TTS only supported on macOS")
+            # No native voice here (Linux / Docker / CI): 204 tells the client to use the
+            # browser's voices without logging a failed request in the console.
+            return Response(status_code=204)
         with _tts_lock:
             if not wav_path.exists():   # another request may have rendered it while we waited
                 tmp_path = _TTS_CACHE_DIR / f"{h}.{threading.get_ident()}.tmp.wav"
