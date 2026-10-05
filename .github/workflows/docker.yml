@@ -25,8 +25,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # ghcr.io requires a lowercase namespace; github.repository_owner is "Saeesh-Vele".
-  IMAGE_PREFIX: ghcr.io/saeesh-vele/sih2026a
+  # Derived from github.repository_owner, lowercased for ghcr.io compatibility.
+  # Works on forks: the owner running the workflow owns the GHCR namespace.
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/sih2026a
   # amd64 on every push (fast, native); arm64 is emulated and roughly triples the build,
   # so it is added only for version tags and manual runs.
   PLATFORMS_DEFAULT: linux/amd64
@@ -89,7 +90,7 @@ jobs:
           for svc in ('frontend', 'backend', 'simulator'):
               s = c['services'][svc]
               assert 'build' not in s, f'{svc} still builds in the prod overlay'
-              assert s['image'].startswith('ghcr.io/saeesh-vele/sih2026a-'), s['image']
+              assert s['image'].startswith('ghcr.io/'), s['image']
           print('prod overlay: all three services pull from GHCR')
           "
           DOMAIN=aurora.example.invalid ACME_EMAIL=ci@example.invalid \
@@ -801,7 +802,9 @@ jobs:
       - name: The arm64 backend starts and answers /api/health
         run: |
           tag=sha-$(echo "${{ github.sha }}" | cut -c1-7)
-          image="${{ env.IMAGE_PREFIX }}-backend:${tag}"
+          # GHCR names must be lowercase; repository_owner may be mixed case.
+          prefix=$(echo "${{ env.IMAGE_PREFIX }}" | tr '[:upper:]' '[:lower:]')
+          image="${prefix}-backend:${tag}"
           docker run -d --name aurora-arm64 --platform linux/arm64 \
             -e ALLOWED_ORIGINS=http://localhost -p 18080:8080 "$image"
           for i in $(seq 1 60); do
