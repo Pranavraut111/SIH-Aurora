@@ -2426,6 +2426,12 @@ def _mac_voices():
     return _MAC_VOICES
 
 
+@app.get("/api/assistant/tts/available")
+def assistant_tts_available():
+    """Whether this server can render speech (macOS `say`); otherwise the browser uses its own voices."""
+    return {"available": sys.platform == "darwin"}
+
+
 @app.get("/api/assistant/tts")
 def assistant_tts(text: str = Query(..., max_length=800), lang: str = "en", voice: str = ""):
     """Offline high-quality native system TTS audio stream for Aurora assistant."""

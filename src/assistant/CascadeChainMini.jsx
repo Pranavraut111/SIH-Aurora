@@ -106,8 +106,9 @@ export default function CascadeChainMini({ stationId, sources = [], affected = [
                       fontSize: 12, fontWeight: isSource ? 700 : 500, cursor: 'default',
                       ...(resolved ? { opacity: 0.6 } : {}),
                       ...(isSource && !resolved ? {
-                        boxShadow: (t) => `0 0 0 2px ${t.vars.palette[SEVERITY_COLOUR[severity]]?.main || t.vars.palette.error.main}40`,
-                        animation: 'aurora-pulse 2s ease-in-out infinite',
+                        '--aurora-ring': (t) => `${t.vars.palette[SEVERITY_COLOUR[severity]]?.main || t.vars.palette.error.main}40`,
+                        boxShadow: '0 0 0 2px var(--aurora-ring)',
+                        animation: 'aurora-ring-pulse 2s ease-in-out infinite',
                       } : {}),
                     }}
                   />

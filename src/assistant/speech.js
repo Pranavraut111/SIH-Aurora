@@ -202,19 +202,34 @@ function ttsUrl(said, lang, voiceName) {
   return `${API_PREFIX}/assistant/tts?text=${encodeURIComponent(said)}&lang=${encodeURIComponent(lang)}&voice=${encodeURIComponent(voiceName || '')}`;
 }
 
+let ttsAvailable = null;        // Promise<boolean>: asked once per page load
+function serverHasVoice() {
+  if (!ttsAvailable) {
+    ttsAvailable = fetch(`${API_PREFIX}/assistant/tts/available`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => Boolean(j?.available))
+      .catch(() => false);
+  }
+  return ttsAvailable;
+}
+
 function fetchTts(url) {
   if (ttsCache.has(url)) return ttsCache.get(url);
-  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = setTimeout(() => ctrl?.abort(), TTS_TIMEOUT_MS);
-  const p = fetch(url, { signal: ctrl?.signal })
-    .then((r) => (r.ok && r.status !== 204 ? r.arrayBuffer() : null))
-    .then((buf) => (buf && buf.byteLength ? buf : null))   // 204 / empty = no server voice here
-    .catch((err) => { console.warn('[Aurora] server voice unavailable', err?.name || err); return null; })
-    .finally(() => clearTimeout(timer));
+  const p = serverHasVoice().then((ok) => (ok ? downloadTts(url) : null));
   ttsCache.set(url, p);
   p.then((buf) => { if (!buf) ttsCache.delete(url); });
   if (ttsCache.size > 24) ttsCache.delete(ttsCache.keys().next().value);
   return p;
+}
+
+function downloadTts(url) {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => ctrl?.abort(), TTS_TIMEOUT_MS);
+  return fetch(url, { signal: ctrl?.signal })
+    .then((r) => (r.ok && r.status !== 204 ? r.arrayBuffer() : null))
+    .then((buf) => (buf && buf.byteLength ? buf : null))   // 204 / empty = no server voice here
+    .catch((err) => { console.warn('[Aurora] server voice unavailable', err?.name || err); return null; })
+    .finally(() => clearTimeout(timer));
 }
 
 /** Start downloading the server voice for `text` now (e.g. while the chime plays). */

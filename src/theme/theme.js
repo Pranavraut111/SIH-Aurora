@@ -114,6 +114,11 @@ export const theme = createTheme({
           '0%, 100%': { opacity: 1 },
           '50%': { opacity: 0.55 },
         },
+        // For elements with text: pulses the glow ring only, so text contrast never dips.
+        '@keyframes aurora-ring-pulse': {
+          '0%, 100%': { boxShadow: '0 0 0 2px var(--aurora-ring, transparent)' },
+          '50%': { boxShadow: '0 0 0 5px var(--aurora-ring, transparent)' },
+        },
         '@keyframes aurora-flow-pulse': {
           '0%, 100%': { opacity: 0.5, transform: 'translateX(0)' },
           '50%': { opacity: 1, transform: 'translateX(3px)' },
