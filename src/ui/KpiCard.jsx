@@ -49,6 +49,7 @@ export default function KpiCard({
   delta,               // number: change vs `deltaLabel`
   deltaLabel,
   hero = false,
+  dense = false,       // compact HUD variant: smaller padding and proportional typography
   sparkBucketMs,       // sparkline bucket (model clock)
   loading = false,
   testId,
@@ -65,8 +66,14 @@ export default function KpiCard({
       data-kpi=""
       sx={[{ height: '100%', minWidth: 0 }, ...(Array.isArray(sx) ? sx : [sx])]}
     >
-      <Box sx={{ p: hero ? 6 : 5, display: 'flex', flexDirection: 'column', gap: hero ? 3 : 2, height: '100%' }}>
-        <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 2, minHeight: 22 }}>
+      <Box sx={{
+        p: hero ? (dense ? 4 : 6) : (dense ? 3.5 : 5),
+        display: 'flex',
+        flexDirection: 'column',
+        gap: hero ? (dense ? 2 : 3) : (dense ? 1.5 : 2),
+        height: '100%',
+      }}>
+        <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', gap: 2, minHeight: dense ? 18 : 22 }}>
           <Typography variant="label" component="h3" sx={{ color: 'text.secondary' }}>{label}</Typography>
           {status && status !== 'normal' && (
             <Stack direction="row" data-status={status} sx={(theme) => ({
@@ -79,14 +86,24 @@ export default function KpiCard({
         </Stack>
 
         {loading ? (
-          <Skeleton variant="text" width="60%" sx={{ fontSize: hero ? 52 : 30 }} />
+          <Skeleton variant="text" width="60%" sx={{ fontSize: hero ? (dense ? 40 : 52) : (dense ? 24 : 30) }} />
         ) : (
-          <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1.5, minWidth: 0 }}>
-            <Typography variant={hero ? 'kpiHero' : 'kpi'} component="p" className="kpi-value" sx={{ color: missing ? 'text.disabled' : 'text.primary', m: 0 }}>
+          <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1.25, minWidth: 0 }}>
+            <Typography
+              variant={hero ? 'kpiHero' : 'kpi'}
+              component="p"
+              className="kpi-value"
+              sx={{
+                color: missing ? 'text.disabled' : 'text.primary',
+                m: 0,
+                ...(dense && hero ? { fontSize: { xs: 34, lg: 40 }, lineHeight: { xs: '40px', lg: '46px' } } : {}),
+                ...(dense && !hero ? { fontSize: 24, lineHeight: '30px' } : {}),
+              }}
+            >
               <FadeValue>{text}</FadeValue>
             </Typography>
             {unit && !missing && (
-              <Typography component="span" sx={{ color: 'text.secondary', fontSize: hero ? 20 : 14, fontWeight: 500 }}>{unit}</Typography>
+              <Typography component="span" sx={{ color: 'text.secondary', fontSize: hero ? (dense ? 16 : 20) : (dense ? 12 : 14), fontWeight: 500 }}>{unit}</Typography>
             )}
           </Stack>
         )}
@@ -107,8 +124,14 @@ export default function KpiCard({
         )}
 
         {series !== undefined && (
-          <Box sx={{ mt: hero ? 0 : 1, pt: hero ? 2 : 0, flex: hero ? '1 1 72px' : 'none', minHeight: hero ? 72 : 0, display: 'flex' }}>
-            <Sparkline points={series} height={hero ? 72 : 28} fill={hero} bucketMs={sparkBucketMs} />
+          <Box sx={{
+            mt: hero ? 0 : 1,
+            pt: hero ? (dense ? 1 : 2) : 0,
+            flex: hero ? (dense ? '1 1 54px' : '1 1 72px') : 'none',
+            minHeight: hero ? (dense ? 54 : 72) : 0,
+            display: 'flex',
+          }}>
+            <Sparkline points={series} height={hero ? (dense ? 54 : 72) : (dense ? 22 : 28)} fill={hero} bucketMs={sparkBucketMs} />
           </Box>
         )}
 

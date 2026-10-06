@@ -42,22 +42,22 @@ function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer,
   const text = formatNumber(value, decimals);
   return (
     <Card component="section" aria-label={label} data-testid={testId} data-kpi="" sx={(theme) => ({
-      p: { xs: 4, lg: 3.5 }, minWidth: 0, boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
-      display: 'grid', gap: 2, alignItems: 'center',
+      p: { xs: 3, lg: 2.5 }, minWidth: 0, boxShadow: { lg: theme.vars.palette.aurora.shadowFloat },
+      display: 'grid', gap: 1.5, alignItems: 'center',
       gridTemplateColumns: { xs: 'minmax(0, 1fr) minmax(0, 0.9fr)', lg: '1fr' },
     })}>
       <Box sx={{ minWidth: 0 }}>
-        <Stack direction="row" sx={{ alignItems: 'center', gap: 1.5 }}>
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 1.25 }}>
           <Typography variant="label" component="h3" sx={{ color: 'text.secondary' }}>{label}</Typography>
-          {status && <StatusDot status={status} size={7} />}
-          {status && <Box component="span" sx={(theme) => ({ fontSize: 12, fontWeight: 600, color: theme.vars.palette.status[status] })}>{STATUS_LABEL[status]}</Box>}
+          {status && <StatusDot status={status} size={6} />}
+          {status && <Box component="span" sx={(theme) => ({ fontSize: 11, fontWeight: 600, color: theme.vars.palette.status[status] })}>{STATUS_LABEL[status]}</Box>}
         </Stack>
-        <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1, mt: 1 }}>
-          <Typography variant="kpi" component="p" className="kpi-value" sx={{ m: 0, fontSize: 26, lineHeight: '32px' }}><FadeValue>{text}</FadeValue></Typography>
-          {unit && isNum(value) && <Typography component="span" sx={{ color: 'text.secondary', fontSize: 13, fontWeight: 500 }}>{unit}</Typography>}
+        <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1, mt: 0.75 }}>
+          <Typography variant="kpi" component="p" className="kpi-value" sx={{ m: 0, fontSize: { xs: 24, lg: 22 }, lineHeight: { xs: '30px', lg: '28px' } }}><FadeValue>{text}</FadeValue></Typography>
+          {unit && isNum(value) && <Typography component="span" sx={{ color: 'text.secondary', fontSize: 12, fontWeight: 500 }}>{unit}</Typography>}
         </Stack>
       </Box>
-      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={24} bucketMs={bucketMs} />}</Box>
+      <Box sx={{ minWidth: 0 }}>{footer ?? <Sparkline points={points} height={20} bucketMs={bucketMs} />}</Box>
     </Card>
   );
 }
@@ -65,8 +65,8 @@ function HudFigure({ label, value, unit, decimals = 0, points, bucketMs, footer,
 function SubsystemDots({ alerts }) {
   const entries = Object.entries(alerts).filter(([k]) => k !== 'overall');
   return (
-    <Stack direction="row" aria-hidden="true" sx={{ gap: 1, flexWrap: 'wrap', alignItems: 'center', minHeight: 28 }}>
-      {entries.map(([k, level]) => <StatusDot key={k} status={level === 'critical' || level === 'warning' ? level : 'normal'} size={9} />)}
+    <Stack direction="row" aria-hidden="true" sx={{ gap: 0.75, flexWrap: 'wrap', alignItems: 'center', minHeight: 22 }}>
+      {entries.map(([k, level]) => <StatusDot key={k} status={level === 'critical' || level === 'warning' ? level : 'normal'} size={7.5} />)}
     </Stack>
   );
 }
@@ -201,9 +201,9 @@ export default function OverviewHUD({
         data-testid="hud-kpis"
         sx={{
           display: 'grid',
-          gap: { xs: 3, lg: 3 },
+          gap: { xs: 2.5, lg: 2 },
           order: { xs: 1, lg: 0 },
-          width: { lg: 520 },
+          width: { lg: 440 },
           flex: 'none',
           gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(3, minmax(0, 1fr))', lg: 'minmax(0, 1.15fr) minmax(0, 1fr)' },
           gridTemplateAreas: {
@@ -214,7 +214,7 @@ export default function OverviewHUD({
         }}
       >
         <Typography variant="h2" id="hud-figures-heading" sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>Station figures</Typography>
-        <KpiCard hero label="Outside temperature" value={temp} unit="°C" decimals={1} testId="hud-temp"
+        <KpiCard hero dense label="Outside temperature" value={temp} unit="°C" decimals={1} testId="hud-temp"
           status={levelOf(activeAlerts, 'env_temp')}
           series={tempPts}
           delta={temp != null && tempAgo != null ? temp - tempAgo : null}
